@@ -1,0 +1,605 @@
+# Copyright (C) 2026 YoOhw.com
+# This file is distributed under the GPLv3 or later.
+msgid ""
+msgstr ""
+"Project-Id-Version: Order Splitter for WooCommerce 1.4.11\n"
+"Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/wc-order-splitter\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"POT-Creation-Date: 2026-06-12T08:40:32+00:00\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"X-Generator: WP-CLI 2.9.0\n"
+"X-Domain: wc-order-splitter\n"
+
+#. Plugin Name of the plugin
+msgid "Order Splitter for WooCommerce"
+msgstr ""
+
+#. Plugin URI of the plugin
+msgid "https://wordpress.org/plugins/wc-order-splitter/"
+msgstr ""
+
+#. Description of the plugin
+msgid "Split WooCommerce orders by quantity, category, or stock status from the admin."
+msgstr ""
+
+#. Author of the plugin
+msgid "YoOhw.com"
+msgstr ""
+
+#. Author URI of the plugin
+msgid "https://yoohw.com"
+msgstr ""
+
+#: inc/backend/actions/duplicate-order.php:81
+msgid "Order duplicated: New order #%s"
+msgstr ""
+
+#: inc/backend/actions/duplicate-order.php:89
+msgid "This order is a duplicate of the original order #%s"
+msgstr ""
+
+#: inc/backend/actions/merge-order.php:53
+msgid "Enter the order ID to merge this order into:"
+msgstr ""
+
+#: inc/backend/actions/merge-order.php:54
+msgid "Order merge action canceled."
+msgstr ""
+
+#: inc/backend/actions/merge-order.php:55
+msgid "Please enter a valid numeric order ID."
+msgstr ""
+
+#: inc/backend/actions/merge-order.php:56
+msgid "Order merged successfully to the order #"
+msgstr ""
+
+#: inc/backend/actions/merge-order.php:57
+msgid "Failed to merge orders."
+msgstr ""
+
+#: inc/backend/actions/merge-order.php:58
+msgid "Failed to process merge order action."
+msgstr ""
+
+#: inc/backend/actions/merge-order.php:90
+msgid "Invalid target order ID."
+msgstr ""
+
+#: inc/backend/actions/merge-order.php:142
+msgid "Merged items from order #%d"
+msgstr ""
+
+#: inc/backend/actions/merge-order.php:179
+msgid "Order merged successfully!"
+msgstr ""
+
+#: inc/backend/actions/return-order-bulk-action.php:16
+msgid "Insufficient permissions."
+msgstr ""
+
+#: inc/backend/actions/return-order-bulk-action.php:23
+msgid "No orders selected."
+msgstr ""
+
+#: inc/backend/actions/return-order-bulk-action.php:93
+#: inc/backend/actions/return-order.php:84
+msgid "Order moved to trash by user action."
+msgstr ""
+
+#: inc/backend/actions/return-order-bulk-action.php:107
+#: inc/backend/actions/return-order.php:100
+msgid "Items returned from order #%s."
+msgstr ""
+
+#: inc/backend/actions/return-order-bulk-action.php:108
+#: inc/backend/actions/return-order.php:101
+msgid "This order was returned and all items were restored to the original order #%s."
+msgstr ""
+
+#: inc/backend/actions/return-order-bulk-action.php:113
+msgid "Successfully returned %d orders to their original orders."
+msgstr ""
+
+#: inc/backend/actions/return-order-bulk-action.php:120
+msgid "%s order has been returned to its original order."
+msgid_plural "%s orders have been returned to their original orders."
+msgstr[0] ""
+msgstr[1] ""
+
+#: inc/backend/actions/return-order.php:25
+msgid "No original order found for this split order."
+msgstr ""
+
+#: inc/backend/actions/return-order.php:31
+msgid "Original order does not exist."
+msgstr ""
+
+#: inc/backend/actions/split-order-by-category.php:38
+msgid "Products belong to multiple categories. Cannot split the order."
+msgstr ""
+
+#: inc/backend/actions/split-order-by-category.php:52
+msgid "There is no different category to split."
+msgstr ""
+
+#: inc/backend/actions/split-order-by-category.php:126
+#: inc/backend/actions/split-order-by-category.php:185
+#: inc/backend/actions/split-order-by-default.php:143
+#: inc/backend/actions/split-order-by-default.php:294
+#: inc/backend/actions/split-order-by-stock-status.php:109
+#: inc/backend/actions/split-order-by-stock-status.php:168
+msgid "Items"
+msgstr ""
+
+#: inc/backend/actions/split-order-by-category.php:157
+#: inc/backend/actions/split-order-by-default.php:327
+#: inc/backend/actions/split-order-by-stock-status.php:140
+msgid "This order has been split from the original order #%s."
+msgstr ""
+
+#: inc/backend/actions/split-order-by-category.php:209
+#: inc/backend/actions/split-order-by-default.php:338
+#: inc/backend/actions/split-order-by-stock-status.php:192
+msgid "This order has been split to order #%s."
+msgstr ""
+
+#: inc/backend/actions/split-order-by-default.php:30
+#: inc/backend/actions/split-order-by-default.php:108
+msgid "Original order not found"
+msgstr ""
+
+#: inc/backend/actions/split-order-by-default.php:35
+msgid "Insufficient permissions"
+msgstr ""
+
+#: inc/backend/actions/split-order-by-default.php:40
+msgid "This order status is not allowed for splitting."
+msgstr ""
+
+#: inc/backend/actions/split-order-by-default.php:81
+msgid "In stock"
+msgstr ""
+
+#: inc/backend/actions/split-order-by-default.php:82
+msgid "Out of stock"
+msgstr ""
+
+#: inc/backend/actions/split-order-by-default.php:83
+msgid "On backorder"
+msgstr ""
+
+#: inc/backend/actions/split-order-by-default.php:84
+msgid "On preorder"
+msgstr ""
+
+#: inc/backend/actions/split-order-by-default.php:100
+msgid "Order not found"
+msgstr ""
+
+#: inc/backend/actions/split-order-by-default.php:195
+msgid "Invalid order item selected for splitting."
+msgstr ""
+
+#: inc/backend/actions/split-order-by-default.php:200
+msgid "Split quantity cannot exceed the original item quantity."
+msgstr ""
+
+#: inc/backend/actions/split-order-by-default.php:211
+msgid "No quantities set for splitting."
+msgstr ""
+
+#: inc/backend/actions/split-order-by-default.php:216
+msgid "You cannot split all of the items in the order."
+msgstr ""
+
+#: inc/backend/actions/split-order-by-stock-status.php:35
+msgid "There is no different stock status to split."
+msgstr ""
+
+#: inc/backend/order-duplicate-option.php:21
+msgid "Duplicate this order"
+msgstr ""
+
+#: inc/backend/order-merge-option.php:16
+msgid "Merge this order to..."
+msgstr ""
+
+#: inc/backend/order-return-option.php:21
+msgid "Return to the original order"
+msgstr ""
+
+#: inc/backend/order-split-button.php:41
+msgid "Split order"
+msgstr ""
+
+#: inc/backend/settings.php:25
+msgid "Orders"
+msgstr ""
+
+#: inc/backend/settings.php:69
+msgid "General"
+msgstr ""
+
+#: inc/backend/settings.php:70
+msgid "Automation"
+msgstr ""
+
+#: inc/backend/settings.php:73
+#: inc/backend/settings.php:311
+msgid "Premium"
+msgstr ""
+
+#: inc/backend/settings.php:77
+msgid "Cancel & Return"
+msgstr ""
+
+#: inc/backend/settings.php:89
+msgid "Cancellation"
+msgstr ""
+
+#: inc/backend/settings.php:90
+msgid "Returns"
+msgstr ""
+
+#: inc/backend/settings.php:91
+msgid "Reorder"
+msgstr ""
+
+#: inc/backend/settings.php:92
+msgid "Appearance"
+msgstr ""
+
+#: inc/backend/settings.php:100
+msgid "Notifications"
+msgstr ""
+
+#: inc/backend/settings.php:120
+msgid "Need more order controls?"
+msgstr ""
+
+#: inc/backend/settings.php:121
+msgid "Premium adds status controls after splitting, duplicate/merge restrictions, editable order status expansion, product groups, tags, attributes, bundles, vendors, and automated split rules."
+msgstr ""
+
+#: inc/backend/settings.php:123
+msgid "Set original and split order statuses after splitting."
+msgstr ""
+
+#: inc/backend/settings.php:124
+msgid "Control which orders can be duplicated or merged."
+msgstr ""
+
+#: inc/backend/settings.php:125
+msgid "Split by product group, tag, attribute, bundle, or vendor."
+msgstr ""
+
+#: inc/backend/settings.php:133
+msgid "Automate repeated split workflows"
+msgstr ""
+
+#: inc/backend/settings.php:134
+msgid "Premium can schedule split actions after an order is created and apply rules based on quantity, product group, category, stock status, tag, attribute, bundle, or vendor."
+msgstr ""
+
+#: inc/backend/settings.php:136
+msgid "Run split rules automatically after checkout."
+msgstr ""
+
+#: inc/backend/settings.php:137
+msgid "Add a delay timer for order processing workflows."
+msgstr ""
+
+#: inc/backend/settings.php:138
+msgid "Use WP-Cron based automation for repeatable operations."
+msgstr ""
+
+#: inc/backend/settings.php:146
+msgid "Need split-order email controls?"
+msgstr ""
+
+#: inc/backend/settings.php:147
+msgid "Premium adds customer and administrator email controls so split orders can be communicated without duplicate or confusing order emails."
+msgstr ""
+
+#: inc/backend/settings.php:149
+msgid "Choose whether customers receive the original order email, split order emails, or both."
+msgstr ""
+
+#: inc/backend/settings.php:150
+msgid "Customize split-order email subject, heading, and message."
+msgstr ""
+
+#: inc/backend/settings.php:151
+msgid "Enable email rules per split method."
+msgstr ""
+
+#: inc/backend/settings.php:165
+msgid "The Cancel / Return plugin is not activated."
+msgstr ""
+
+#: inc/backend/settings.php:214
+#: inc/backend/settings.php:302
+#: inc/cores/script.php:77
+msgid "Compare Premium"
+msgstr ""
+
+#: inc/backend/settings.php:251
+msgid "Configure Order Splitter before the first split"
+msgstr ""
+
+#: inc/backend/settings.php:252
+msgid "Choose allowed order statuses, decide how shipping fees should be handled, and review the available split methods before using this on live orders."
+msgstr ""
+
+#: inc/backend/settings.php:255
+msgid "Review settings"
+msgstr ""
+
+#: inc/backend/settings.php:256
+#: inc/cores/script.php:69
+msgid "Dismiss"
+msgstr ""
+
+#: inc/backend/settings.php:265
+msgid "Manual split by product and quantity"
+msgstr ""
+
+#: inc/backend/settings.php:266
+#: inc/backend/settings.php:267
+#: inc/backend/settings.php:271
+#: inc/backend/settings.php:272
+#: inc/backend/settings.php:277
+#: inc/backend/settings.php:282
+#: inc/backend/settings.php:287
+#: inc/backend/settings.php:292
+msgid "Included"
+msgstr ""
+
+#: inc/backend/settings.php:270
+msgid "Split by category and stock status"
+msgstr ""
+
+#: inc/backend/settings.php:275
+msgid "Split by product group, tag, attribute, bundle, or vendor"
+msgstr ""
+
+#: inc/backend/settings.php:276
+#: inc/backend/settings.php:281
+#: inc/backend/settings.php:286
+#: inc/backend/settings.php:291
+msgid "Locked"
+msgstr ""
+
+#: inc/backend/settings.php:280
+msgid "Automated split rules after order creation"
+msgstr ""
+
+#: inc/backend/settings.php:285
+msgid "Order status controls after split, duplicate, and merge actions"
+msgstr ""
+
+#: inc/backend/settings.php:290
+msgid "Customer and admin split-order email controls"
+msgstr ""
+
+#: inc/backend/settings.php:298
+msgid "Premium options for high-volume order operations"
+msgstr ""
+
+#: inc/backend/settings.php:299
+msgid "The free plugin keeps manual splitting available. Premium is best for stores that repeatedly split by rules, need automated workflows, or need tighter email/status controls."
+msgstr ""
+
+#: inc/backend/settings.php:309
+msgid "Workflow"
+msgstr ""
+
+#: inc/backend/settings.php:310
+msgid "Free"
+msgstr ""
+
+#: inc/backend/settings.php:330
+msgid "Split orders"
+msgstr ""
+
+#: inc/backend/settings.php:335
+msgid "Allowed status"
+msgstr ""
+
+#: inc/backend/settings.php:337
+msgid "Choose order statuses that allow for splitting and duplication."
+msgstr ""
+
+#: inc/backend/settings.php:342
+msgid "Select order statuses"
+msgstr ""
+
+#: inc/backend/settings.php:348
+msgid "Excluded fee"
+msgstr ""
+
+#: inc/backend/settings.php:350
+msgid "Exclude shipping fees for the split order"
+msgstr ""
+
+#: inc/backend/settings.php:351
+msgid "If checked, the original order will keep its shipping fee, and the split orders won't include any shipping charges."
+msgstr ""
+
+#: inc/backend/settings.php:366
+msgid "Advanced"
+msgstr ""
+
+#: inc/backend/settings.php:371
+msgid "Order labels"
+msgstr ""
+
+#: inc/backend/settings.php:373
+msgid "Enable the labels for split orders"
+msgstr ""
+
+#: inc/backend/settings.php:378
+msgid "Permission"
+msgstr ""
+
+#: inc/backend/settings.php:380
+msgid "Enable the shop manager to split orders"
+msgstr ""
+
+#: inc/backend/settings.php:395
+msgid "Automation splitter"
+msgstr ""
+
+#: inc/backend/settings.php:397
+msgid "Automation is available in Premium for stores that need repeatable split rules after checkout."
+msgstr ""
+
+#: inc/backend/settings.php:412
+msgid "Split order email"
+msgstr ""
+
+#: inc/backend/settings.php:414
+msgid "Split-order email controls are available in Premium for stores that need customer or administrator notification rules."
+msgstr ""
+
+#: inc/cores/script.php:39
+#: inc/cores/script.php:41
+msgid "Error occurred while fetching order items."
+msgstr ""
+
+#: inc/cores/script.php:40
+msgid "Unable to fetch order items."
+msgstr ""
+
+#: inc/cores/script.php:42
+msgid "Order split successfully. New order ID:"
+msgstr ""
+
+#: inc/cores/script.php:43
+msgid "Failed to split order."
+msgstr ""
+
+#: inc/cores/script.php:44
+msgid "Product"
+msgstr ""
+
+#: inc/cores/script.php:45
+msgid "Order"
+msgstr ""
+
+#: inc/cores/script.php:46
+msgid "New order #"
+msgstr ""
+
+#: inc/cores/script.php:47
+msgid "Qty"
+msgstr ""
+
+#: inc/cores/script.php:48
+msgid "Split Qty"
+msgstr ""
+
+#: inc/cores/script.php:49
+msgid "Split it"
+msgstr ""
+
+#: inc/cores/script.php:50
+msgid "Default"
+msgstr ""
+
+#: inc/cores/script.php:51
+msgid "Unit [Premium]"
+msgstr ""
+
+#: inc/cores/script.php:52
+msgid "Group [Premium]"
+msgstr ""
+
+#: inc/cores/script.php:53
+msgid "Item (In group) [Premium]"
+msgstr ""
+
+#: inc/cores/script.php:54
+msgid "Item (Non-group) [Premium]"
+msgstr ""
+
+#: inc/cores/script.php:55
+msgid "Category"
+msgstr ""
+
+#: inc/cores/script.php:56
+msgid "Stock status"
+msgstr ""
+
+#: inc/cores/script.php:57
+msgid "Tag [Premium]"
+msgstr ""
+
+#: inc/cores/script.php:58
+msgid "Attribute [Premium]"
+msgstr ""
+
+#: inc/cores/script.php:59
+msgid "Bundle [Premium]"
+msgstr ""
+
+#: inc/cores/script.php:60
+msgid "Vendor [Premium]"
+msgstr ""
+
+#: inc/cores/script.php:61
+msgid "Cancel"
+msgstr ""
+
+#: inc/cores/script.php:62
+msgid "Splitting..."
+msgstr ""
+
+#: inc/cores/script.php:63
+msgid "Return to original order"
+msgstr ""
+
+#: inc/cores/script.php:64
+msgid "Please select at least one order."
+msgstr ""
+
+#: inc/cores/script.php:65
+msgid "Need more split modes?"
+msgstr ""
+
+#: inc/cores/script.php:66
+msgid "Premium adds automated rules, product groups, tags, attributes, bundles, vendors, and email controls for stores that split orders often."
+msgstr ""
+
+#: inc/cores/script.php:67
+msgid "Split completed. If this is a recurring workflow, Premium can automate the same rules and customer emails."
+msgstr ""
+
+#: inc/cores/script.php:68
+msgid "Learn more"
+msgstr ""
+
+#: inc/cores/script.php:80
+msgid "Order split successfully. Premium can automate this workflow with rule-based splitting and email controls."
+msgstr ""
+
+#: inc/cores/script.php:81
+msgid "Order duplicated successfully. Premium adds status rules, bulk workflows, and automation for repeated order operations."
+msgstr ""
+
+#: inc/cores/script.php:82
+msgid "Order merged successfully. Premium adds status rules, bulk workflows, and automation for repeated order operations."
+msgstr ""
+
+#: inc/cores/script.php:83
+msgid "Split order returned successfully. Premium adds automated rules and email controls for repeated split-order workflows."
+msgstr ""
+
+#: wc-order-splitter.php:47
+msgid "Settings"
+msgstr ""
