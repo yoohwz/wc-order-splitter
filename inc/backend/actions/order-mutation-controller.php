@@ -225,6 +225,14 @@ final class WC_Order_Splitter_Mutation_Controller {
 		$this->verify_split_nonce();
 		try {
 			$order = $this->get_order_from_request();
+			WC_Order_Splitter_Mutation_Support::assert_can_manage_order($order);
+			$idempotency_key = isset($_POST['idempotency_key']) ? sanitize_text_field(wp_unslash($_POST['idempotency_key'])) : '';
+			if ($idempotency_key) {
+				$replay = $this->get_split_replay($order, $idempotency_key);
+				if ($replay) {
+					wp_send_json_success($replay);
+				}
+			}
 			$requested_mode = $this->get_split_mode();
 			if ($mode !== $requested_mode) {
 				throw new WC_Order_Splitter_Mutation_Exception(__('The split mode changed after preview. Preview the split again.', 'wc-order-splitter'));
@@ -236,7 +244,6 @@ final class WC_Order_Splitter_Mutation_Controller {
 			if (!$confirm_nonce || !wp_verify_nonce($confirm_nonce, 'wc_order_splitter_confirm_' . $order->get_id() . '_' . $plan_hash)) {
 				throw new WC_Order_Splitter_Mutation_Exception(__('The split preview expired or the allocation changed. Preview the split again.', 'wc-order-splitter'));
 			}
-			$idempotency_key = isset($_POST['idempotency_key']) ? sanitize_text_field(wp_unslash($_POST['idempotency_key'])) : '';
 			if (!$idempotency_key) {
 				throw new WC_Order_Splitter_Mutation_Exception(__('The split operation is missing its idempotency key. Preview the split again.', 'wc-order-splitter'));
 			}
@@ -245,6 +252,27 @@ final class WC_Order_Splitter_Mutation_Controller {
 		} catch (Throwable $error) {
 			$this->send_error($error);
 		}
+	}
+
+	private function get_split_replay($order, $idempotency_key) {
+		$meta_key = '_wc_order_splitter_idempotency_' . hash('sha256', sanitize_text_field($idempotency_key));
+		$data = $order->get_meta($meta_key, true);
+		if (!is_array($data) || 'split' !== (isset($data['type']) ? $data['type'] : '') || empty($data['order_ids'])) {
+			return null;
+		}
+
+		$order_ids = array_values(array_map('absint', (array) $data['order_ids']));
+		foreach ($order_ids as $order_id) {
+			if (!wc_get_order($order_id)) {
+				return null;
+			}
+		}
+
+		return array(
+			'operation_id' => isset($data['operation_id']) ? $data['operation_id'] : '',
+			'new_order_ids' => $order_ids,
+			'idempotent_replay' => true,
+		);
 	}
 
 	private function build_plan($order, $mode) {
