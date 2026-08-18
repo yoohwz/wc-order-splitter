@@ -7,20 +7,35 @@ defined('ABSPATH') || exit;
  */
 final class WCOS_Duplicate_Order_Service {
 
-	public function duplicate(WC_Order $source) {
-		$operation_id = 'duplicate-' . wp_generate_uuid4();
+	public function duplicate(WC_Order $source, $operation_id) {
+		$operation_id = sanitize_key($operation_id);
+		if ('' === $operation_id) {
+			throw new InvalidArgumentException(__('A duplicate operation ID is required.', 'wc-order-splitter'));
+		}
+
 		$source_id = $source->get_id();
 		$new_order = null;
-
-		if (WCOS_Operation_Journal::has_completed($source, $operation_id)) {
-			throw new RuntimeException('Duplicate operation has already completed.');
+		$existing = WCOS_Operation_Journal::get($source, $operation_id);
+		if (is_array($existing)) {
+			if (isset($existing['status']) && 'completed' === $existing['status']) {
+				$target_id = isset($existing['context']['target_order_id']) ? absint($existing['context']['target_order_id']) : 0;
+				$target = $target_id ? wc_get_order($target_id) : false;
+				if ($target) {
+					return $target;
+				}
+				throw new RuntimeException(__('The duplicate operation completed previously, but its target order is no longer available.', 'wc-order-splitter'));
+			}
+			throw new RuntimeException(__('This duplicate operation ID has already been used and did not complete successfully.', 'wc-order-splitter'));
 		}
 
 		if (!WCOS_Operation_Lock::acquire($source_id, $operation_id)) {
 			throw new RuntimeException(__('Another order mutation is already in progress for this order.', 'wc-order-splitter'));
 		}
 
-		WCOS_Operation_Journal::start($source, $operation_id, 'duplicate');
+		if (!WCOS_Operation_Journal::start($source, $operation_id, 'duplicate')) {
+			WCOS_Operation_Lock::release($source_id, $operation_id);
+			throw new RuntimeException(__('Unable to start the duplicate operation journal.', 'wc-order-splitter'));
+		}
 
 		try {
 			$new_order = wc_create_order();
@@ -65,7 +80,12 @@ final class WCOS_Duplicate_Order_Service {
 			}
 
 			$new_order->update_meta_data('_wcos_duplicate_source_order', $source_id);
+			$new_order->update_meta_data('_wcos_operation_id', $operation_id);
 			$new_order->save();
+
+			if (!WCOS_Operation_Journal::complete($source, $operation_id, array('target_order_id' => $new_order->get_id()))) {
+				throw new RuntimeException(__('The duplicate order was created but its operation journal could not be finalized.', 'wc-order-splitter'));
+			}
 
 			$source->add_order_note(
 				sprintf(
@@ -82,7 +102,6 @@ final class WCOS_Duplicate_Order_Service {
 				)
 			);
 
-			WCOS_Operation_Journal::complete($source, $operation_id, array('target_order_id' => $new_order->get_id()));
 			return $new_order;
 		} catch (Throwable $throwable) {
 			if ($new_order instanceof WC_Order && $new_order->get_id()) {
