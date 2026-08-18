@@ -45,7 +45,11 @@ final class WCOS_Price_Precision_Scope {
         return self::validate(wc_get_price_decimals());
     }
 
-    public static function for_operation(WC_Order $source, $operation_id = '') {
+    /**
+     * Resolve precision in strict authority order: existing journal, explicitly
+     * confirmed request precision, then the ambient store setting.
+     */
+    public static function for_operation(WC_Order $source, $operation_id = '', $requested_precision = null) {
         $operation_id = sanitize_key((string) $operation_id);
         if ($operation_id !== '' && $source->get_id() && class_exists('WCOS_Operation_Journal')) {
             $record = WCOS_Operation_Journal::get($source, $operation_id);
@@ -55,6 +59,9 @@ final class WCOS_Price_Precision_Scope {
                 && array_key_exists('price_precision', $record['context'])) {
                 return self::validate($record['context']['price_precision']);
             }
+        }
+        if (null !== $requested_precision) {
+            return self::validate($requested_precision);
         }
         return self::store_precision();
     }
