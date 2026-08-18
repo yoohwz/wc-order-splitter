@@ -130,8 +130,15 @@ final class WCOS_Order_Mutation_Snapshot {
 		WCOS_Order_Copy_Context::assert_matches((string) $snapshot['copy_context_signature'], $order);
 		self::assert_item_shape($order, $snapshot);
 
+		/*
+		 * Mutate the order-owned item objects and persist each one explicitly.
+		 * Relying on WC_Order::save() to notice a separately fetched item object is
+		 * storage-dependent and can leave restored line/tax state only in memory.
+		 */
+		$line_items = $order->get_items('line_item');
 		foreach ($snapshot['line_items'] as $item_id => $state) {
-			$item = $order->get_item((int) $item_id);
+			$item_id = (int) $item_id;
+			$item = isset($line_items[$item_id]) ? $line_items[$item_id] : false;
 			if (!$item instanceof WC_Order_Item_Product) {
 				throw new RuntimeException(__('A source line required for rollback is missing.', 'wc-order-splitter'));
 			}
@@ -150,10 +157,15 @@ final class WCOS_Order_Mutation_Snapshot {
 			if (null !== $state['reduced_stock']) {
 				$item->add_meta_data('_reduced_stock', $state['reduced_stock'], true);
 			}
+			if ($item_id !== (int) $item->save()) {
+				throw new RuntimeException(__('A source line could not be persisted during rollback.', 'wc-order-splitter'));
+			}
 		}
 
+		$tax_items = $order->get_items('tax');
 		foreach ($snapshot['tax_items'] as $item_id => $state) {
-			$item = $order->get_item((int) $item_id);
+			$item_id = (int) $item_id;
+			$item = isset($tax_items[$item_id]) ? $tax_items[$item_id] : false;
 			if (!$item instanceof WC_Order_Item_Tax || (int) $item->get_rate_id() !== (int) $state['rate_id']) {
 				throw new RuntimeException(__('A source tax row required for rollback is missing or changed.', 'wc-order-splitter'));
 			}
@@ -163,6 +175,9 @@ final class WCOS_Order_Mutation_Snapshot {
 			));
 			if (is_wp_error($result)) {
 				throw new RuntimeException($result->get_error_message());
+			}
+			if ($item_id !== (int) $item->save()) {
+				throw new RuntimeException(__('A source tax row could not be persisted during rollback.', 'wc-order-splitter'));
 			}
 		}
 
