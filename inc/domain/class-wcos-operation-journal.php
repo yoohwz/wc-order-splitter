@@ -7,13 +7,14 @@ defined('ABSPATH') || exit;
  *
  * The authoritative record is stored in a non-autoloaded option keyed by the
  * source order and operation ID. A bounded order-meta summary is maintained for
- * admin/audit visibility, but it is never used to decide idempotency.
+ * admin/audit visibility, but it is never used to decide idempotency or
+ * recovery. Authoritative checkpoints are never silently discarded.
  */
 final class WCOS_Operation_Journal {
 
+	const SCHEMA_VERSION = 2;
 	const SUMMARY_META_KEY = '_wcos_operation_journal';
 	const MAX_SUMMARY_ENTRIES = 20;
-	const MAX_CHECKPOINTS = 50;
 
 	public static function start(WC_Order $order, $operation_id, $type, array $context = array(), $fingerprint = '') {
 		$operation_id = sanitize_key($operation_id);
@@ -25,7 +26,8 @@ final class WCOS_Operation_Journal {
 
 		$now = gmdate('c');
 		$record = array(
-			'schema_version' => 1,
+			'schema_version' => self::SCHEMA_VERSION,
+			'revision' => 1,
 			'source_order_id' => $order->get_id(),
 			'operation_id' => $operation_id,
 			'type' => $type,
@@ -38,6 +40,7 @@ final class WCOS_Operation_Journal {
 			'context' => $context,
 			'checkpoints' => array(
 				array(
+					'sequence' => 1,
 					'stage' => 'started',
 					'at' => $now,
 					'context' => array(),
@@ -81,47 +84,113 @@ final class WCOS_Operation_Journal {
 			$order,
 			$operation_id,
 			static function(array $record) use ($stage, $context) {
-				$now = gmdate('c');
-				$record['stage'] = $stage;
-				$record['updated_at'] = $now;
-				$record['context'] = array_merge(
-					isset($record['context']) && is_array($record['context']) ? $record['context'] : array(),
-					$context
-				);
-				$checkpoints = isset($record['checkpoints']) && is_array($record['checkpoints']) ? $record['checkpoints'] : array();
-				$checkpoints[] = array(
-					'stage' => $stage,
-					'at' => $now,
-					'context' => $context,
-				);
-				$record['checkpoints'] = array_slice($checkpoints, -self::MAX_CHECKPOINTS);
-				return $record;
+				$status = isset($record['status']) ? sanitize_key($record['status']) : '';
+				if (!in_array($status, array('started', 'recovery_required', 'committed', 'compensating'), true)) {
+					return false;
+				}
+				return self::append_checkpoint($record, $stage, $context);
 			}
 		);
 	}
 
 	public static function mark_committed(WC_Order $order, $operation_id, array $context = array()) {
-		return self::set_status($order, $operation_id, 'committed', 'source_committed', $context, false);
+		return self::set_status(
+			$order,
+			$operation_id,
+			'committed',
+			'source_committed',
+			$context,
+			false,
+			array('started', 'recovery_required', 'committed')
+		);
 	}
 
 	public static function complete(WC_Order $order, $operation_id, array $context = array()) {
-		return self::set_status($order, $operation_id, 'completed', 'completed', $context, true);
+		return self::set_status(
+			$order,
+			$operation_id,
+			'completed',
+			'completed',
+			$context,
+			true,
+			array('committed', 'completed')
+		);
 	}
 
 	public static function fail(WC_Order $order, $operation_id, array $context = array()) {
 		$current = self::get($order, $operation_id);
-		if (is_array($current) && isset($current['status']) && in_array($current['status'], array('recovery_required', 'committed', 'completed'), true)) {
+		if (!is_array($current)) {
+			return false;
+		}
+		$status = isset($current['status']) ? sanitize_key($current['status']) : '';
+		if (in_array($status, array('failed', 'recovery_required', 'committed', 'completed', 'compensating', 'compensated'), true)) {
 			return true;
 		}
-		return self::set_status($order, $operation_id, 'failed', 'failed', $context, true);
+		return self::set_status(
+			$order,
+			$operation_id,
+			'failed',
+			'failed',
+			$context,
+			true,
+			array('started')
+		);
 	}
 
 	public static function require_recovery(WC_Order $order, $operation_id, array $context = array()) {
-		return self::set_status($order, $operation_id, 'recovery_required', 'recovery_required', $context, false);
+		$current = self::get($order, $operation_id);
+		if (!is_array($current)) {
+			return false;
+		}
+		$status = isset($current['status']) ? sanitize_key($current['status']) : '';
+		if (in_array($status, array('completed', 'compensated'), true)) {
+			return true;
+		}
+		return self::set_status(
+			$order,
+			$operation_id,
+			'recovery_required',
+			'recovery_required',
+			$context,
+			false,
+			array('started', 'failed', 'recovery_required', 'committed')
+		);
 	}
 
 	public static function resume(WC_Order $order, $operation_id, array $context = array()) {
-		return self::set_status($order, $operation_id, 'started', 'resumed', $context, false);
+		return self::set_status(
+			$order,
+			$operation_id,
+			'started',
+			'resumed',
+			$context,
+			false,
+			array('started', 'failed', 'recovery_required')
+		);
+	}
+
+	public static function mark_compensating(WC_Order $order, $operation_id, array $context = array()) {
+		return self::set_status(
+			$order,
+			$operation_id,
+			'compensating',
+			'compensating',
+			$context,
+			false,
+			array('started', 'failed', 'recovery_required', 'compensating')
+		);
+	}
+
+	public static function mark_compensated(WC_Order $order, $operation_id, array $context = array()) {
+		return self::set_status(
+			$order,
+			$operation_id,
+			'compensated',
+			'compensated',
+			$context,
+			true,
+			array('compensating', 'compensated')
+		);
 	}
 
 	public static function delete(WC_Order $order, $operation_id) {
@@ -132,32 +201,41 @@ final class WCOS_Operation_Journal {
 		return delete_option(self::key($order->get_id(), $operation_id));
 	}
 
-	private static function set_status(WC_Order $order, $operation_id, $status, $stage, array $context, $terminal) {
+	private static function set_status(WC_Order $order, $operation_id, $status, $stage, array $context, $terminal, array $allowed_from) {
 		$status = sanitize_key($status);
 		$stage = sanitize_key($stage);
 		return self::mutate(
 			$order,
 			$operation_id,
-			static function(array $record) use ($status, $stage, $context, $terminal) {
-				$now = gmdate('c');
+			static function(array $record) use ($status, $stage, $context, $terminal, $allowed_from) {
+				$current_status = isset($record['status']) ? sanitize_key($record['status']) : '';
+				if (!in_array($current_status, $allowed_from, true)) {
+					return false;
+				}
 				$record['status'] = $status;
-				$record['stage'] = $stage;
-				$record['updated_at'] = $now;
-				$record['completed_at'] = $terminal ? $now : null;
-				$record['context'] = array_merge(
-					isset($record['context']) && is_array($record['context']) ? $record['context'] : array(),
-					$context
-				);
-				$checkpoints = isset($record['checkpoints']) && is_array($record['checkpoints']) ? $record['checkpoints'] : array();
-				$checkpoints[] = array(
-					'stage' => $stage,
-					'at' => $now,
-					'context' => $context,
-				);
-				$record['checkpoints'] = array_slice($checkpoints, -self::MAX_CHECKPOINTS);
-				return $record;
+				$record['completed_at'] = $terminal ? gmdate('c') : null;
+				return self::append_checkpoint($record, $stage, $context);
 			}
 		);
+	}
+
+	private static function append_checkpoint(array $record, $stage, array $context) {
+		$now = gmdate('c');
+		$record['stage'] = sanitize_key($stage);
+		$record['updated_at'] = $now;
+		$record['context'] = array_merge(
+			isset($record['context']) && is_array($record['context']) ? $record['context'] : array(),
+			$context
+		);
+		$checkpoints = isset($record['checkpoints']) && is_array($record['checkpoints']) ? $record['checkpoints'] : array();
+		$checkpoints[] = array(
+			'sequence' => count($checkpoints) + 1,
+			'stage' => sanitize_key($stage),
+			'at' => $now,
+			'context' => $context,
+		);
+		$record['checkpoints'] = $checkpoints;
+		return $record;
 	}
 
 	private static function mutate(WC_Order $order, $operation_id, callable $mutator) {
@@ -167,7 +245,7 @@ final class WCOS_Operation_Journal {
 		}
 
 		$key = self::key($order->get_id(), $operation_id);
-		for ($attempt = 0; $attempt < 3; $attempt++) {
+		for ($attempt = 0; $attempt < 5; $attempt++) {
 			$current = get_option($key, null);
 			if (!is_array($current)) {
 				return false;
@@ -177,7 +255,12 @@ final class WCOS_Operation_Journal {
 			if (!is_array($replacement)) {
 				return false;
 			}
+			if (!self::immutable_fields_match($current, $replacement)) {
+				return false;
+			}
 
+			$replacement['schema_version'] = self::SCHEMA_VERSION;
+			$replacement['revision'] = isset($current['revision']) ? ((int) $current['revision'] + 1) : 2;
 			if (self::compare_and_swap($key, $current, $replacement)) {
 				self::write_summary($order, $replacement);
 				return true;
@@ -185,6 +268,17 @@ final class WCOS_Operation_Journal {
 		}
 
 		return false;
+	}
+
+	private static function immutable_fields_match(array $current, array $replacement) {
+		foreach (array('source_order_id', 'operation_id', 'type', 'fingerprint') as $field) {
+			if (!array_key_exists($field, $current)
+				|| !array_key_exists($field, $replacement)
+				|| (string) $current[$field] !== (string) $replacement[$field]) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private static function compare_and_swap($key, array $current, array $replacement) {
@@ -199,13 +293,8 @@ final class WCOS_Operation_Journal {
 			)
 		);
 
-		if (1 !== $updated) {
-			wp_cache_delete($key, 'options');
-			return false;
-		}
-
 		wp_cache_delete($key, 'options');
-		return true;
+		return 1 === $updated;
 	}
 
 	private static function write_summary(WC_Order $order, array $record) {
@@ -217,6 +306,7 @@ final class WCOS_Operation_Journal {
 			'fingerprint' => isset($record['fingerprint']) ? $record['fingerprint'] : '',
 			'status' => isset($record['status']) ? $record['status'] : '',
 			'stage' => isset($record['stage']) ? $record['stage'] : '',
+			'revision' => isset($record['revision']) ? (int) $record['revision'] : 0,
 			'started_at' => isset($record['started_at']) ? $record['started_at'] : null,
 			'updated_at' => isset($record['updated_at']) ? $record['updated_at'] : null,
 			'completed_at' => isset($record['completed_at']) ? $record['completed_at'] : null,
