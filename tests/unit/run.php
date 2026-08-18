@@ -38,12 +38,9 @@ $tests['decimal rounds half up without binary floats'] = static function() {
 };
 
 $tests['decimal rejects exponent notation'] = static function() {
-	assert_throws(
-		static function() {
-			WCOS_Decimal::to_units('1e3', 2);
-		},
-		InvalidArgumentException::class
-	);
+	assert_throws(static function() {
+		WCOS_Decimal::to_units('1e3', 2);
+	}, InvalidArgumentException::class);
 };
 
 $tests['allocator preserves cents deterministically'] = static function() {
@@ -105,31 +102,27 @@ $tests['split request canonicalization is deterministic'] = static function() {
 		'Child B' => array(22 => '1.5'),
 		'child-a' => array(11 => 1),
 	));
-	assert_same(
-		array(
-			'child-a' => array(11 => '1.000000'),
-			'childb' => array(22 => '1.500000'),
-		),
-		$plan
-	);
+	assert_same(array(
+		'child-a' => array(11 => '1.000000'),
+		'childb' => array(22 => '1.500000'),
+	), $plan);
 };
 
 $tests['split request rejects normalized key collisions'] = static function() {
-	assert_throws(
-		static function() {
-			WCOS_Split_Plan::canonicalize_request(array(
-				'Child A' => array(1 => 1),
-				'childa' => array(2 => 1),
-			));
-		},
-		InvalidArgumentException::class
-	);
+	assert_throws(static function() {
+		WCOS_Split_Plan::canonicalize_request(array(
+			'Child A' => array(1 => 1),
+			'childa' => array(2 => 1),
+		));
+	}, InvalidArgumentException::class);
 };
 
 $tests['mutation contract accepts conserved snapshot'] = static function() {
 	$before = array(
 		'line_subtotal' => '100.00',
 		'line_total' => '90.00',
+		'line_subtotal_tax' => '10.20',
+		'line_total_tax' => '9.20',
 		'discount_total' => '10.00',
 		'discount_tax' => '1.00',
 		'fees_total' => '2.00',
@@ -138,6 +131,10 @@ $tests['mutation contract accepts conserved snapshot'] = static function() {
 		'grand_total' => '106.70',
 		'stock_reduced' => '3.000000',
 		'line_quantities' => array('line-a' => '2.000000', 'line-b' => '1.000000'),
+		'line_tax_by_rate' => array(
+			'101' => array('subtotal' => '4.70', 'total' => '4.20'),
+			'202' => array('subtotal' => '5.50', 'total' => '5.00'),
+		),
 		'tax_by_rate' => array(
 			'101' => array('cart' => '4.20', 'shipping' => '0.50'),
 			'202' => array('cart' => '5.00', 'shipping' => '0.00'),
@@ -148,54 +145,69 @@ $tests['mutation contract accepts conserved snapshot'] = static function() {
 };
 
 $tests['mutation contract rejects monetary drift'] = static function() {
-	assert_throws(
-		static function() {
-			WCOS_Mutation_Contract::assert_conserved(
-				array('grand_total' => '10.00'),
-				array('grand_total' => '9.99'),
-				2
-			);
-		},
-		RuntimeException::class
-	);
+	assert_throws(static function() {
+		WCOS_Mutation_Contract::assert_conserved(
+			array('grand_total' => '10.00'),
+			array('grand_total' => '9.99'),
+			2
+		);
+	}, RuntimeException::class);
 };
 
-$tests['mutation contract rejects per-rate tax drift hidden by equal aggregate tax'] = static function() {
-	assert_throws(
-		static function() {
-			WCOS_Mutation_Contract::assert_conserved(
-				array(
-					'tax_total' => '10.00',
-					'tax_by_rate' => array(
-						'101' => array('cart' => '4.00', 'shipping' => '0.00'),
-						'202' => array('cart' => '6.00', 'shipping' => '0.00'),
-					),
+$tests['mutation contract rejects line subtotal tax drift hidden by equal final tax'] = static function() {
+	assert_throws(static function() {
+		WCOS_Mutation_Contract::assert_conserved(
+			array(
+				'line_subtotal_tax' => '10.00',
+				'line_total_tax' => '8.00',
+				'line_tax_by_rate' => array(
+					'101' => array('subtotal' => '4.00', 'total' => '3.00'),
+					'202' => array('subtotal' => '6.00', 'total' => '5.00'),
 				),
-				array(
-					'tax_total' => '10.00',
-					'tax_by_rate' => array(
-						'101' => array('cart' => '5.00', 'shipping' => '0.00'),
-						'202' => array('cart' => '5.00', 'shipping' => '0.00'),
-					),
+			),
+			array(
+				'line_subtotal_tax' => '10.00',
+				'line_total_tax' => '8.00',
+				'line_tax_by_rate' => array(
+					'101' => array('subtotal' => '5.00', 'total' => '3.00'),
+					'202' => array('subtotal' => '5.00', 'total' => '5.00'),
 				),
-				2
-			);
-		},
-		RuntimeException::class
-	);
+			),
+			2
+		);
+	}, RuntimeException::class);
+};
+
+$tests['mutation contract rejects per-rate tax-row drift hidden by equal aggregate tax'] = static function() {
+	assert_throws(static function() {
+		WCOS_Mutation_Contract::assert_conserved(
+			array(
+				'tax_total' => '10.00',
+				'tax_by_rate' => array(
+					'101' => array('cart' => '4.00', 'shipping' => '0.00'),
+					'202' => array('cart' => '6.00', 'shipping' => '0.00'),
+				),
+			),
+			array(
+				'tax_total' => '10.00',
+				'tax_by_rate' => array(
+					'101' => array('cart' => '5.00', 'shipping' => '0.00'),
+					'202' => array('cart' => '5.00', 'shipping' => '0.00'),
+				),
+			),
+			2
+		);
+	}, RuntimeException::class);
 };
 
 $tests['mutation contract rejects currency drift'] = static function() {
-	assert_throws(
-		static function() {
-			WCOS_Mutation_Contract::assert_conserved(
-				array('currencies' => array('USD')),
-				array('currencies' => array('EUR')),
-				2
-			);
-		},
-		RuntimeException::class
-	);
+	assert_throws(static function() {
+		WCOS_Mutation_Contract::assert_conserved(
+			array('currencies' => array('USD')),
+			array('currencies' => array('EUR')),
+			2
+		);
+	}, RuntimeException::class);
 };
 
 $failures = 0;
