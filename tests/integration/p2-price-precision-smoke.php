@@ -176,10 +176,19 @@ try {
     wcos_p2_adapter_assert($persisted_children[0]->get_id() === $retry_children[0]->get_id(), 'Precision retry created a duplicate child.');
     wcos_p2_adapter_assert(0 === wc_get_price_decimals(), 'Mutation precision scope leaked after retry completion.');
 
-    $retry_source = wc_get_order($retry_source->get_id());
-    $retry_child = wc_get_order($retry_children[0]->get_id());
-    wcos_p2_precision_assert_conserved($retry_source, array($retry_child), $retry_before, 3);
-    $retry_record = WCOS_Operation_Journal::get($retry_source, $retry_operation);
+    /* Persisted-state verification must hydrate historical items under the captured precision. */
+    $verify_token = WCOS_Price_Precision_Scope::begin(3);
+    try {
+        $retry_source = wc_get_order($retry_source->get_id());
+        $retry_child = wc_get_order($retry_children[0]->get_id());
+        wcos_p2_precision_assert_conserved($retry_source, array($retry_child), $retry_before, 3);
+        WCOS_Order_Totals_Rebuilder::assert_consistent($retry_source, 3);
+        WCOS_Order_Totals_Rebuilder::assert_consistent($retry_child, 3);
+        $retry_record = WCOS_Operation_Journal::get($retry_source, $retry_operation);
+    } finally {
+        WCOS_Price_Precision_Scope::end($verify_token);
+    }
+    wcos_p2_adapter_assert(0 === wc_get_price_decimals(), 'Persisted-state verification leaked the mutation precision scope.');
     wcos_p2_adapter_assert('completed' === $retry_record['status'], 'Precision retry did not complete the original journal.');
     wcos_p2_adapter_assert(3 === (int) $retry_record['context']['price_precision'], 'Retry mutated the journal precision contract.');
 
