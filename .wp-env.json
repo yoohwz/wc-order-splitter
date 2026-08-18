@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schemas.wp.org/trunk/wp-env.json",
+  "core": "WordPress/WordPress#7.0.3",
+  "phpVersion": "8.1",
+  "plugins": [
+    ".",
+    "https://downloads.wordpress.org/plugin/woocommerce.11.0.0.zip"
+  ],
+  "config": {
+    "WP_DEBUG": true,
+    "WP_DEBUG_LOG": true,
+    "SCRIPT_DEBUG": true,
+    "WP_ENVIRONMENT_TYPE": "local"
+  }
+}
