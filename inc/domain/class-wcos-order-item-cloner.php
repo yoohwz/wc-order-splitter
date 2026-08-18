@@ -16,10 +16,10 @@ final class WCOS_Order_Item_Cloner {
 			'quantity' => $source->get_quantity(),
 			'tax_class' => $source->get_tax_class(),
 			'subtotal' => $source->get_subtotal(),
-			'subtotal_tax' => $source->get_subtotal_tax(),
 			'total' => $source->get_total(),
-			'total_tax' => $source->get_total_tax(),
 			'taxes' => $source->get_taxes(),
+			'subtotal_tax' => $source->get_subtotal_tax(),
+			'total_tax' => $source->get_total_tax(),
 		);
 		self::assert_props($item->set_props(array_merge($props, $overrides)), 'product');
 		WCOS_Order_Item_Meta_Policy::copy($source, $item, $context, array('_reduced_stock'));
@@ -42,8 +42,8 @@ final class WCOS_Order_Item_Cloner {
 				'method_id' => $source->get_method_id(),
 				'instance_id' => $source->get_instance_id(),
 				'total' => $source->get_total(),
-				'total_tax' => $source->get_total_tax(),
 				'taxes' => $source->get_taxes(),
+				'total_tax' => $source->get_total_tax(),
 			)),
 			'shipping'
 		);
@@ -60,8 +60,8 @@ final class WCOS_Order_Item_Cloner {
 				'tax_status' => $source->get_tax_status(),
 				'amount' => $source->get_amount(),
 				'total' => $source->get_total(),
-				'total_tax' => $source->get_total_tax(),
 				'taxes' => $source->get_taxes(),
+				'total_tax' => $source->get_total_tax(),
 			)),
 			'fee'
 		);
