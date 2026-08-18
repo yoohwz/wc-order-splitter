@@ -1,9 +1,9 @@
 === Order Splitter for WooCommerce ===
 Contributors: yoohw
 Tags: woocommerce, split order, order management
-Requires at least: 6.3
+Requires at least: 6.5
 Tested up to: 7.0
-WC tested up to: 10.8
+WC tested up to: 11.0
 Requires PHP: 7.4
 Stable tag: 1.4.12
 License: GPLv3 or later
@@ -15,9 +15,11 @@ Emergency safety release for Order Splitter for WooCommerce. Order mutation acti
 
 Order Splitter for WooCommerce provides order-management tools for WooCommerce stores.
 
-Version 1.4.12 is an emergency safety release. Manual split, duplicate, merge, and return mutations are temporarily disabled in this version while stock, tax, shipping, and order-data integrity safeguards are being applied. Existing order relationship labels and plugin settings remain available.
+Version 1.4.12 is an emergency safety release. Manual split, duplicate, merge, return, and bulk-return mutations are temporarily disabled in this version while stock, tax, shipping, and order-data integrity safeguards are being applied. Existing order relationship labels and plugin settings remain available.
 
 This temporary restriction prevents stores from running mutation paths that could produce inconsistent order totals, shipping amounts, tax data, or stock bookkeeping.
+
+WordPress 6.5 or newer is required so WordPress Core understands the `Requires Plugins` dependency declaration for WooCommerce.
 
 [Premium version](https://yoohw.com/product/woocommerce-advanced-order-actions/) | [Documentation](https://docs.yoohw.com/category/woocommerce-advanced-order-actions/) | [Support](https://yoohw.com/support/) | [Demo](https://sandbox.yoohw.com/demo/wcaoa_demo.html)
 
@@ -38,6 +40,10 @@ They are intentionally disabled in this emergency release while integrity protec
 
 The plugin continues to use WooCommerce CRUD APIs and declares High-Performance Order Storage compatibility for the functionality that remains active in this safety release.
 
+= Does this release send site or administrator details to an external subscription endpoint? =
+
+No. The automatic external subscription request and its bundled endpoint integration have been removed.
+
 = Where are older changelog entries? =
 
 Older release notes are available in `changelog.txt`.
@@ -46,8 +52,11 @@ Older release notes are available in `changelog.txt`.
 
 = 1.4.12 (Aug 18, 2026) =
 * Security/Privacy: Removed the automatic external subscription request and its data transmission path.
-* Safety: Temporarily disabled split, duplicate, merge, and return mutations while integrity safeguards are applied.
+* Safety: Temporarily disabled split, duplicate, merge, return, and bulk-return mutations while integrity safeguards are applied.
+* Safety: Guarded unavailable premium-only settings sections from direct URL access.
 * Compliance: Removed the WordPress.org URL from the `Plugin URI` header.
+* Compatibility: Raised the minimum WordPress version to 6.5 for Core plugin-dependency support.
+* Compatibility: Updated the declared WooCommerce tested version to 11.0.
 * Improve: Kept settings and order relationship labels available during the safety release.
 
 = 1.4.11 (Jun 13, 2026) =
