@@ -6,94 +6,155 @@
 
 ## Status
 
-Milestone 1 introduces the WooCommerce-facing adapter boundary for manual quantity split while every production mutation gate remains hard-off. No AJAX endpoint, order action, bulk action, UI control, or legacy mutation handler is registered by this milestone.
+The first P2 foundation milestone is technically implemented and exercised while every production mutation gate remains hard-off. No AJAX endpoint, order action, bulk action, UI control, or legacy mutation handler is registered by this milestone.
 
-The production write path is now designed as:
+The intended production write path is:
 
 `controller -> WCOS_Mutation_Gateway -> WCOS_Split_WooCommerce_Adapter -> WCOS_Split_Order_Service`
 
-Controllers must not call the service directly.
+Controllers must not instantiate or call the Split service directly.
 
-## Implemented in this milestone
+## Implemented foundations
 
-### Request-local physical-stock proof and pre-write blocking
+### Request-local physical-stock proof
 
-`WCOS_Stock_Side_Effect_Guard` is active only inside the current mutation request. Core WooCommerce product/variation stock writes are intercepted at the `before_set_stock` hooks before the product data store changes. The corresponding after-write hooks remain observed as fallback evidence for integration paths that report a stock write after it has occurred.
+`WCOS_Stock_Side_Effect_Guard` is active only inside the current mutation request.
 
-This replaces the production adapter's reliance on comparing catalog stock before and after the whole request, which can be invalidated by a concurrent checkout in another process.
+Normal WooCommerce product/variation stock writes are intercepted at the `before_set_stock` hooks before the product data store changes. The matching after-write hooks remain observed as fallback evidence for integrations that report a stock write after persistence.
 
-A stock mutation attempt in the current request:
+Consequences:
 
-- prevents the mutation conservation contract from being accepted;
-- cannot change physical stock through the normal WooCommerce stock-write path;
-- leaves an interrupted operation retriable with the same idempotency key and persisted child set.
+- concurrent checkout stock changes in another request do not create false Split failures;
+- a stock-write attempt inside the Split request is blocked before the WooCommerce data store write;
+- a blocked attempt dirties the conservation proof and leaves the same idempotency operation safely retriable;
+- an observed after-write fallback is considered outside the order-only snapshot and must not be auto-compensated without explicit stock reconciliation.
 
-A confirmed after-write fallback event is treated more conservatively:
-
-- persisted-state auto-finalization is rejected;
-- automatic order-only compensation is disabled;
-- the operation requires explicit stock reconciliation because physical stock is outside the order snapshot.
-
-The existing exact before/after product-stock comparison remains available outside the P2 adapter scope for legacy P1 integration contracts.
+The exact P1 before/after stock comparison remains available outside a P2 adapter scope.
 
 ### Read-only Split preflight
 
-`WCOS_Split_Preflight` returns a PII-free compatibility report and an explicit policy contract. The current narrow policy is:
+`WCOS_Split_Preflight` returns a PII-free compatibility report and a versioned policy contract.
+
+Current policy:
 
 - shipping: keep on source;
-- fees: keep on source;
-- coupons: reject until allocation policy exists;
-- refunds: reject until allocation policy exists;
-- payment transaction: keep on source;
+- positive fees: keep on source;
+- negative fees: reject;
+- coupons: reject;
+- refunds: reject;
+- payment/transaction ownership: source-only;
 - child status: `pending`;
-- tax: preserve historical amounts/rates;
+- tax: preserve historical values/rates;
 - physical stock: no write;
-- nested split: reject.
+- nested Split: reject;
+- unknown private line metadata: reject;
+- context-inconsistent private metadata classification: reject.
 
-The report exposes compatibility facts only: order type/status/currency/tax-inclusive mode, line/charge counts, transaction presence, deleted-product line count, fractional quantity line count, managed/unmanaged stock counts, and backorder count. Customer/address/payment plaintext is not returned.
+The report exposes compatibility facts only: order type/status/currency, `prices_include_tax`, paid state, line/charge/refund counts, transaction presence, deleted-product lines, fractional quantity lines, managed/unmanaged/backorder lines, and unclassified/inconsistent private metadata keys. Customer/address/payment plaintext is not returned.
 
-### Durable journal retention boundary
+### Stock lifecycle matrix
 
-`WCOS_Operation_Journal_Retention` defines bounded cleanup for authoritative mutation records:
+The canonical WooCommerce integration matrix proves:
+
+- managed stock: an already-reduced order redistributes `_reduced_stock` exactly without changing physical stock;
+- cancelling a child restores exactly the child share;
+- cancelling the residual source restores the remaining share exactly once;
+- unmanaged stock does not receive synthetic `_reduced_stock`;
+- variation-owned stock preserves variation identity and does not move physical stock;
+- parent-managed variation stock resolves the real stock owner and remains unchanged;
+- backorder lines are identified and remain safe under the no-write Split policy;
+- native WooCommerce integer quantity behavior is respected;
+- fractional quantity behavior is proven only when an explicit integration replaces WooCommerce's default integer stock-amount filter.
+
+### Historical tax, charge, payment, and rounding contracts
+
+Acceptance evidence covers:
+
+- tax-inclusive and tax-exclusive order contexts;
+- multiple historical tax rates;
+- two shipping packages retained on source;
+- positive taxable fee retained on source;
+- child receives only its historical line tax rows;
+- source retains historical fee/shipping tax rows;
+- aggregate financial conservation;
+- paid source keeps transaction ID and paid timestamp;
+- child keeps non-transaction payment context, remains `pending`, and receives no transaction ID or paid timestamp;
+- negative fees fail closed before journal or child persistence;
+- deterministic multi-child one-cent and tax-cent allocation;
+- idempotent retry returns the same child set.
+
+### Production side-effect contract
+
+A real active WooCommerce `order.created` webhook is exercised in CI with delivery scheduling intercepted so no external network call occurs.
+
+The contract proves:
+
+- exactly one `woocommerce_new_order` lifecycle event per child;
+- exactly one `order.created` webhook schedule per child;
+- completed retry emits neither event again;
+- no implicit child status transition;
+- no `wp_mail` attempt;
+- no product/variation stock-write hook on a safe Split;
+- exactly one operation note on source;
+- exactly one operation note on each child;
+- completed retry does not duplicate operation notes.
+
+### Metadata compatibility boundary
+
+Public line metadata is business configuration by default. Protected stock/refund/mutation metadata is always operational and cannot be promoted by filters.
+
+Private line metadata is fail-closed unless an integration explicitly declares it as either:
+
+- immutable business metadata, which is copied and participates in canonical line identity; or
+- known operational metadata, which is not copied.
+
+Classification must be consistent between Split-copy and identity contexts. The integration matrix proves that two same-product lines with different adapted business configuration remain distinct and do not collapse.
+
+### Durable journal retention
+
+`WCOS_Operation_Journal_Retention` defines bounded authoritative-journal cleanup:
 
 - default retention: 90 days;
 - configurable between 7 and 365 days;
-- only terminal `completed`, `failed`, and `compensated` records are eligible;
-- `started`, `committed`, `recovery_required`, and `compensating` records are never purged;
-- cleanup scheduling remains dormant while all production workflow gates are hard-off.
+- only `completed`, `failed`, and `compensated` terminal records are eligible;
+- active/recovery/compensating/manual-reconciliation states are never eligible;
+- scheduling remains dormant while every production workflow gate is hard-off;
+- cleanup uses a persistent option-ID keyset cursor so an early batch of active/recent records cannot permanently starve expired records behind it.
 
-## Acceptance evidence added
+The regression contract creates more than one full cleanup batch of ineligible records and proves an expired terminal record behind them is eventually reached while active records remain intact.
 
-The P2 integration contract is executed through the existing canonical WooCommerce CI matrix on legacy storage, HPOS-only, and HPOS compatibility/sync mode. It proves:
+## Current acceptance evidence
 
-- Split remains production hard-off;
-- fractional-quantity preflight and PII-free reporting;
-- safe adapter Split and retry are at-most-once and do not write physical stock;
-- coupon-bearing sources fail before journal/child persistence and remain unchanged;
-- historical order lines whose catalog product was deleted remain splittable;
-- normal WooCommerce stock writes are blocked before the data store changes while the Split guard is active;
-- ambient stock differences do not create false failures while a clean adapter proof is active;
-- a blocked stock attempt dirties the conservation contract, remains retriable, and does not duplicate children on retry;
-- an after-write fallback event is classified as requiring manual reconciliation;
-- journal retention stays dormant while production gates are off and never treats recovery-required state as purgeable.
+The canonical CI executes the P2 contracts on:
 
-## Explicit Gate B work still required
+- legacy order storage;
+- HPOS-only;
+- HPOS compatibility/sync mode;
+- PHP 7.4, 8.1, and 8.3 static/unit gates;
+- package and architecture/hard-off gates.
 
-This milestone does **not** satisfy the complete P2 production-enable gate. Before manual quantity Split can be enabled, the following still require implementation/evidence:
+The latest adapter-foundation head has passed `Required CI` with all three WooCommerce storage modes green.
 
-- managed stock, variation-managed stock, parent-managed variation stock, unmanaged stock, backorders, and fractional-stock matrix;
-- tax-inclusive and tax-exclusive prices with multiple historical tax rates and rounding combinations;
-- fee and shipping package/method matrix under the keep-on-source policy;
-- explicit paid-order/payment lifecycle policy;
-- refunds remain unsupported until an allocation/inverse policy exists;
-- coupons remain unsupported until an allocation policy exists;
-- duplicate commercial lines with distinct metadata/adapters for configured products;
-- exact email, webhook, analytics, fulfillment, stock-hook, and order-note counts;
-- third-party metadata adapters and compatibility policy;
-- production controller/nonce/idempotency transport;
-- server-rendered preflight/confirmation UX and accessibility;
-- independent technical review and human gate before changing `WCOS_Feature_Gates::SPLIT`.
+## Remaining production-enable blockers
 
-## Non-goal
+This foundation is safe to merge while production gates remain hard-off, but it is **not** sufficient to enable manual quantity Split yet.
+
+Before changing `WCOS_Feature_Gates::SPLIT`, the next P2 milestone must still provide:
+
+1. Persistent manual-reconciliation state for the extreme fallback where an integration bypasses the normal pre-write stock guard and only reports physical stock mutation after persistence, including behavior if the journal had already reached `completed`.
+2. Currency/price-precision evidence beyond the current two-decimal matrices, including zero-decimal and three-decimal precision (or an equivalent extension-filtered precision contract).
+3. Production transport/controller:
+   - nonce/CSRF protection;
+   - centralized authorization through `WCOS_Mutation_Gateway`;
+   - strict plan parsing and normalized source item IDs/quantities;
+   - client-supplied or server-issued idempotency/operation ID contract;
+   - explicit error/retry responses.
+4. Server-rendered preflight/confirmation UI with accessible labels, focus behavior, warnings, policy disclosure, and operation result/audit feedback.
+5. Concrete compatibility guidance/adapters for supported third-party configured-product ecosystems beyond the generic metadata adapter mechanism.
+6. Independent technical review and explicit human gate.
+
+Coupons, refunds, and negative fees may remain intentionally unsupported for the first production release if the product policy keeps them fail-closed and the UI communicates that limitation before mutation.
+
+## Non-goals of this milestone
 
 Duplicate, category split, stock-status split, Merge, Return, and Bulk Return remain outside this milestone and stay hard-off.
