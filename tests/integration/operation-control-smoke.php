@@ -92,5 +92,6 @@ require __DIR__ . '/p2-charge-tax-matrix-smoke.php';
 require __DIR__ . '/p2-production-side-effect-smoke.php';
 require __DIR__ . '/p2-metadata-compatibility-smoke.php';
 require __DIR__ . '/p2-journal-retention-smoke.php';
+require __DIR__ . '/p2-admin-transport-smoke.php';
 
 echo "operation-lock-and-journal-ok\n";
