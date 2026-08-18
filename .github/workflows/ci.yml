@@ -76,6 +76,9 @@ jobs:
           npx wp-env run cli wp plugin is-active wc-order-splitter
           npx wp-env run cli wp eval 'if (!defined("WC_ORDER_SPLITTER_MUTATIONS_ENABLED") || WC_ORDER_SPLITTER_MUTATIONS_ENABLED !== false) { exit(1); } echo "safety-mode-ok\n";'
 
+      - name: Verify duplicate mutation service invariants
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/duplicate-smoke.php
+
       - name: Stop WordPress
         if: always()
         run: npx wp-env stop
