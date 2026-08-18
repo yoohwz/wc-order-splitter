@@ -57,18 +57,32 @@ final class WCOS_Order_Mutation_Snapshot {
 				'total_tax' => (string) $order->get_total_tax(),
 				'total' => (string) $order->get_total(),
 			),
-			'relation_meta' => array(
-				'_wcos_child_order_ids' => self::normalize_order_ids($order->get_meta('_wcos_child_order_ids', true)),
-				'yoos_splitted_order' => self::normalize_legacy_order_ids($order->get_meta('yoos_splitted_order', true)),
-			),
+			'relation_meta' => self::relation_state($order),
 			'order_stock_reduced' => (bool) $order->get_data_store()->get_stock_reduced($order->get_id()),
 			'line_items' => $lines,
 			'tax_items' => $taxes,
 		);
 
 		$snapshot['source_signature'] = WCOS_Order_Contract_Snapshot::source_signature($order);
+		$snapshot['source_recovery_signature'] = self::split_owned_signature($order);
 		$snapshot['recovery_fingerprint'] = self::fingerprint($snapshot);
 		return $snapshot;
+	}
+
+	/**
+	 * Signature of all source state Split is allowed to mutate, including
+	 * structured and legacy relation metadata omitted from the general contract
+	 * signature. Automatic rollback must match this exact state.
+	 */
+	public static function split_owned_signature(WC_Order $order) {
+		return WCOS_Mutation_Fingerprint::create(
+			'split_source_owned_state',
+			$order->get_id(),
+			array(
+				'source_signature' => WCOS_Order_Contract_Snapshot::source_signature($order),
+				'relation_meta' => self::relation_state($order),
+			)
+		);
 	}
 
 	public static function fingerprint(array $snapshot) {
@@ -92,9 +106,9 @@ final class WCOS_Order_Mutation_Snapshot {
 	/**
 	 * Restore only the fields owned by Split.
 	 *
-	 * `$expected_current_signature` is mandatory for automatic compensation. It
-	 * prevents rollback from overwriting a source order changed by another actor
-	 * after the mutation committed its intermediate state.
+	 * `$expected_current_signature` must be a split-owned signature captured at
+	 * the source persistence checkpoint. This prevents rollback from overwriting
+	 * any later relation or order mutation by another actor.
 	 */
 	public static function restore_split_source(array $snapshot, $expected_current_signature) {
 		self::assert_valid($snapshot);
@@ -109,7 +123,7 @@ final class WCOS_Order_Mutation_Snapshot {
 			throw new RuntimeException(__('The mutation source order is unavailable for rollback.', 'wc-order-splitter'));
 		}
 
-		$current_signature = WCOS_Order_Contract_Snapshot::source_signature($order);
+		$current_signature = self::split_owned_signature($order);
 		if (!hash_equals($expected_current_signature, $current_signature)) {
 			throw new RuntimeException(__('The source order changed after the mutation checkpoint; automatic rollback is unsafe.', 'wc-order-splitter'));
 		}
@@ -162,7 +176,9 @@ final class WCOS_Order_Mutation_Snapshot {
 		$order->get_data_store()->set_stock_reduced($order->get_id(), (bool) $snapshot['order_stock_reduced']);
 
 		$restored = wc_get_order($order->get_id());
-		if (!$restored || !hash_equals((string) $snapshot['source_signature'], WCOS_Order_Contract_Snapshot::source_signature($restored))) {
+		if (!$restored
+			|| !hash_equals((string) $snapshot['source_signature'], WCOS_Order_Contract_Snapshot::source_signature($restored))
+			|| !hash_equals((string) $snapshot['source_recovery_signature'], self::split_owned_signature($restored))) {
 			throw new RuntimeException(__('The source order did not return to its pre-mutation snapshot after rollback.', 'wc-order-splitter'));
 		}
 		return $restored;
@@ -192,6 +208,13 @@ final class WCOS_Order_Mutation_Snapshot {
 		if ($current_tax_ids !== $snapshot_tax_ids) {
 			throw new RuntimeException(__('The source tax-row set changed; automatic rollback is unsafe.', 'wc-order-splitter'));
 		}
+	}
+
+	private static function relation_state(WC_Order $order) {
+		return array(
+			'_wcos_child_order_ids' => self::normalize_order_ids($order->get_meta('_wcos_child_order_ids', true)),
+			'yoos_splitted_order' => self::normalize_legacy_order_ids($order->get_meta('yoos_splitted_order', true)),
+		);
 	}
 
 	private static function normalize_reduced_stock($value) {
