@@ -39,10 +39,80 @@ jobs:
       - name: Run mutation-domain unit tests
         run: php tests/unit/run.php
 
+  foundation-contract:
+    name: P1 hard-off and architecture contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Reject removed telemetry integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          telemetry_host='yoexpress''.''top'
+          test ! -e inc/cores/api/push-subscription.php
+          if grep -R --line-number --fixed-strings "$telemetry_host" --include='*.php' --include='*.js' --include='*.txt' . --exclude-dir=.git; then
+            echo 'Removed telemetry endpoint must not be present.' >&2
+            exit 1
+          fi
+          if grep -R --line-number --fixed-strings 'WC_Order_Splitter_Push_Subscription' --include='*.php' . --exclude-dir=.git; then
+            echo 'Removed telemetry class must not be referenced.' >&2
+            exit 1
+          fi
+
+      - name: Verify P1 remains internally hard off
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'Version: 1.4.12' wc-order-splitter.php
+          grep -Fq 'Stable tag: 1.4.12' readme.txt
+          grep -Fq 'Requires at least: 6.5' wc-order-splitter.php
+          grep -Fq 'Requires at least: 6.5' readme.txt
+          grep -A2 -F 'public static function mutations_enabled()' inc/cores/safety.php | grep -Fq 'return false;'
+          grep -Fq 'private static $states = array(' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'Legacy mutation handlers are deliberately never loaded here.' inc/cores/script.php
+
+          if grep -R --line-number -E 'WC_ORDER_SPLITTER_(MUTATIONS|SPLIT|DUPLICATE|MERGE|RETURN|BULK_RETURN)_ENABLED' \
+            wc-order-splitter.php inc/cores inc/domain; then
+            echo 'An externally overrideable mutation gate returned to runtime source.' >&2
+            exit 1
+          fi
+
+      - name: Enforce one mutation engine and mandatory controller gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -d inc/mutation-v2
+          test ! -d tests/v2
+
+          for legacy_handler in \
+            'orders-bulk-return.php' \
+            'order-split-button.php' \
+            'order-return-option.php' \
+            'order-duplicate-option.php' \
+            'order-merge-option.php'; do
+            if grep -F "$legacy_handler" inc/cores/script.php; then
+              echo "Legacy mutation handler must not be loaded: $legacy_handler" >&2
+              exit 1
+            fi
+          done
+
+          if grep -R --line-number -E 'new[[:space:]]+WCOS_(Split|Duplicate)_Order_Service' inc/backend inc/cores; then
+            echo 'A production controller bypasses WCOS_Mutation_Gateway.' >&2
+            exit 1
+          fi
+
+          grep -Fq 'WCOS_Feature_Gates::assert_enabled' inc/domain/class-wcos-mutation-gateway.php
+          grep -Fq 'WCOS_Order_Mutation_Authorizer::assert_workflow' inc/domain/class-wcos-mutation-gateway.php
+          grep -Fq 'inc/domain/' AGENTS.md
+          grep -Fq 'inc/domain/' docs/order-mutation-v2-contract.md
+
   integration-smoke:
     name: WooCommerce 11.0.1 / ${{ matrix.storage }} storage
+    needs: [php-syntax, foundation-contract]
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -118,18 +188,18 @@ jobs:
             $expected = "${{ matrix.storage }}";
             $hpos = \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
             if (("legacy" === $expected && $hpos) || ("legacy" !== $expected && !$hpos)) { exit(1); }
-            $gates = array(
+            if (WCOS_Feature_Gates::any_enabled()) { exit(1); }
+            if (WC_Order_Splitter_Safety_Guard::mutations_enabled()) { exit(1); }
+            foreach (array(
               "WC_ORDER_SPLITTER_MUTATIONS_ENABLED",
               "WC_ORDER_SPLITTER_SPLIT_ENABLED",
               "WC_ORDER_SPLITTER_DUPLICATE_ENABLED",
               "WC_ORDER_SPLITTER_MERGE_ENABLED",
               "WC_ORDER_SPLITTER_RETURN_ENABLED",
               "WC_ORDER_SPLITTER_BULK_RETURN_ENABLED"
-            );
-            foreach ($gates as $gate) {
-              if (!defined($gate) || false !== constant($gate)) { exit(1); }
+            ) as $legacy_gate) {
+              if (defined($legacy_gate)) { exit(1); }
             }
-            if (WCOS_Feature_Gates::any_enabled()) { exit(1); }
             $legacy_hooks = array(
               "wp_ajax_split_order",
               "wp_ajax_split_order_by_category",
@@ -144,8 +214,11 @@ jobs:
             echo "storage-and-safety-mode-ok\n";
           '
 
-      - name: Verify mutation lease and journal controls
+      - name: Verify mutation lease and durable journal controls
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/operation-control-smoke.php
+
+      - name: Verify governance, authorization, and metadata policy
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/governance-smoke.php
 
       - name: Verify duplicate integrity, idempotency, and recovery
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/duplicate-smoke.php
@@ -159,60 +232,41 @@ jobs:
       - name: Verify mutation side effects remain idempotent
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/side-effects-smoke.php
 
+      - name: Verify compensating rollback and crash resume
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/compensation-smoke.php
+
+      - name: Verify retry idempotency at every persistence boundary
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/failure-matrix-smoke.php
+
+      - name: Verify real concurrent worker lease exclusion
+        if: matrix.storage == 'hpos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw="$(npx wp-env run cli wp eval '$o = wc_create_order(); $o->set_status("pending"); $o->save(); echo "WCOS_ORDER_ID=" . $o->get_id() . "\n";')"
+          order_id="$(printf '%s\n' "$raw" | sed -n 's/.*WCOS_ORDER_ID=\([0-9][0-9]*\).*/\1/p' | tail -n 1)"
+          test -n "$order_id"
+          worker='wp-content/plugins/wc-order-splitter/tests/integration/concurrency-lock-worker.php'
+
+          npx wp-env run cli wp eval-file "$worker" "$order_id" worker-a 4 > /tmp/wcos-worker-a.log 2>&1 &
+          worker_a_pid=$!
+          sleep 1
+          npx wp-env run cli wp eval-file "$worker" "$order_id" worker-b 0 > /tmp/wcos-worker-b.log 2>&1
+          wait "$worker_a_pid"
+
+          cat /tmp/wcos-worker-a.log
+          cat /tmp/wcos-worker-b.log
+          grep -Fq 'ACQUIRED worker-a' /tmp/wcos-worker-a.log
+          grep -Fq 'RELEASED worker-a' /tmp/wcos-worker-a.log
+          grep -Fq 'BLOCKED worker-b' /tmp/wcos-worker-b.log
+
+          npx wp-env run cli wp eval-file "$worker" "$order_id" worker-c 0 > /tmp/wcos-worker-c.log 2>&1
+          cat /tmp/wcos-worker-c.log
+          grep -Fq 'ACQUIRED worker-c' /tmp/wcos-worker-c.log
+          grep -Fq 'RELEASED worker-c' /tmp/wcos-worker-c.log
+
+          npx wp-env run cli wp eval '$o = wc_get_order('"$order_id"'); if ($o) { $o->delete(true); }'
+
       - name: Stop WordPress
         if: always()
         run: npx wp-env stop
-
-  release-contract:
-    name: Release safety contract
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Reject removed telemetry integration
-        shell: bash
-        run: |
-          set -euo pipefail
-          telemetry_host='yoexpress''.''top'
-          test ! -e inc/cores/api/push-subscription.php
-          source_files=(--include='*.php' --include='*.js' --include='*.txt')
-          if grep -R --line-number --fixed-strings "$telemetry_host" "${source_files[@]}" . --exclude-dir=.git; then
-            echo 'Removed telemetry endpoint must not be present in distributable source.' >&2
-            exit 1
-          fi
-          if grep -R --line-number --fixed-strings 'WC_Order_Splitter_Push_Subscription' --include='*.php' . --exclude-dir=.git; then
-            echo 'Removed telemetry class must not be referenced by PHP source.' >&2
-            exit 1
-          fi
-
-      - name: Verify 1.4.12 remains fail closed
-        shell: bash
-        run: |
-          set -euo pipefail
-          grep -Fq 'Stable tag: 1.4.12' readme.txt
-          grep -Fq 'Version: 1.4.12' wc-order-splitter.php
-          grep -Fq "'WC_ORDER_SPLITTER_MUTATIONS_ENABLED'," wc-order-splitter.php
-          grep -Fq "'WC_ORDER_SPLITTER_SPLIT_ENABLED'," wc-order-splitter.php
-          grep -Fq "'WC_ORDER_SPLITTER_DUPLICATE_ENABLED'," wc-order-splitter.php
-          grep -Fq "'WC_ORDER_SPLITTER_MERGE_ENABLED'," wc-order-splitter.php
-          grep -Fq "'WC_ORDER_SPLITTER_RETURN_ENABLED'," wc-order-splitter.php
-          grep -Fq "'WC_ORDER_SPLITTER_BULK_RETURN_ENABLED'," wc-order-splitter.php
-          grep -Fq 'define($gate, false);' wc-order-splitter.php
-          grep -Fq 'Legacy mutation handlers are deliberately never loaded here.' inc/cores/script.php
-
-      - name: Reject legacy mutation handler loading
-        shell: bash
-        run: |
-          set -euo pipefail
-          for legacy_handler in \
-            'orders-bulk-return.php' \
-            'order-split-button.php' \
-            'order-return-option.php' \
-            'order-duplicate-option.php' \
-            'order-merge-option.php'; do
-            if grep -F "$legacy_handler" inc/cores/script.php; then
-              echo "Legacy mutation handler must not be loaded: $legacy_handler" >&2
-              exit 1
-            fi
-          done
