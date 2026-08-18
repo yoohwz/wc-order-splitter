@@ -1,0 +1,10 @@
+{
+  "name": "wc-order-splitter",
+  "private": true,
+  "devDependencies": {
+    "@wordpress/env": "11.11.0"
+  },
+  "scripts": {
+    "wp-env": "wp-env"
+  }
+}
