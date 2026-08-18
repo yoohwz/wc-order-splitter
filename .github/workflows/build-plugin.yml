@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_sha || github.sha }}
+  group: release-package-main
   cancel-in-progress: true
 
 permissions:
@@ -20,7 +20,7 @@ permissions:
 jobs:
   build:
     name: Build reproducible ZIP
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
 
     steps:
@@ -114,7 +114,10 @@ jobs:
           unzip -t wc-order-splitter.zip
           unzip -l wc-order-splitter.zip
           unzip -p wc-order-splitter.zip wc-order-splitter/wc-order-splitter.php | grep -Fq 'Plugin Name: Order Splitter for WooCommerce'
-          unzip -p wc-order-splitter.zip wc-order-splitter/readme.txt | grep -Fq 'Stable tag: 1.4.12'
+          archive_version=$(unzip -p wc-order-splitter.zip wc-order-splitter/wc-order-splitter.php | sed -n 's/^ \* Version: //p' | head -n 1)
+          archive_stable_tag=$(unzip -p wc-order-splitter.zip wc-order-splitter/readme.txt | sed -n 's/^Stable tag: //p' | head -n 1)
+          test -n "$archive_version"
+          test "$archive_version" = "$archive_stable_tag"
           if unzip -Z1 wc-order-splitter.zip | grep -E '(^|/)(tests|docs|node_modules|inc/mutation-v2)(/|$)|(^|/)AGENTS\.md$'; then
             echo 'Development-only content entered the ZIP.' >&2
             exit 1

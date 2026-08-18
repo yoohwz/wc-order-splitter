@@ -70,8 +70,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -Fq 'Version: 1.4.12' wc-order-splitter.php
-          grep -Fq 'Stable tag: 1.4.12' readme.txt
+          plugin_version=$(sed -n 's/^ \* Version: //p' wc-order-splitter.php | head -n 1)
+          stable_tag=$(sed -n 's/^Stable tag: //p' readme.txt | head -n 1)
+          test -n "$plugin_version"
+          test -n "$stable_tag"
+          test "$plugin_version" = "$stable_tag"
           grep -Fq 'Requires at least: 6.5' wc-order-splitter.php
           grep -Fq 'Requires at least: 6.5' readme.txt
           grep -A2 -F 'public static function mutations_enabled()' inc/cores/safety.php | grep -Fq 'return false;'
@@ -204,7 +207,10 @@ jobs:
           set -euo pipefail
           unzip -t wc-order-splitter.zip
           unzip -p wc-order-splitter.zip wc-order-splitter/wc-order-splitter.php | grep -Fq 'Plugin Name: Order Splitter for WooCommerce'
-          unzip -p wc-order-splitter.zip wc-order-splitter/readme.txt | grep -Fq 'Stable tag: 1.4.12'
+          archive_version=$(unzip -p wc-order-splitter.zip wc-order-splitter/wc-order-splitter.php | sed -n 's/^ \* Version: //p' | head -n 1)
+          archive_stable_tag=$(unzip -p wc-order-splitter.zip wc-order-splitter/readme.txt | sed -n 's/^Stable tag: //p' | head -n 1)
+          test -n "$archive_version"
+          test "$archive_version" = "$archive_stable_tag"
           if unzip -Z1 wc-order-splitter.zip | grep -E '(^|/)(tests|docs|node_modules|inc/mutation-v2)(/|$)|(^|/)AGENTS\.md$'; then
             echo 'Development-only content entered the ZIP.' >&2
             exit 1
