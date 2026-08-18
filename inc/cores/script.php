@@ -9,7 +9,6 @@ class WC_Order_Splitter_Script {
 
 	public function __construct() {
 		$this->version = WC_ORDER_SPLITTER_VERSION;
-
 		$this->includes();
 		add_action('admin_enqueue_scripts', array($this, 'enqueue_scripts'));
 		add_action('admin_init', array($this, 'check_version'));
@@ -123,7 +122,6 @@ class WC_Order_Splitter_Script {
 		if (false === get_option('order_splitter_shipping_policy', false)) {
 			add_option('order_splitter_shipping_policy', WC_Order_Splitter_Order_Mutation_Engine::SHIPPING_KEEP_ON_ORIGINAL);
 		}
-
 		if (get_option('wc_order_splitter_version') !== $this->version) {
 			update_option('wc_order_splitter_version', $this->version);
 		}
@@ -135,6 +133,7 @@ class WC_Order_Splitter_Script {
 		include_once plugin_dir_path(__FILE__) . 'order-mutation/class-order-item-cloner.php';
 		include_once plugin_dir_path(__FILE__) . 'order-mutation/class-order-mutation-engine.php';
 		include_once plugin_dir_path(__FILE__) . '../backend/settings.php';
+		include_once plugin_dir_path(__FILE__) . 'order-mutation/class-mutation-settings.php';
 		include_once plugin_dir_path(__FILE__) . '../backend/actions/order-mutation-controller.php';
 		include_once plugin_dir_path(__FILE__) . '../backend/orders.php';
 		include_once plugin_dir_path(__FILE__) . '../backend/orders-bulk-return.php';
