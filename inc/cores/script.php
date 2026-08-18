@@ -39,6 +39,7 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-order-totals-rebuilder.php';
 		include_once $root . 'domain/class-wcos-tax-item-synchronizer.php';
 		include_once $root . 'domain/class-wcos-order-contract-snapshot.php';
+		include_once $root . 'domain/class-wcos-order-copy-context.php';
 		include_once $root . 'domain/class-wcos-order-relation-repository.php';
 		WCOS_Order_Relation_Repository::bootstrap();
 		include_once $root . 'domain/class-wcos-duplicate-order-service.php';
