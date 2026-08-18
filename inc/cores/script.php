@@ -22,17 +22,26 @@ class WC_Order_Splitter_Script {
 	}
 
 	public function includes() {
-		include_once plugin_dir_path(__FILE__) . '../backend/settings.php';
-		include_once plugin_dir_path(__FILE__) . '../backend/orders.php';
-		include_once plugin_dir_path(__FILE__) . '../backend/yoohw-woo-settings-tabs-reorder.php';
+		$root = plugin_dir_path(__FILE__) . '../';
+
+		include_once $root . 'domain/class-wcos-amount-allocator.php';
+		include_once $root . 'domain/class-wcos-line-identity.php';
+		include_once $root . 'domain/class-wcos-mutation-contract.php';
+		include_once $root . 'domain/class-wcos-operation-lock.php';
+		include_once $root . 'domain/class-wcos-operation-journal.php';
+		include_once $root . 'domain/class-wcos-order-item-cloner.php';
+
+		include_once $root . 'backend/settings.php';
+		include_once $root . 'backend/orders.php';
+		include_once $root . 'backend/yoohw-woo-settings-tabs-reorder.php';
 		include_once plugin_dir_path(__FILE__) . 'safety.php';
 
 		if (defined('WC_ORDER_SPLITTER_MUTATIONS_ENABLED') && true === WC_ORDER_SPLITTER_MUTATIONS_ENABLED) {
-			include_once plugin_dir_path(__FILE__) . '../backend/orders-bulk-return.php';
-			include_once plugin_dir_path(__FILE__) . '../backend/order-split-button.php';
-			include_once plugin_dir_path(__FILE__) . '../backend/order-return-option.php';
-			include_once plugin_dir_path(__FILE__) . '../backend/order-duplicate-option.php';
-			include_once plugin_dir_path(__FILE__) . '../backend/order-merge-option.php';
+			include_once $root . 'backend/orders-bulk-return.php';
+			include_once $root . 'backend/order-split-button.php';
+			include_once $root . 'backend/order-return-option.php';
+			include_once $root . 'backend/order-duplicate-option.php';
+			include_once $root . 'backend/order-merge-option.php';
 		}
 	}
 }
