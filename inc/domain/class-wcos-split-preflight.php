@@ -26,7 +26,7 @@ final class WCOS_Split_Preflight_Exception extends RuntimeException {
  * Reports intentionally contain no customer/address/payment plaintext.
  */
 final class WCOS_Split_Preflight {
-    const POLICY_VERSION = 5;
+    const POLICY_VERSION = 6;
 
     public static function policy() {
         return array(
@@ -45,7 +45,16 @@ final class WCOS_Split_Preflight {
             'manual_reconciliation' => 'reject',
             'unknown_private_line_meta' => 'reject',
             'context_inconsistent_private_meta' => 'reject',
+            'fractional_quantity' => self::fractional_quantities_supported() ? 'supported_by_integration' : 'integer_only',
         );
+    }
+
+    public static function fractional_quantities_supported() {
+        try {
+            return 1500000 === WCOS_Decimal::to_units(apply_filters('woocommerce_stock_amount', '1.500000'), 6);
+        } catch (Throwable $throwable) {
+            return false;
+        }
     }
 
     public static function assert_supported(WC_Order $source, $precision = null) {
@@ -64,6 +73,7 @@ final class WCOS_Split_Preflight {
         $precision = null === $precision
             ? WCOS_Price_Precision_Scope::store_precision()
             : WCOS_Price_Precision_Scope::validate($precision);
+        $fractional_supported = self::fractional_quantities_supported();
         $report = array(
             'supported' => false,
             'reason' => '',
@@ -74,6 +84,7 @@ final class WCOS_Split_Preflight {
             'currency' => (string) $source->get_currency(),
             'prices_include_tax' => (bool) $source->get_prices_include_tax(),
             'price_precision' => $precision,
+            'fractional_quantity_supported' => $fractional_supported,
             'is_paid' => (bool) $source->is_paid(),
             'line_count' => count($source->get_items('line_item')),
             'shipping_count' => count($source->get_items('shipping')),
@@ -154,6 +165,9 @@ final class WCOS_Split_Preflight {
             }
             if (0 !== ($quantity_units % 1000000)) {
                 $report['fractional_quantity_lines']++;
+                if (!$fractional_supported) {
+                    return self::reject($report, 'fractional_quantity_unsupported', __('This order contains fractional quantities but the current WooCommerce quantity integration only supports integers.', 'wc-order-splitter'));
+                }
             }
 
             $unknown_private_meta = array_merge(
