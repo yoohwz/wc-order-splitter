@@ -18,29 +18,42 @@ final class WCOS_Split_WooCommerce_Adapter {
             throw new InvalidArgumentException(__('A split operation ID is required.', 'wc-order-splitter'));
         }
 
-        WCOS_Split_Preflight::assert_supported($source);
-        $token = WCOS_Stock_Side_Effect_Guard::begin($operation_id);
+        $precision = WCOS_Price_Precision_Scope::for_operation($source, $operation_id);
+        $precision_token = WCOS_Price_Precision_Scope::begin($precision);
 
         try {
-            $children = (new WCOS_Split_Order_Service())->split($source, $plan, $operation_id);
-            WCOS_Stock_Side_Effect_Guard::assert_clean($token);
-            return $children;
-        } catch (Throwable $throwable) {
-            $events = WCOS_Stock_Side_Effect_Guard::events($token);
-            if (!empty($events) && WCOS_Stock_Side_Effect_Guard::events_require_manual_reconciliation($events)) {
-                $this->mark_manual_stock_reconciliation($source->get_id(), $operation_id, $events, $throwable);
+            WCOS_Split_Preflight::assert_supported($source, $precision);
+            $stock_token = WCOS_Stock_Side_Effect_Guard::begin($operation_id);
+
+            try {
+                $children = (new WCOS_Split_Order_Service())->split($source, $plan, $operation_id);
+                WCOS_Stock_Side_Effect_Guard::assert_clean($stock_token);
+                return $children;
+            } catch (Throwable $throwable) {
+                $events = WCOS_Stock_Side_Effect_Guard::events($stock_token);
+                if (!empty($events) && WCOS_Stock_Side_Effect_Guard::events_require_manual_reconciliation($events)) {
+                    $this->mark_manual_stock_reconciliation($source->get_id(), $operation_id, $events, $throwable);
+                }
+                if (!empty($events) && !$throwable instanceof WCOS_Unexpected_Stock_Mutation_Exception) {
+                    throw new WCOS_Unexpected_Stock_Mutation_Exception($events, $throwable);
+                }
+                throw $throwable;
+            } finally {
+                WCOS_Stock_Side_Effect_Guard::end($stock_token);
             }
-            if (!empty($events) && !$throwable instanceof WCOS_Unexpected_Stock_Mutation_Exception) {
-                throw new WCOS_Unexpected_Stock_Mutation_Exception($events, $throwable);
-            }
-            throw $throwable;
         } finally {
-            WCOS_Stock_Side_Effect_Guard::end($token);
+            WCOS_Price_Precision_Scope::end($precision_token);
         }
     }
 
-    public function preflight(WC_Order $source) {
-        return WCOS_Split_Preflight::report($source);
+    public function preflight(WC_Order $source, $operation_id = '') {
+        $precision = WCOS_Price_Precision_Scope::for_operation($source, $operation_id);
+        $precision_token = WCOS_Price_Precision_Scope::begin($precision);
+        try {
+            return WCOS_Split_Preflight::report($source, $precision);
+        } finally {
+            WCOS_Price_Precision_Scope::end($precision_token);
+        }
     }
 
     private function mark_manual_stock_reconciliation($source_id, $operation_id, array $events, Throwable $throwable) {
