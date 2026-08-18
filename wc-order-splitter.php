@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Order Splitter for WooCommerce
  * Plugin URI: https://github.com/yoohwz/wc-order-splitter
- * Description: WooCommerce order-management tooling in a safety-first maintenance release while order mutations are being hardened.
+ * Description: WooCommerce order-management tooling with existing split-order labels and settings preserved during safety hardening.
  * Version: 1.4.12
  * Author: YoOhw.com
  * Author URI: https://yoohw.com
@@ -34,28 +34,9 @@ class WooCommerce_Order_Splitter {
 			define('WC_ORDER_SPLITTER_VERSION', $wcos_plugin_version);
 		}
 
-		$this->define_fail_closed_feature_gates();
-
 		add_filter('plugin_action_links_' . plugin_basename(__FILE__), array($this, 'add_action_links'));
 
 		$this->includes();
-	}
-
-	private function define_fail_closed_feature_gates() {
-		$gates = array(
-			'WC_ORDER_SPLITTER_MUTATIONS_ENABLED',
-			'WC_ORDER_SPLITTER_SPLIT_ENABLED',
-			'WC_ORDER_SPLITTER_DUPLICATE_ENABLED',
-			'WC_ORDER_SPLITTER_MERGE_ENABLED',
-			'WC_ORDER_SPLITTER_RETURN_ENABLED',
-			'WC_ORDER_SPLITTER_BULK_RETURN_ENABLED',
-		);
-
-		foreach ($gates as $gate) {
-			if (!defined($gate)) {
-				define($gate, false);
-			}
-		}
 	}
 
 	public function includes() {
