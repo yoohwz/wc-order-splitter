@@ -24,11 +24,16 @@ class WC_Order_Splitter_Script {
 	public function includes() {
 		$root = plugin_dir_path(__FILE__) . '../';
 
+		include_once $root . 'domain/class-wcos-decimal.php';
 		include_once $root . 'domain/class-wcos-amount-allocator.php';
 		include_once $root . 'domain/class-wcos-line-identity.php';
+		include_once $root . 'domain/class-wcos-mutation-fingerprint.php';
 		include_once $root . 'domain/class-wcos-mutation-contract.php';
 		include_once $root . 'domain/class-wcos-operation-lock.php';
 		include_once $root . 'domain/class-wcos-operation-journal.php';
+		include_once $root . 'domain/class-wcos-feature-gates.php';
+		include_once $root . 'domain/class-wcos-order-mutation-authorizer.php';
+		include_once $root . 'domain/class-wcos-order-item-meta-policy.php';
 		include_once $root . 'domain/class-wcos-order-item-cloner.php';
 		include_once $root . 'domain/class-wcos-duplicate-order-service.php';
 		include_once $root . 'domain/class-wcos-split-order-service.php';
@@ -38,13 +43,11 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'backend/yoohw-woo-settings-tabs-reorder.php';
 		include_once plugin_dir_path(__FILE__) . 'safety.php';
 
-		if (defined('WC_ORDER_SPLITTER_MUTATIONS_ENABLED') && true === WC_ORDER_SPLITTER_MUTATIONS_ENABLED) {
-			include_once $root . 'backend/orders-bulk-return.php';
-			include_once $root . 'backend/order-split-button.php';
-			include_once $root . 'backend/order-return-option.php';
-			include_once $root . 'backend/order-duplicate-option.php';
-			include_once $root . 'backend/order-merge-option.php';
-		}
+		/*
+		 * Legacy mutation handlers are deliberately never loaded here. New
+		 * controllers may only be registered behind their workflow-specific
+		 * WCOS_Feature_Gates gate after the corresponding acceptance matrix passes.
+		 */
 	}
 }
 
