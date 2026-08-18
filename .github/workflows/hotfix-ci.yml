@@ -1,0 +1,100 @@
+name: Hotfix CI
+
+on:
+  push:
+    branches:
+      - hotfix/order-splitter-1.4.12-safety
+  pull_request:
+    paths:
+      - '**.php'
+      - 'readme.txt'
+      - 'changelog.txt'
+      - 'css/**'
+      - 'bin/build-hotfix.sh'
+      - '.github/workflows/hotfix-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hotfix-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  php-contracts:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.1', '8.3']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Lint PHP source
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            php -l "$file"
+          done < <(find . -type f -name '*.php' -not -path './build/*' -print0)
+
+      - name: Run release contract
+        run: php tests/release-contract.php
+
+  package:
+    name: Reproducible release package
+    runs-on: ubuntu-latest
+    needs: php-contracts
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          coverage: none
+
+      - name: Install ZIP utility
+        run: sudo apt-get update && sudo apt-get install --yes zip unzip
+
+      - name: Build release twice and compare bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+
+          bash bin/build-hotfix.sh
+          cp build/wc-order-splitter-1.4.12.zip /tmp/wc-order-splitter-first.zip
+          cp build/wc-order-splitter-1.4.12.zip.sha256 /tmp/wc-order-splitter-first.zip.sha256
+
+          bash bin/build-hotfix.sh
+          cmp /tmp/wc-order-splitter-first.zip build/wc-order-splitter-1.4.12.zip
+          cmp /tmp/wc-order-splitter-first.zip.sha256 build/wc-order-splitter-1.4.12.zip.sha256
+
+      - name: Display release contents and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -Z1 build/wc-order-splitter-1.4.12.zip
+          cat build/wc-order-splitter-1.4.12.zip.sha256
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wc-order-splitter-1.4.12
+          path: |
+            build/wc-order-splitter-1.4.12.zip
+            build/wc-order-splitter-1.4.12.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
