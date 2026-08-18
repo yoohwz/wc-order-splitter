@@ -16,7 +16,7 @@ function wcos_test_money($value) {
 
 wp_set_current_user(1);
 update_option('order_splitter_status_allowed', array('wc-pending'));
-update_option('order_splitter_shipping_policy', WC_Order_Splitter_Order_Mutation_Engine::SHIPPING_KEEP_ON_ORIGINAL);
+update_option('order_splitter_shipping_policy', WC_Order_Splitter_Order_Mutation_Engine::SHIPPING_PROPORTIONAL);
 
 $product = new WC_Product_Simple();
 $product->set_name('Order Splitter CI Product');
@@ -34,7 +34,13 @@ try {
 	wcos_test_assert($source instanceof WC_Order, 'Could not create source order.');
 	$order_ids[] = $source->get_id();
 	$source->set_currency('USD');
-	$source_item_id = $source->add_product($product, 4, array('subtotal' => 40, 'total' => 40));
+	$source_item_id = $source->add_product($product, 4, array('subtotal' => 40, 'total' => 36));
+
+	$coupon = new WC_Order_Item_Coupon();
+	$coupon->set_code('ci-coupon');
+	$coupon->set_discount(4);
+	$coupon->set_discount_tax(0);
+	$source->add_item($coupon);
 
 	$shipping = new WC_Order_Item_Shipping();
 	$shipping->set_method_title('CI Flat Rate');
@@ -51,6 +57,7 @@ try {
 	WC_Order_Splitter_Mutation_Support::set_stock_reduced($source, true);
 
 	$before_total = wcos_test_money($source->get_total());
+	$before_discount = wcos_test_money($source->get_discount_total());
 	$before_stock = wc_get_product($product->get_id())->get_stock_quantity();
 	$engine = new WC_Order_Splitter_Order_Mutation_Engine();
 
@@ -58,13 +65,14 @@ try {
 		$source,
 		array('child-1' => array($source_item_id => 2)),
 		array(
-			'shipping_policy' => WC_Order_Splitter_Order_Mutation_Engine::SHIPPING_KEEP_ON_ORIGINAL,
+			'shipping_policy' => WC_Order_Splitter_Order_Mutation_Engine::SHIPPING_PROPORTIONAL,
 			'tax_policy' => WC_Order_Splitter_Order_Mutation_Engine::TAX_PRESERVE_HISTORICAL,
 			'email_policy' => WC_Order_Splitter_Order_Mutation_Engine::EMAIL_SUPPRESS_ALL_CHILDREN,
 			'status_policy' => WC_Order_Splitter_Order_Mutation_Engine::STATUS_PRESERVE,
 		),
 		'ci-' . wp_generate_uuid4()
 	);
+	WC_Order_Splitter_Charge_Integrity::normalize_after_split($source, $result['new_order_ids']);
 
 	wcos_test_assert(1 === count($result['new_order_ids']), 'Split did not create exactly one child.');
 	$child = wc_get_order($result['new_order_ids'][0]);
@@ -76,8 +84,11 @@ try {
 	$child_qty = array_sum(array_map(function($item) { return (float) $item->get_quantity(); }, $child->get_items('line_item')));
 	wcos_test_assert(4.0 === $source_qty + $child_qty, 'Split did not conserve product quantity.');
 	wcos_test_assert($before_total === wcos_test_money((float) $source->get_total() + (float) $child->get_total()), 'Split did not conserve aggregate total.');
-	wcos_test_assert(5.0 === (float) $source->get_shipping_total(), 'Shipping was not kept on the original order.');
-	wcos_test_assert(0.0 === (float) $child->get_shipping_total(), 'Child unexpectedly received shipping revenue.');
+	wcos_test_assert(5.0 === wcos_test_money((float) $source->get_shipping_total() + (float) $child->get_shipping_total()), 'Split did not conserve shipping total.');
+	wcos_test_assert(2.5 === wcos_test_money($source->get_shipping_total()), 'Proportional shipping was not allocated to the original order.');
+	wcos_test_assert(2.5 === wcos_test_money($child->get_shipping_total()), 'Proportional shipping was not allocated to the child order.');
+	wcos_test_assert($before_discount === wcos_test_money((float) $source->get_discount_total() + (float) $child->get_discount_total()), 'Split did not conserve discount total.');
+	wcos_test_assert(1 === count($source->get_items('coupon')) && 1 === count($child->get_items('coupon')), 'Split coupon structure is not normalized.');
 
 	$reduced = WC_Order_Splitter_Mutation_Support::sum_reduced_stock_by_identity(array($source, $child));
 	wcos_test_assert(4.0 === array_sum($reduced), 'Split did not conserve _reduced_stock.');
@@ -85,10 +96,15 @@ try {
 
 	$returned = $engine->return_split_order($child);
 	wcos_test_assert($returned instanceof WC_Order, 'Return did not resolve the original order.');
+	WC_Order_Splitter_Charge_Integrity::normalize_after_return($returned);
 	$returned = wc_get_order($returned->get_id());
 	$returned_qty = array_sum(array_map(function($item) { return (float) $item->get_quantity(); }, $returned->get_items('line_item')));
 	wcos_test_assert(4.0 === $returned_qty, 'Return did not restore source quantity.');
 	wcos_test_assert($before_total === wcos_test_money($returned->get_total()), 'Return did not restore original total.');
+	wcos_test_assert($before_discount === wcos_test_money($returned->get_discount_total()), 'Return did not restore original discount total.');
+	wcos_test_assert(5.0 === wcos_test_money($returned->get_shipping_total()), 'Return did not restore the shipping total.');
+	wcos_test_assert(1 === count($returned->get_items('shipping')), 'Return left duplicate shipping rows on the original order.');
+	wcos_test_assert(1 === count($returned->get_items('coupon')), 'Return left duplicate coupon rows on the original order.');
 	wcos_test_assert(4.0 === array_sum(WC_Order_Splitter_Mutation_Support::sum_reduced_stock_by_identity(array($returned))), 'Return did not restore _reduced_stock.');
 	wcos_test_assert($before_stock === wc_get_product($product->get_id())->get_stock_quantity(), 'Return changed physical stock.');
 
