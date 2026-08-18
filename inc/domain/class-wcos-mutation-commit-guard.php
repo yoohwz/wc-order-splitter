@@ -18,12 +18,12 @@ final class WCOS_Mutation_Commit_Guard {
 		}
 
 		$source_id = $source->get_id();
-		if (!WCOS_Operation_Lock::refresh_current($source_id)) {
+		$operation_id = sanitize_key($operation_id);
+		if (!WCOS_Operation_Lock::refresh_current_for($source_id, $operation_id)) {
 			throw new RuntimeException(__('The split operation lease was lost before a persistence boundary.', 'wc-order-splitter'));
 		}
-		WCOS_Operation_Lock::assert_current_owned($source_id);
+		WCOS_Operation_Lock::assert_current_owned_for($source_id, $operation_id);
 
-		$operation_id = sanitize_key($operation_id);
 		$fresh_source = wc_get_order($source_id);
 		if (!$fresh_source || 'shop_order' !== $fresh_source->get_type()) {
 			throw new RuntimeException(__('The split source order is no longer available at the commit boundary.', 'wc-order-splitter'));
