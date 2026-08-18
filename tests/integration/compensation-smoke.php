@@ -50,7 +50,8 @@ function wcos_compensation_stage_split(WC_Order $source, $operation_id) {
 		'Unable to start compensation journal.'
 	);
 
-	$source_item = reset($source->get_items('line_item'));
+	$source_items = $source->get_items('line_item');
+	$source_item = reset($source_items);
 	$child = wc_create_order();
 	$child->set_status('pending');
 	$child->set_currency($source->get_currency());
@@ -81,7 +82,8 @@ function wcos_compensation_stage_split(WC_Order $source, $operation_id) {
 	$child = wc_get_order($child->get_id());
 
 	$source = wc_get_order($source->get_id());
-	$source_item = reset($source->get_items('line_item'));
+	$source_items = $source->get_items('line_item');
+	$source_item = reset($source_items);
 	$result = $source_item->set_props(array(
 		'quantity' => '1.000000',
 		'subtotal' => '10.00',
@@ -116,7 +118,8 @@ function wcos_compensation_stage_split(WC_Order $source, $operation_id) {
 
 function wcos_compensation_assert_restored(WC_Order $source, $child_id, array $record) {
 	$source = wc_get_order($source->get_id());
-	$line = reset($source->get_items('line_item'));
+	$lines = $source->get_items('line_item');
+	$line = reset($lines);
 	wcos_compensation_assert('2' === (string) $line->get_quantity() || '2.000000' === (string) $line->get_quantity(), 'Compensation did not restore source quantity.');
 	wcos_compensation_assert(2000 === WCOS_Decimal::to_units($source->get_total(), 2), 'Compensation did not restore source total.');
 	wcos_compensation_assert(!wc_get_order($child_id), 'Compensation did not remove the operation-owned child.');
@@ -135,14 +138,28 @@ $product->set_regular_price('10.00');
 $product->set_manage_stock(false);
 $product_id = $product->save();
 
+$compensation_error = '';
+$error_listener = static function($throwable) use (&$compensation_error) {
+	if ($throwable instanceof Throwable) {
+		$compensation_error = $throwable->getMessage();
+	}
+};
+add_action('wcos_mutation_compensation_error', $error_listener, 10, 1);
+
 /* Normal automatic compensation. */
 $source = wcos_compensation_build_source($product_id);
 $operation_id = 'compensate-' . wp_generate_uuid4();
 list($source, $child, $record) = wcos_compensation_stage_split($source, $operation_id);
 $child_id = $child->get_id();
+$compensation_error = '';
 WCOS_Operation_Journal::require_recovery($source, $operation_id, array('reason' => 'integration_compensation'));
 $final_record = WCOS_Operation_Journal::get(wc_get_order($source->get_id()), $operation_id);
-wcos_compensation_assert('compensated' === $final_record['status'], 'Automatic compensation did not reach its terminal state.');
+if ('compensated' !== $final_record['status']) {
+	throw new RuntimeException(
+		'Automatic compensation did not reach its terminal state. Recovery error: '
+		. ('' !== $compensation_error ? $compensation_error : 'none')
+	);
+}
 wcos_compensation_assert_restored($source, $child_id, $record);
 WCOS_Operation_Journal::delete(wc_get_order($source->get_id()), $operation_id);
 wc_get_order($source->get_id())->delete(true);
@@ -160,12 +177,13 @@ $injector = static function($stage) use (&$thrown_once) {
 	}
 };
 add_action('wcos_split_compensation_checkpoint', $injector, 10, 1);
+$compensation_error = '';
 WCOS_Operation_Journal::require_recovery($source, $operation_id, array('reason' => 'integration_compensation_resume'));
 remove_action('wcos_split_compensation_checkpoint', $injector, 10);
 
 $intermediate_source = wc_get_order($source->get_id());
 $intermediate_record = WCOS_Operation_Journal::get($intermediate_source, $operation_id);
-wcos_compensation_assert('compensating' === $intermediate_record['status'], 'Injected compensation crash did not preserve resumable state.');
+wcos_compensation_assert('compensating' === $intermediate_record['status'], 'Injected compensation crash did not preserve resumable state. Recovery error: ' . ('' !== $compensation_error ? $compensation_error : 'none'));
 wcos_compensation_assert(wc_get_order($child_id) instanceof WC_Order, 'Child was deleted before source restore was durably checkpointed.');
 wcos_compensation_assert(
 	hash_equals((string) $record['context']['source_snapshot']['source_recovery_signature'], WCOS_Order_Mutation_Snapshot::split_owned_signature($intermediate_source)),
@@ -173,14 +191,21 @@ wcos_compensation_assert(
 );
 
 /* A later service error/retry re-dispatches recovery for compensating state. */
+$compensation_error = '';
 WCOS_Operation_Journal::fail($intermediate_source, $operation_id, array('reason' => 'resume_compensation'));
 $final_source = wc_get_order($source->get_id());
 $final_record = WCOS_Operation_Journal::get($final_source, $operation_id);
-wcos_compensation_assert('compensated' === $final_record['status'], 'Compensation did not resume to completion.');
+if ('compensated' !== $final_record['status']) {
+	throw new RuntimeException(
+		'Compensation did not resume to completion. Recovery error: '
+		. ('' !== $compensation_error ? $compensation_error : 'none')
+	);
+}
 wcos_compensation_assert_restored($final_source, $child_id, $record);
 WCOS_Operation_Journal::delete($final_source, $operation_id);
 $final_source->delete(true);
 
+remove_action('wcos_mutation_compensation_error', $error_listener, 10);
 wp_delete_post($product_id, true);
 
 echo "split-compensation-and-resume-ok\n";
