@@ -108,32 +108,44 @@
         Array.prototype.forEach.call(dialog.querySelectorAll('tbody tr[data-item-id]'), function (row) {
             var itemId = row.getAttribute('data-item-id');
             var sourceQuantity = row.getAttribute('data-source-quantity') || '0';
-            var quantityInput = row.querySelector('.wcos-split-quantity');
-            var targetSelect = row.querySelector('.wcos-split-target');
-            var quantity = quantityInput ? quantityInput.value.trim() : '';
+            var movedForLine = 0;
 
-            if (quantity === '' || Number(quantity) === 0) {
-                return;
-            }
-            if (!decimalIsPositiveAndLessThan(quantity, sourceQuantity)) {
-                invalid = true;
-                return;
-            }
+            Array.prototype.forEach.call(row.querySelectorAll('.wcos-split-quantity[data-child-key]'), function (quantityInput) {
+                var quantity = quantityInput.value.trim();
+                if (quantity === '' || Number(quantity) === 0) {
+                    return;
+                }
+                if (!decimalIsPositiveAndLessThan(quantity, sourceQuantity)) {
+                    invalid = true;
+                    return;
+                }
 
-            var childKey = targetSelect ? targetSelect.value : '';
-            if (!/^child-(?:[1-9]|10)$/.test(childKey)) {
+                var childKey = quantityInput.getAttribute('data-child-key') || '';
+                if (!/^child-(?:[1-9]|10)$/.test(childKey)) {
+                    invalid = true;
+                    return;
+                }
+                if (!plan[childKey]) {
+                    plan[childKey] = {};
+                }
+                plan[childKey][itemId] = quantity;
+                movedForLine += Number(quantity);
+                hasQuantity = true;
+            });
+
+            if (movedForLine >= Number(sourceQuantity)) {
                 invalid = true;
-                return;
             }
-            if (!plan[childKey]) {
-                plan[childKey] = {};
+        });
+
+        Object.keys(plan).forEach(function (childKey) {
+            if (!Object.keys(plan[childKey]).length) {
+                delete plan[childKey];
             }
-            plan[childKey][itemId] = quantity;
-            hasQuantity = true;
         });
 
         if (invalid || !hasQuantity) {
-            throw new Error(text('invalidPlan', 'Enter at least one quantity smaller than its source line quantity.'));
+            throw new Error(text('invalidPlan', 'Enter at least one quantity and keep a positive residual quantity on every affected source line.'));
         }
         return plan;
     }
@@ -258,7 +270,6 @@
         if (!state || !confirmCheckbox.checked) {
             return;
         }
-
         clearError();
         clearResult();
         setBusy(true);
@@ -303,14 +314,6 @@
             setStatus('');
         }
     });
-    form.addEventListener('change', function (event) {
-        if (event.target.classList.contains('wcos-split-target')) {
-            invalidateReview();
-            clearError();
-            setStatus('');
-        }
-    });
-
     dialog.addEventListener('keydown', function (event) {
         if (event.key === 'Escape') {
             event.preventDefault();
