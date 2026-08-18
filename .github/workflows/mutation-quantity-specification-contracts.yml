@@ -1,0 +1,40 @@
+name: Quantity split specification contracts
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quantity-specification-contracts:
+    name: Quantity specification (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.1', '8.3']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Lint quantity specification files
+        shell: bash
+        run: |
+          set -euo pipefail
+          php -l inc/mutation-v2/class-wcos-v2-quantity-split-specification.php
+          php -l tests/v2/quantity-split-specification-contract-test.php
+
+      - name: Run quantity specification contracts
+        run: php tests/v2/quantity-split-specification-contract-test.php
