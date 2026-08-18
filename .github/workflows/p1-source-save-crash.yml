@@ -1,4 +1,4 @@
-name: P1 source-save crash recovery
+name: P1 recovery durability
 
 on:
   push:
@@ -11,10 +11,10 @@ permissions:
   contents: read
 
 jobs:
-  source-save-crash:
-    name: Source-save crash / ${{ matrix.storage }}
+  recovery-durability:
+    name: Recovery durability / ${{ matrix.storage }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -62,6 +62,9 @@ jobs:
 
       - name: Run source-save crash recovery contract
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/source-save-crash-smoke.php
+
+      - name: Prove authoritative journal survives bounded display history
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/journal-durability-smoke.php
 
       - name: Stop WordPress
         if: always()
