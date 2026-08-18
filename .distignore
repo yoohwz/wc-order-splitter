@@ -3,6 +3,7 @@
 /.gitignore
 /.distignore
 /.wp-env.json
+/AGENTS.md
 /docs
 /tests
 /node_modules
@@ -16,6 +17,7 @@
 /inc/backend/order-return-option.php
 /inc/backend/order-duplicate-option.php
 /inc/backend/order-merge-option.php
+/inc/mutation-v2
 /js/bulk-return-action.js
 /js/merge-action.js
 /js/post-action-tip.js
