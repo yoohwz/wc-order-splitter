@@ -11,11 +11,38 @@ defined('ABSPATH') || exit;
 class WC_Order_Splitter_Safety_Guard {
 
 	public function __construct() {
+		add_action('admin_init', array($this, 'guard_unavailable_settings_sections'), 1);
 		add_action('admin_notices', array($this, 'render_admin_notice'));
 	}
 
 	public static function mutations_enabled() {
 		return defined('WC_ORDER_SPLITTER_MUTATIONS_ENABLED') && true === WC_ORDER_SPLITTER_MUTATIONS_ENABLED;
+	}
+
+	public function guard_unavailable_settings_sections() {
+		if (!is_admin() || !isset($_GET['page'], $_GET['tab'], $_GET['section'])) {
+			return;
+		}
+
+		$page = sanitize_key(wp_unslash($_GET['page']));
+		$tab = sanitize_key(wp_unslash($_GET['tab']));
+		$section = sanitize_key(wp_unslash($_GET['section']));
+		if ('wc-settings' !== $page || 'orders' !== $tab) {
+			return;
+		}
+
+		$premium_sections = array('cancellation', 'returns', 'reorder', 'appearance');
+		if (!in_array($section, $premium_sections, true)) {
+			return;
+		}
+
+		$premium_settings_available = class_exists('WC_Order_Cancellation_Return_Premium_Settings');
+		$appearance_available = class_exists('WC_Order_Cancellation_Return_Premium_Settings_Appearance');
+		if ($premium_settings_available && ('appearance' !== $section || $appearance_available)) {
+			return;
+		}
+
+		$_GET['section'] = 'order_splitter';
 	}
 
 	public function render_admin_notice() {
