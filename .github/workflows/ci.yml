@@ -58,7 +58,7 @@ jobs:
           package-manager-cache: false
 
       - name: Install wp-env
-        run: npm ci --no-audit --no-fund
+        run: npm install --no-audit --no-fund
 
       - name: Start WordPress
         run: npx wp-env start
