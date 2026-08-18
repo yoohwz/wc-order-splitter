@@ -3,7 +3,8 @@
 defined('ABSPATH') || exit;
 
 /**
- * Raised when the current order-only mutation request writes physical product stock.
+ * Raised when the current order-only mutation request attempts or performs a
+ * physical product-stock write.
  */
 final class WCOS_Unexpected_Stock_Mutation_Exception extends RuntimeException {
 	private $events;
@@ -11,7 +12,7 @@ final class WCOS_Unexpected_Stock_Mutation_Exception extends RuntimeException {
 	public function __construct(array $events, Throwable $previous = null) {
 		$this->events = array_values($events);
 		parent::__construct(
-			__('Physical product stock was changed by the current order-mutation request.', 'wc-order-splitter'),
+			__('A physical product-stock write was attempted during the current order-mutation request.', 'wc-order-splitter'),
 			0,
 			$previous
 		);
@@ -23,14 +24,18 @@ final class WCOS_Unexpected_Stock_Mutation_Exception extends RuntimeException {
 }
 
 /**
- * Request-local observer for WooCommerce stock writes.
+ * Request-local guard for WooCommerce stock writes.
  *
- * A concurrent checkout runs in another request/process and therefore does not
- * dirty this guard. Stock writes caused by hooks executing inside the mutation
- * request do dirty it, including parent-managed variation stock writes because
- * WooCommerce emits the set-stock hook for the actual stock-owning product.
+ * Core WooCommerce stock writes are blocked at the before-set-stock hook, before
+ * the data store is changed. The corresponding after-set-stock hooks remain
+ * observed as a fallback for integrations that somehow enter the active request
+ * after a physical stock write. Concurrent checkouts are different requests and
+ * therefore cannot dirty this scope.
  */
 final class WCOS_Stock_Side_Effect_Guard {
+	const PHASE_BLOCKED_BEFORE_WRITE = 'blocked_before_write';
+	const PHASE_OBSERVED_AFTER_WRITE = 'observed_after_write';
+
 	private static $bootstrapped = false;
 	private static $scopes = array();
 	private static $stack = array();
@@ -40,6 +45,8 @@ final class WCOS_Stock_Side_Effect_Guard {
 			return;
 		}
 		self::$bootstrapped = true;
+		add_action('woocommerce_product_before_set_stock', array(__CLASS__, 'block_product_stock_write'), PHP_INT_MIN, 1);
+		add_action('woocommerce_variation_before_set_stock', array(__CLASS__, 'block_product_stock_write'), PHP_INT_MIN, 1);
 		add_action('woocommerce_product_set_stock', array(__CLASS__, 'record_product_stock_write'), PHP_INT_MAX, 1);
 		add_action('woocommerce_variation_set_stock', array(__CLASS__, 'record_product_stock_write'), PHP_INT_MAX, 1);
 	}
@@ -47,7 +54,7 @@ final class WCOS_Stock_Side_Effect_Guard {
 	public static function begin($operation_id) {
 		$operation_id = sanitize_key((string) $operation_id);
 		if ('' === $operation_id) {
-			throw new InvalidArgumentException(__('A stock-observer operation ID is required.', 'wc-order-splitter'));
+			throw new InvalidArgumentException(__('A stock-guard operation ID is required.', 'wc-order-splitter'));
 		}
 		self::bootstrap();
 		$token = hash('sha256', $operation_id . '|' . wp_generate_uuid4() . '|' . microtime(true));
@@ -81,8 +88,11 @@ final class WCOS_Stock_Side_Effect_Guard {
 	}
 
 	public static function has_dirty_active_scope() {
-		$token = self::current_token();
-		return null !== $token && !empty(self::$scopes[$token]['events']);
+		return !empty(self::current_events());
+	}
+
+	public static function has_physical_write_active_scope() {
+		return self::events_require_manual_reconciliation(self::current_events());
 	}
 
 	public static function current_events() {
@@ -93,6 +103,15 @@ final class WCOS_Stock_Side_Effect_Guard {
 	public static function events($token) {
 		$token = (string) $token;
 		return isset(self::$scopes[$token]['events']) ? array_values(self::$scopes[$token]['events']) : array();
+	}
+
+	public static function events_require_manual_reconciliation(array $events) {
+		foreach ($events as $event) {
+			if (isset($event['phase']) && self::PHASE_OBSERVED_AFTER_WRITE === $event['phase']) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public static function assert_current_clean() {
@@ -109,20 +128,36 @@ final class WCOS_Stock_Side_Effect_Guard {
 		}
 	}
 
+	public static function block_product_stock_write($product) {
+		if (empty(self::$scopes) || !$product instanceof WC_Product) {
+			return;
+		}
+		self::append_event(self::event($product, self::PHASE_BLOCKED_BEFORE_WRITE));
+		throw new WCOS_Unexpected_Stock_Mutation_Exception(self::current_events());
+	}
+
 	public static function record_product_stock_write($product) {
 		if (empty(self::$scopes) || !$product instanceof WC_Product) {
 			return;
 		}
+		self::append_event(self::event($product, self::PHASE_OBSERVED_AFTER_WRITE));
+	}
+
+	private static function event(WC_Product $product, $phase) {
 		$managed_id = method_exists($product, 'get_stock_managed_by_id')
 			? absint($product->get_stock_managed_by_id())
 			: absint($product->get_id());
 		$quantity = $product->get_stock_quantity();
-		$event = array(
+		return array(
+			'phase' => sanitize_key((string) $phase),
 			'product_id' => absint($product->get_id()),
 			'stock_owner_id' => $managed_id,
 			'product_type' => sanitize_key((string) $product->get_type()),
 			'stock_quantity' => null === $quantity ? null : WCOS_Decimal::normalize($quantity, 6),
 		);
+	}
+
+	private static function append_event(array $event) {
 		foreach (array_keys(self::$scopes) as $token) {
 			self::$scopes[$token]['events'][] = $event;
 		}
@@ -132,8 +167,8 @@ final class WCOS_Stock_Side_Effect_Guard {
 		if (empty(self::$stack)) {
 			return null;
 		}
-		$token = end(self::$stack);
-		reset(self::$stack);
+		$stack = self::$stack;
+		$token = end($stack);
 		return isset(self::$scopes[$token]) ? $token : null;
 	}
 }

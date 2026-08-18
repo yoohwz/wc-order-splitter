@@ -164,21 +164,25 @@ $deleted_children = $adapter->split(
 wcos_p2_adapter_assert(1 === count($deleted_children) && 1 === count($deleted_children[0]->get_items('line_item')), 'P2 adapter did not preserve a deleted-product order line.');
 wcos_p2_adapter_cleanup($deleted_source->get_id(), $deleted_operation);
 
-/* Request-local observer sees the exact WooCommerce stock-write path. */
-$guard_product = wcos_p2_adapter_product('WCOS P2 stock observer product', '5.00', 10);
+/* Core WooCommerce stock writes are blocked before the data store changes. */
+$guard_product = wcos_p2_adapter_product('WCOS P2 stock guard product', '5.00', 10);
 $guard_stock_before = wc_get_product($guard_product->get_id())->get_stock_quantity();
 $guard_token = WCOS_Stock_Side_Effect_Guard::begin('p2-stock-guard-' . wp_generate_uuid4());
-wc_update_product_stock($guard_product->get_id(), 1, 'decrease');
 $guard_detected = false;
 try {
-	WCOS_Stock_Side_Effect_Guard::assert_clean($guard_token);
+	wc_update_product_stock($guard_product->get_id(), 1, 'decrease');
 } catch (WCOS_Unexpected_Stock_Mutation_Exception $exception) {
 	$events = $exception->get_events();
-	$guard_detected = !empty($events) && absint($events[0]['stock_owner_id']) === $guard_product->get_id();
+	$guard_detected = !empty($events)
+		&& WCOS_Stock_Side_Effect_Guard::PHASE_BLOCKED_BEFORE_WRITE === $events[0]['phase']
+		&& absint($events[0]['stock_owner_id']) === $guard_product->get_id();
 }
 WCOS_Stock_Side_Effect_Guard::end($guard_token);
-wcos_p2_adapter_assert($guard_detected, 'P2 request-local guard missed a WooCommerce physical stock write.');
-wc_update_product_stock($guard_product->get_id(), $guard_stock_before, 'set');
+wcos_p2_adapter_assert($guard_detected, 'P2 request-local guard missed a WooCommerce stock-write attempt.');
+wcos_p2_adapter_assert(
+	WCOS_Decimal::to_units($guard_stock_before, 6) === WCOS_Decimal::to_units(wc_get_product($guard_product->get_id())->get_stock_quantity(), 6),
+	'P2 pre-write guard allowed physical stock to change.'
+);
 
 /* Ambient catalog differences are ignored only while a clean request-local proof is active. */
 $ambient_token = WCOS_Stock_Side_Effect_Guard::begin('p2-ambient-proof-' . wp_generate_uuid4());
@@ -192,9 +196,13 @@ try {
 }
 wcos_p2_adapter_assert($ambient_rejected_without_guard, 'P1 fallback stock comparison was unexpectedly disabled outside a P2 adapter scope.');
 
-/* A dirty request cannot pass the core conservation contract or auto-finalize. */
+/* A blocked stock-write attempt dirties the request and cannot pass conservation. */
 $contract_token = WCOS_Stock_Side_Effect_Guard::begin('p2-contract-proof-' . wp_generate_uuid4());
-wc_update_product_stock($guard_product->get_id(), 1, 'decrease');
+try {
+	wc_update_product_stock($guard_product->get_id(), 1, 'decrease');
+} catch (WCOS_Unexpected_Stock_Mutation_Exception $exception) {
+	/* Expected: the attempt is recorded and physical stock is unchanged. */
+}
 $contract_blocked = false;
 try {
 	WCOS_Mutation_Contract::assert_conserved(array(), array(), wc_get_price_decimals());
@@ -202,14 +210,17 @@ try {
 	$contract_blocked = true;
 }
 WCOS_Stock_Side_Effect_Guard::end($contract_token);
-wcos_p2_adapter_assert($contract_blocked, 'A request-local physical stock write passed the mutation conservation contract.');
-wc_update_product_stock($guard_product->get_id(), $guard_stock_before, 'set');
+wcos_p2_adapter_assert($contract_blocked, 'A request-local stock-write attempt passed the mutation conservation contract.');
+wcos_p2_adapter_assert(
+	WCOS_Decimal::to_units($guard_stock_before, 6) === WCOS_Decimal::to_units(wc_get_product($guard_product->get_id())->get_stock_quantity(), 6),
+	'Conservation stock-write proof changed physical stock.'
+);
 wp_delete_post($guard_product->get_id(), true);
 
-/* Actual adapter injection: own-request stock write blocks commit and auto compensation. */
-$dirty_product = wcos_p2_adapter_product('WCOS P2 dirty split product', '7.00', 20);
+/* Actual adapter injection: stock attempt is blocked, journal stays retriable, then retry completes at-most-once. */
+$dirty_product = wcos_p2_adapter_product('WCOS P2 blocked split product', '7.00', 20);
 list($dirty_source, $dirty_item_id) = wcos_p2_adapter_order($dirty_product, 4);
-$dirty_operation = 'p2-dirty-split-' . wp_generate_uuid4();
+$dirty_operation = 'p2-blocked-split-' . wp_generate_uuid4();
 $dirty_stock_before = wc_get_product($dirty_product->get_id())->get_stock_quantity();
 $dirty_injected = false;
 $dirty_callback = static function($stage) use (&$dirty_injected, $dirty_product) {
@@ -227,17 +238,37 @@ try {
 		$dirty_operation
 	);
 } catch (WCOS_Unexpected_Stock_Mutation_Exception $exception) {
-	$dirty_blocked = !empty($exception->get_events());
+	$events = $exception->get_events();
+	$dirty_blocked = !empty($events) && !WCOS_Stock_Side_Effect_Guard::events_require_manual_reconciliation($events);
 }
 remove_action('wcos_split_mutation_checkpoint', $dirty_callback, 10);
-wcos_p2_adapter_assert($dirty_injected && $dirty_blocked, 'P2 adapter accepted a split request that wrote physical stock.');
+wcos_p2_adapter_assert($dirty_injected && $dirty_blocked, 'P2 adapter did not block an in-request stock-write attempt.');
+wcos_p2_adapter_assert(
+	WCOS_Decimal::to_units($dirty_stock_before, 6) === WCOS_Decimal::to_units(wc_get_product($dirty_product->get_id())->get_stock_quantity(), 6),
+	'Injected Split stock attempt changed physical stock.'
+);
 $dirty_record = WCOS_Operation_Journal::get(wc_get_order($dirty_source->get_id()), $dirty_operation);
-wcos_p2_adapter_assert(is_array($dirty_record) && 'recovery_required' === $dirty_record['status'], 'Unexpected stock write did not leave a durable recovery-required journal.');
-wcos_p2_adapter_assert(isset($dirty_record['context']['automatic_compensation_allowed']) && false === $dirty_record['context']['automatic_compensation_allowed'], 'Unexpected stock write remained eligible for unsafe automatic compensation.');
-wcos_p2_adapter_assert('unexpected_physical_stock_write' === $dirty_record['context']['reason'], 'Unexpected stock write did not record its stable recovery reason.');
-wc_update_product_stock($dirty_product->get_id(), $dirty_stock_before, 'set');
+wcos_p2_adapter_assert(is_array($dirty_record) && 'failed' === $dirty_record['status'], 'Blocked stock attempt did not leave the Split operation in a retriable failed state.');
+$existing_children = wcos_p2_adapter_children($dirty_source->get_id(), $dirty_operation);
+wcos_p2_adapter_assert(1 === count($existing_children), 'Interrupted Split did not preserve exactly one reusable child.');
+$dirty_retry = $adapter->split(
+	wc_get_order($dirty_source->get_id()),
+	array('child-one' => array($dirty_item_id => '1.000000')),
+	$dirty_operation
+);
+wcos_p2_adapter_assert(1 === count($dirty_retry) && $dirty_retry[0]->get_id() === $existing_children[0]->get_id(), 'Blocked stock-attempt retry duplicated the child order.');
+$dirty_record = WCOS_Operation_Journal::get(wc_get_order($dirty_source->get_id()), $dirty_operation);
+wcos_p2_adapter_assert('completed' === $dirty_record['status'], 'Blocked stock-attempt retry did not complete the original operation.');
 wcos_p2_adapter_cleanup($dirty_source->get_id(), $dirty_operation);
 wp_delete_post($dirty_product->get_id(), true);
+
+/* A confirmed after-write fallback event disables automatic order-only compensation. */
+$fallback_product = wcos_p2_adapter_product('WCOS P2 fallback stock evidence', '6.00', 11);
+$fallback_token = WCOS_Stock_Side_Effect_Guard::begin('p2-after-write-fallback-' . wp_generate_uuid4());
+WCOS_Stock_Side_Effect_Guard::record_product_stock_write($fallback_product);
+wcos_p2_adapter_assert(WCOS_Stock_Side_Effect_Guard::has_physical_write_active_scope(), 'P2 fallback after-write evidence was not classified for manual reconciliation.');
+WCOS_Stock_Side_Effect_Guard::end($fallback_token);
+wp_delete_post($fallback_product->get_id(), true);
 
 /* Retention remains dormant while production gates are hard-off and never purges active recovery. */
 wp_clear_scheduled_hook(WCOS_Operation_Journal_Retention::CRON_HOOK);

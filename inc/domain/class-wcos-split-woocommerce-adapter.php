@@ -27,11 +27,11 @@ final class WCOS_Split_WooCommerce_Adapter {
 			return $children;
 		} catch (Throwable $throwable) {
 			$events = WCOS_Stock_Side_Effect_Guard::events($token);
-			if (!empty($events)) {
+			if (!empty($events) && WCOS_Stock_Side_Effect_Guard::events_require_manual_reconciliation($events)) {
 				$this->mark_manual_stock_reconciliation($source->get_id(), $operation_id, $events, $throwable);
-				if (!$throwable instanceof WCOS_Unexpected_Stock_Mutation_Exception) {
-					throw new WCOS_Unexpected_Stock_Mutation_Exception($events, $throwable);
-				}
+			}
+			if (!empty($events) && !$throwable instanceof WCOS_Unexpected_Stock_Mutation_Exception) {
+				throw new WCOS_Unexpected_Stock_Mutation_Exception($events, $throwable);
 			}
 			throw $throwable;
 		} finally {
