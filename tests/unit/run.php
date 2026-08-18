@@ -2,25 +2,69 @@
 
 declare(strict_types=1);
 
-require_once dirname(__DIR__, 2) . '/inc/domain/class-wcos-amount-allocator.php';
-require_once dirname(__DIR__, 2) . '/inc/domain/class-wcos-line-identity.php';
-require_once dirname(__DIR__, 2) . '/inc/domain/class-wcos-mutation-contract.php';
+if (!defined('ABSPATH')) {
+	define('ABSPATH', __DIR__ . '/');
+}
+if (!function_exists('__')) {
+	function __($text, $domain = null) {
+		return $text;
+	}
+}
+if (!function_exists('sanitize_key')) {
+	function sanitize_key($key) {
+		return preg_replace('/[^a-z0-9_\-]/', '', strtolower((string) $key));
+	}
+}
+if (!function_exists('absint')) {
+	function absint($value) {
+		return abs((int) $value);
+	}
+}
+
+$root = dirname(__DIR__, 2) . '/inc/domain/';
+require_once $root . 'class-wcos-decimal.php';
+require_once $root . 'class-wcos-amount-allocator.php';
+require_once $root . 'class-wcos-line-identity.php';
+require_once $root . 'class-wcos-mutation-fingerprint.php';
+require_once $root . 'class-wcos-mutation-contract.php';
+require_once $root . 'class-wcos-split-plan.php';
 
 $tests = array();
 
+$tests['decimal rounds half up without binary floats'] = static function() {
+	assert_same(1001, WCOS_Decimal::to_units('10.005', 2));
+	assert_same(-1001, WCOS_Decimal::to_units('-10.005', 2));
+	assert_same('10.01', WCOS_Decimal::normalize('10.005', 2));
+};
+
+$tests['decimal rejects exponent notation'] = static function() {
+	assert_throws(
+		static function() {
+			WCOS_Decimal::to_units('1e3', 2);
+		},
+		InvalidArgumentException::class
+	);
+};
+
 $tests['allocator preserves cents deterministically'] = static function() {
-	$result = WCOS_Amount_Allocator::allocate('10.00', array('a' => 1, 'b' => 1, 'c' => 1), 2);
+	$result = WCOS_Amount_Allocator::allocate('10.00', array('a' => '1', 'b' => '1', 'c' => '1'), 2);
 	assert_same(array('a' => '3.34', 'b' => '3.33', 'c' => '3.33'), $result);
 };
 
 $tests['allocator preserves negative amounts'] = static function() {
-	$result = WCOS_Amount_Allocator::allocate('-1.00', array('a' => 1, 'b' => 3), 2);
+	$result = WCOS_Amount_Allocator::allocate('-1.00', array('a' => '1', 'b' => '3'), 2);
 	assert_same(array('a' => '-0.25', 'b' => '-0.75'), $result);
 };
 
-$tests['allocator supports stock precision'] = static function() {
-	$result = WCOS_Amount_Allocator::allocate('1.000000', array('original' => 2, 'child' => 1), 6);
+$tests['allocator supports fractional stock weights'] = static function() {
+	$result = WCOS_Amount_Allocator::allocate('1.000000', array('original' => '0.333333', 'child' => '0.666667'), 6);
 	assert_same('1.000000', decimal_sum($result, 6));
+	assert_same(array('original' => '0.333333', 'child' => '0.666667'), $result);
+};
+
+$tests['allocator handles large exact currency values'] = static function() {
+	$result = WCOS_Amount_Allocator::allocate('123456789.01', array('a' => '2', 'b' => '3'), 2);
+	assert_same('123456789.01', decimal_sum($result, 2));
 };
 
 $tests['line identity ignores associative metadata order'] = static function() {
@@ -35,31 +79,85 @@ $tests['line identity distinguishes variations'] = static function() {
 	assert_true($first !== $second, 'Different variations must not share an identity.');
 };
 
+$tests['mutation fingerprint canonicalizes maps'] = static function() {
+	$first = WCOS_Mutation_Fingerprint::create('split', 10, array('b' => 2, 'a' => array('y' => 2, 'x' => 1)));
+	$second = WCOS_Mutation_Fingerprint::create('split', 10, array('a' => array('x' => 1, 'y' => 2), 'b' => 2));
+	assert_same($first, $second);
+};
+
+$tests['mutation fingerprint preserves list order'] = static function() {
+	$first = WCOS_Mutation_Fingerprint::create('split', 10, array('items' => array(1, 2)));
+	$second = WCOS_Mutation_Fingerprint::create('split', 10, array('items' => array(2, 1)));
+	assert_true($first !== $second, 'List order must remain significant.');
+};
+
+$tests['split request canonicalization is deterministic'] = static function() {
+	$plan = WCOS_Split_Plan::canonicalize_request(array(
+		'Child B' => array(22 => '1.5'),
+		'child-a' => array(11 => 1),
+	));
+	assert_same(
+		array(
+			'child-a' => array(11 => '1.000000'),
+			'childb' => array(22 => '1.500000'),
+		),
+		$plan
+	);
+};
+
+$tests['split request rejects normalized key collisions'] = static function() {
+	assert_throws(
+		static function() {
+			WCOS_Split_Plan::canonicalize_request(array(
+				'Child A' => array(1 => 1),
+				'childa' => array(2 => 1),
+			));
+		},
+		InvalidArgumentException::class
+	);
+};
+
 $tests['mutation contract accepts conserved snapshot'] = static function() {
 	$before = array(
 		'line_subtotal' => '100.00',
 		'line_total' => '90.00',
 		'discount_total' => '10.00',
+		'discount_tax' => '1.00',
 		'fees_total' => '2.00',
 		'shipping_total' => '5.00',
 		'tax_total' => '9.70',
 		'grand_total' => '106.70',
 		'stock_reduced' => '3.000000',
-		'line_quantities' => array('line-a' => 2, 'line-b' => 1),
+		'line_quantities' => array('line-a' => '2.000000', 'line-b' => '1.000000'),
+		'currencies' => array('USD'),
 	);
 	WCOS_Mutation_Contract::assert_conserved($before, $before, 2);
 };
 
 $tests['mutation contract rejects monetary drift'] = static function() {
-	$before = array('grand_total' => '10.00');
-	$after = array('grand_total' => '9.99');
-	$thrown = false;
-	try {
-		WCOS_Mutation_Contract::assert_conserved($before, $after, 2);
-	} catch (RuntimeException $exception) {
-		$thrown = true;
-	}
-	assert_true($thrown, 'A one-cent drift must fail the contract.');
+	assert_throws(
+		static function() {
+			WCOS_Mutation_Contract::assert_conserved(
+				array('grand_total' => '10.00'),
+				array('grand_total' => '9.99'),
+				2
+			);
+		},
+		RuntimeException::class
+	);
+};
+
+$tests['mutation contract rejects currency drift'] = static function() {
+	assert_throws(
+		static function() {
+			WCOS_Mutation_Contract::assert_conserved(
+				array('currencies' => array('USD')),
+				array('currencies' => array('EUR')),
+				2
+			);
+		},
+		RuntimeException::class
+	);
 };
 
 $failures = 0;
@@ -89,11 +187,22 @@ function assert_true($condition, $message) {
 	}
 }
 
+function assert_throws(callable $callback, $expected_class) {
+	try {
+		$callback();
+	} catch (Throwable $throwable) {
+		if ($throwable instanceof $expected_class) {
+			return;
+		}
+		throw new RuntimeException('Expected ' . $expected_class . ', got ' . get_class($throwable));
+	}
+	throw new RuntimeException('Expected exception ' . $expected_class . ' was not thrown.');
+}
+
 function decimal_sum(array $values, $precision) {
-	$factor = 10 ** (int) $precision;
 	$units = 0;
 	foreach ($values as $value) {
-		$units += (int) round(((float) $value) * $factor, 0, PHP_ROUND_HALF_UP);
+		$units += WCOS_Decimal::to_units($value, (int) $precision);
 	}
-	return number_format($units / $factor, (int) $precision, '.', '');
+	return WCOS_Decimal::from_units($units, (int) $precision);
 }
