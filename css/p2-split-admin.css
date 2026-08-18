@@ -1,0 +1,130 @@
+body.wcos-split-modal-open {
+    overflow: hidden;
+}
+
+.wcos-split-launcher-description {
+    margin-left: 8px;
+}
+
+.wcos-split-dialog[hidden] {
+    display: none;
+}
+
+.wcos-split-dialog {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+
+.wcos-split-dialog__backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+}
+
+.wcos-split-dialog__panel {
+    position: relative;
+    width: min(980px, 100%);
+    max-height: calc(100vh - 48px);
+    overflow: auto;
+    background: #fff;
+    border-radius: 4px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    padding: 24px;
+}
+
+.wcos-split-dialog__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+}
+
+.wcos-split-dialog__header h2 {
+    margin-top: 0;
+}
+
+.wcos-split-close {
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 28px;
+    line-height: 1;
+}
+
+.wcos-split-table-wrap {
+    overflow-x: auto;
+    margin: 20px 0;
+}
+
+.wcos-split-table select,
+.wcos-split-table input[type="number"] {
+    min-width: 130px;
+    max-width: 100%;
+}
+
+.wcos-split-policy {
+    padding: 12px 16px;
+    border-left: 4px solid #646970;
+    background: #f6f7f7;
+}
+
+.wcos-split-policy h3,
+.wcos-split-review h3 {
+    margin-top: 0;
+}
+
+.wcos-split-confirm-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-weight: 600;
+}
+
+.wcos-split-status,
+.wcos-split-error,
+.wcos-split-result,
+.wcos-split-review {
+    margin-top: 16px;
+}
+
+.wcos-split-error,
+.wcos-split-result {
+    padding: 10px 12px;
+}
+
+.wcos-split-result ul {
+    margin-left: 20px;
+}
+
+.wcos-split-dialog__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid #dcdcde;
+}
+
+@media (max-width: 782px) {
+    .wcos-split-dialog {
+        padding: 12px;
+    }
+
+    .wcos-split-dialog__panel {
+        max-height: calc(100vh - 24px);
+        padding: 16px;
+    }
+
+    .wcos-split-dialog__actions {
+        flex-direction: column-reverse;
+    }
+
+    .wcos-split-dialog__actions .button {
+        width: 100%;
+        min-height: 44px;
+    }
+}
