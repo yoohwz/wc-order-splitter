@@ -18,16 +18,14 @@ Controllers must not instantiate or call the Split service directly.
 
 ### Request-local physical-stock proof
 
-`WCOS_Stock_Side_Effect_Guard` is active only inside the current mutation request.
-
-Normal WooCommerce product/variation stock writes are intercepted at the `before_set_stock` hooks before the product data store changes. The matching after-write hooks remain observed as fallback evidence for integrations that report a stock write after persistence.
+`WCOS_Stock_Side_Effect_Guard` is active only inside the current mutation request. Normal WooCommerce product/variation stock writes are intercepted at the `before_set_stock` hooks before the product data store changes. Matching after-write hooks remain observed as fallback evidence for integrations that report a stock write after persistence.
 
 Consequences:
 
 - concurrent checkout stock changes in another request do not create false Split failures;
-- a stock-write attempt inside the Split request is blocked before the WooCommerce data store write;
+- an in-request stock-write attempt is blocked before the normal WooCommerce data-store write;
 - a blocked attempt dirties the conservation proof and leaves the same idempotency operation safely retriable;
-- an observed after-write fallback is considered outside the order-only snapshot and must not be auto-compensated without explicit stock reconciliation.
+- a confirmed after-write fallback is outside the order-only snapshot and must not be auto-compensated without explicit stock reconciliation.
 
 The exact P1 before/after stock comparison remains available outside a P2 adapter scope.
 
@@ -103,12 +101,7 @@ The contract proves:
 
 Public line metadata is business configuration by default. Protected stock/refund/mutation metadata is always operational and cannot be promoted by filters.
 
-Private line metadata is fail-closed unless an integration explicitly declares it as either:
-
-- immutable business metadata, which is copied and participates in canonical line identity; or
-- known operational metadata, which is not copied.
-
-Classification must be consistent between Split-copy and identity contexts. The integration matrix proves that two same-product lines with different adapted business configuration remain distinct and do not collapse.
+Private line metadata is fail-closed unless an integration explicitly declares it as either immutable business metadata, which is copied and participates in canonical line identity, or known operational metadata, which is not copied. Classification must be consistent between Split-copy and identity contexts. The integration matrix proves that two same-product lines with different adapted business configuration remain distinct and do not collapse.
 
 ### Durable journal retention
 
@@ -119,21 +112,15 @@ Classification must be consistent between Split-copy and identity contexts. The 
 - only `completed`, `failed`, and `compensated` terminal records are eligible;
 - active/recovery/compensating/manual-reconciliation states are never eligible;
 - scheduling remains dormant while every production workflow gate is hard-off;
-- cleanup uses a persistent option-ID keyset cursor so an early batch of active/recent records cannot permanently starve expired records behind it.
+- cleanup runs in bounded option-ID high-water cycles: each cycle snapshots the current maximum matching option ID, scans only through that finite boundary, then resets so previously recent records are reconsidered in later cycles even on continuously active stores.
 
-The regression contract creates more than one full cleanup batch of ineligible records and proves an expired terminal record behind them is eventually reached while active records remain intact.
+Regression evidence covers both multi-batch starvation and re-evaluation of a journal that was recent in one cycle but later aged past retention while newer journal records continued to arrive.
 
 ## Current acceptance evidence
 
-The canonical CI executes the P2 contracts on:
+The canonical CI executes the P2 contracts on legacy order storage, HPOS-only, and HPOS compatibility/sync mode, with PHP 7.4/8.1/8.3 static/unit gates plus package and architecture/hard-off checks.
 
-- legacy order storage;
-- HPOS-only;
-- HPOS compatibility/sync mode;
-- PHP 7.4, 8.1, and 8.3 static/unit gates;
-- package and architecture/hard-off gates.
-
-The latest adapter-foundation head has passed `Required CI` with all three WooCommerce storage modes green.
+The adapter foundation remains intentionally non-runnable from production controllers.
 
 ## Remaining production-enable blockers
 
@@ -142,16 +129,11 @@ This foundation is safe to merge while production gates remain hard-off, but it 
 Before changing `WCOS_Feature_Gates::SPLIT`, the next P2 milestone must still provide:
 
 1. Persistent manual-reconciliation state for the extreme fallback where an integration bypasses the normal pre-write stock guard and only reports physical stock mutation after persistence, including behavior if the journal had already reached `completed`.
-2. Currency/price-precision evidence beyond the current two-decimal matrices, including zero-decimal and three-decimal precision (or an equivalent extension-filtered precision contract).
-3. Production transport/controller:
-   - nonce/CSRF protection;
-   - centralized authorization through `WCOS_Mutation_Gateway`;
-   - strict plan parsing and normalized source item IDs/quantities;
-   - client-supplied or server-issued idempotency/operation ID contract;
-   - explicit error/retry responses.
-4. Server-rendered preflight/confirmation UI with accessible labels, focus behavior, warnings, policy disclosure, and operation result/audit feedback.
-5. Concrete compatibility guidance/adapters for supported third-party configured-product ecosystems beyond the generic metadata adapter mechanism.
-6. Independent technical review and explicit human gate.
+2. Currency/price-precision evidence beyond the current two-decimal matrices, including zero-decimal and three-decimal precision or an equivalent extension-filtered precision contract.
+3. Production transport/controller with nonce/CSRF protection, centralized authorization, strict plan parsing, normalized source item IDs/quantities, an idempotency/operation-ID contract, and explicit error/retry responses.
+4. Server-rendered accessible preflight/confirmation UI with policy disclosure, warnings, focus behavior, and operation result/audit feedback.
+5. Concrete compatibility guidance/adapters for explicitly supported third-party configured-product ecosystems beyond the generic metadata adapter mechanism.
+6. Independent technical review and explicit human gate before production enablement.
 
 Coupons, refunds, and negative fees may remain intentionally unsupported for the first production release if the product policy keeps them fail-closed and the UI communicates that limitation before mutation.
 

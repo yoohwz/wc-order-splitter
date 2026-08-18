@@ -12,7 +12,7 @@ defined('ABSPATH') || exit;
  */
 final class WCOS_Operation_Journal_Retention {
 	const CRON_HOOK = 'wcos_cleanup_terminal_mutation_journals';
-	const CURSOR_OPTION = 'wcos_mutation_journal_cleanup_cursor';
+	const SCAN_STATE_OPTION = 'wcos_mutation_journal_cleanup_state';
 	const DEFAULT_RETENTION_DAYS = 90;
 	const BATCH_SIZE = 50;
 
@@ -31,32 +31,54 @@ final class WCOS_Operation_Journal_Retention {
 	}
 
 	/**
-	 * Scan one bounded keyset page and persist the option-id cursor. The cursor is
-	 * reset only after a later run reaches the end, so ineligible early records
-	 * cannot starve expired records with higher option IDs forever.
+	 * Scan one bounded keyset page inside a finite high-water cycle.
+	 *
+	 * A pure monotonic cursor is unsafe on an active store: a journal scanned while
+	 * still recent would never be reconsidered if new options keep arriving ahead
+	 * of the cursor. Each cycle therefore snapshots the current maximum matching
+	 * option_id, scans only through that high-water mark, then resets. Newer journal
+	 * rows wait for the next cycle, and older rows are revisited in later cycles as
+	 * they age into retention eligibility.
 	 */
 	public static function cleanup() {
 		global $wpdb;
 
 		$like = $wpdb->esc_like('wcos_mutation_op_') . '%';
-		$cursor = absint(get_option(self::CURSOR_OPTION, 0));
+		$state = self::scan_state();
+		if ($state['high_water'] <= 0) {
+			$state['high_water'] = absint(
+				$wpdb->get_var(
+					$wpdb->prepare(
+						"SELECT MAX(option_id) FROM {$wpdb->options} WHERE option_name LIKE %s",
+						$like
+					)
+				)
+			);
+			$state['cursor'] = 0;
+			if ($state['high_water'] <= 0) {
+				delete_option(self::SCAN_STATE_OPTION);
+				return 0;
+			}
+		}
+
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
-				"SELECT option_id, option_name FROM {$wpdb->options} WHERE option_name LIKE %s AND option_id > %d ORDER BY option_id ASC LIMIT %d",
+				"SELECT option_id, option_name FROM {$wpdb->options} WHERE option_name LIKE %s AND option_id > %d AND option_id <= %d ORDER BY option_id ASC LIMIT %d",
 				$like,
-				$cursor,
+				$state['cursor'],
+				$state['high_water'],
 				self::BATCH_SIZE
 			),
 			ARRAY_A
 		);
 		if (empty($rows)) {
-			delete_option(self::CURSOR_OPTION);
+			delete_option(self::SCAN_STATE_OPTION);
 			return 0;
 		}
 
 		$deleted = 0;
 		$now = time();
-		$last_option_id = $cursor;
+		$last_option_id = $state['cursor'];
 		foreach ($rows as $row) {
 			$last_option_id = max($last_option_id, absint($row['option_id']));
 			$key = isset($row['option_name']) ? (string) $row['option_name'] : '';
@@ -72,9 +94,19 @@ final class WCOS_Operation_Journal_Retention {
 			}
 		}
 
-		if ($last_option_id > $cursor) {
-			update_option(self::CURSOR_OPTION, $last_option_id, false);
+		if ($last_option_id >= $state['high_water']) {
+			delete_option(self::SCAN_STATE_OPTION);
+		} else {
+			update_option(
+				self::SCAN_STATE_OPTION,
+				array(
+					'cursor' => $last_option_id,
+					'high_water' => $state['high_water'],
+				),
+				false
+			);
 		}
+
 		return $deleted;
 	}
 
@@ -95,5 +127,16 @@ final class WCOS_Operation_Journal_Retention {
 		$days = max(7, min(365, $days));
 		$now = null === $now ? time() : (int) $now;
 		return $completed_timestamp <= ($now - ($days * DAY_IN_SECONDS));
+	}
+
+	private static function scan_state() {
+		$state = get_option(self::SCAN_STATE_OPTION, array());
+		if (!is_array($state)) {
+			$state = array();
+		}
+		return array(
+			'cursor' => isset($state['cursor']) ? absint($state['cursor']) : 0,
+			'high_water' => isset($state['high_water']) ? absint($state['high_water']) : 0,
+		);
 	}
 }
