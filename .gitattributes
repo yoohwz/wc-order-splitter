@@ -1,0 +1,7 @@
+/.github export-ignore
+/tests export-ignore
+/.wp-env.json export-ignore
+/composer.json export-ignore
+/composer.lock export-ignore
+/phpunit.xml.dist export-ignore
+/.gitattributes export-ignore
