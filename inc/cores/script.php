@@ -30,7 +30,6 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-mutation-fingerprint.php';
 		include_once $root . 'domain/class-wcos-mutation-contract.php';
 		include_once $root . 'domain/class-wcos-operation-lock.php';
-		include_once $root . 'domain/class-wcos-operation-journal.php';
 		include_once $root . 'domain/class-wcos-feature-gates.php';
 		include_once $root . 'domain/class-wcos-order-mutation-authorizer.php';
 		include_once $root . 'domain/class-wcos-order-item-meta-policy.php';
@@ -40,12 +39,18 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-tax-item-synchronizer.php';
 		include_once $root . 'domain/class-wcos-order-contract-snapshot.php';
 		include_once $root . 'domain/class-wcos-order-copy-context.php';
+		include_once $root . 'domain/class-wcos-order-mutation-snapshot.php';
+		include_once $root . 'domain/class-wcos-operation-journal.php';
 		include_once $root . 'domain/class-wcos-order-relation-repository.php';
 		WCOS_Order_Relation_Repository::bootstrap();
 		include_once $root . 'domain/class-wcos-mutation-commit-guard.php';
 		WCOS_Mutation_Commit_Guard::bootstrap();
 		include_once $root . 'domain/class-wcos-duplicate-order-service.php';
 		include_once $root . 'domain/class-wcos-split-order-service.php';
+		include_once $root . 'domain/class-wcos-split-compensator.php';
+		include_once $root . 'domain/class-wcos-mutation-recovery-coordinator.php';
+		WCOS_Mutation_Recovery_Coordinator::bootstrap();
+		include_once $root . 'domain/class-wcos-mutation-gateway.php';
 
 		include_once $root . 'backend/settings.php';
 		include_once $root . 'backend/orders.php';
@@ -53,9 +58,9 @@ class WC_Order_Splitter_Script {
 		include_once plugin_dir_path(__FILE__) . 'safety.php';
 
 		/*
-		 * Legacy mutation handlers are deliberately never loaded here. New
-		 * controllers may only be registered behind their workflow-specific
-		 * WCOS_Feature_Gates gate after the corresponding acceptance matrix passes.
+		 * Legacy mutation handlers are deliberately never loaded here. Future
+		 * controllers must call WCOS_Mutation_Gateway so workflow gates and the
+		 * centralized authorizer cannot be bypassed by controller code.
 		 */
 	}
 }
