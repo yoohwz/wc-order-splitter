@@ -12,13 +12,13 @@ defined('ABSPATH') || exit;
  */
 final class WCOS_Split_WooCommerce_Adapter {
 
-    public function split(WC_Order $source, array $plan, $operation_id) {
+    public function split(WC_Order $source, array $plan, $operation_id, $confirmed_precision = null) {
         $operation_id = sanitize_key((string) $operation_id);
         if ('' === $operation_id) {
             throw new InvalidArgumentException(__('A split operation ID is required.', 'wc-order-splitter'));
         }
 
-        $precision = WCOS_Price_Precision_Scope::for_operation($source, $operation_id);
+        $precision = WCOS_Price_Precision_Scope::for_operation($source, $operation_id, $confirmed_precision);
         $precision_token = WCOS_Price_Precision_Scope::begin($precision);
 
         try {
@@ -46,8 +46,8 @@ final class WCOS_Split_WooCommerce_Adapter {
         }
     }
 
-    public function preflight(WC_Order $source, $operation_id = '') {
-        $precision = WCOS_Price_Precision_Scope::for_operation($source, $operation_id);
+    public function preflight(WC_Order $source, $operation_id = '', $confirmed_precision = null) {
+        $precision = WCOS_Price_Precision_Scope::for_operation($source, $operation_id, $confirmed_precision);
         $precision_token = WCOS_Price_Precision_Scope::begin($precision);
         try {
             return WCOS_Split_Preflight::report($source, $precision);
