@@ -43,12 +43,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Reject removed telemetry endpoint
+      - name: Reject removed telemetry integration
         shell: bash
         run: |
           set -euo pipefail
-          if grep -R --line-number --fixed-strings 'yoexpress.top' . --exclude-dir=.git; then
+          telemetry_host='yoexpress''.''top'
+          test ! -e inc/cores/api/push-subscription.php
+          if grep -R --line-number --fixed-strings "$telemetry_host" . --exclude-dir=.git; then
             echo 'Removed telemetry endpoint must not be present.' >&2
+            exit 1
+          fi
+          if grep -R --line-number --fixed-strings 'WC_Order_Splitter_Push_Subscription' . --exclude-dir=.git; then
+            echo 'Removed telemetry class must not be referenced.' >&2
             exit 1
           fi
 
