@@ -36,6 +36,7 @@ final class WCOS_Split_Request_Parser {
 
         $strict = array();
         $assignments = 0;
+        $fractional_supported = WCOS_Split_Preflight::fractional_quantities_supported();
         foreach ($plan as $raw_child_key => $items) {
             $child_key = (string) $raw_child_key;
             if (!preg_match('/^child-(?:[1-9]|10)$/D', $child_key)) {
@@ -59,6 +60,9 @@ final class WCOS_Split_Request_Parser {
                 $quantity_units = WCOS_Decimal::to_units($quantity, 6);
                 if (!$item_id || $quantity_units <= 0) {
                     throw new InvalidArgumentException(__('Split item IDs and quantities must be positive.', 'wc-order-splitter'));
+                }
+                if (0 !== ($quantity_units % 1000000) && !$fractional_supported) {
+                    throw new InvalidArgumentException(__('Fractional Split quantities require an integration that enables fractional WooCommerce stock amounts.', 'wc-order-splitter'));
                 }
                 if (!$source->get_item($item_id) instanceof WC_Order_Item_Product) {
                     throw new InvalidArgumentException(__('The Split plan references an item outside the source order.', 'wc-order-splitter'));
