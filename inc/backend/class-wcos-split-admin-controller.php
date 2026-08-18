@@ -52,6 +52,7 @@ final class WCOS_Split_Admin_Controller {
 
         try {
             $plan = WCOS_Split_Request_Parser::parse_json($raw_plan, $order);
+            $summary = $this->plan_summary($plan);
         } catch (InvalidArgumentException $exception) {
             throw new WCOS_Split_Transport_Exception('invalid_plan', $exception->getMessage(), 422, false);
         }
@@ -73,7 +74,7 @@ final class WCOS_Split_Admin_Controller {
             'confirmation_token' => $confirmation['confirmation_token'],
             'expires_at' => $confirmation['expires_at'],
             'preflight' => $preflight,
-            'summary' => $this->plan_summary($plan),
+            'summary' => $summary,
         );
     }
 
@@ -100,6 +101,10 @@ final class WCOS_Split_Admin_Controller {
                 'source_missing' => 404,
                 'policy_changed' => 409,
                 'precision_mismatch' => 409,
+                'journal_mismatch' => 409,
+                'manual_reconciliation' => 409,
+                'operation_closed' => 409,
+                'journal_incomplete' => 409,
             );
             $reason = $exception->get_reason();
             throw new WCOS_Split_Transport_Exception(
@@ -146,6 +151,9 @@ final class WCOS_Split_Admin_Controller {
             if (false !== strpos($message, 'Another order mutation is already in progress')) {
                 throw new WCOS_Split_Transport_Exception('operation_busy', $message, 409, true);
             }
+            if (false !== strpos($message, 'different mutation request')) {
+                throw new WCOS_Split_Transport_Exception('operation_conflict', $message, 409, false);
+            }
             throw new WCOS_Split_Transport_Exception('split_failed', $message, 409, true);
         }
 
@@ -158,7 +166,7 @@ final class WCOS_Split_Admin_Controller {
                 'id' => $child->get_id(),
                 'number' => (string) $child->get_order_number(),
                 'status' => (string) $child->get_status(),
-                'edit_url' => method_exists($child, 'get_edit_order_url') ? (string) $child->get_edit_order_url() : '',
+                'edit_url' => method_exists($child, 'get_edit_order_url') ? esc_url_raw((string) $child->get_edit_order_url()) : '',
             );
         }
 
@@ -383,7 +391,11 @@ final class WCOS_Split_Admin_Controller {
         foreach ($plan as $items) {
             foreach ($items as $item_id => $quantity) {
                 $affected[absint($item_id)] = true;
-                $moved_units += WCOS_Decimal::to_units($quantity, 6);
+                $part = WCOS_Decimal::to_units($quantity, 6);
+                if ($part > 0 && $moved_units > PHP_INT_MAX - $part) {
+                    throw new InvalidArgumentException(__('The reviewed Split quantity total exceeds the supported numeric range.', 'wc-order-splitter'));
+                }
+                $moved_units += $part;
             }
         }
         return array(
