@@ -6,7 +6,7 @@ defined('ABSPATH') || exit;
  * Emergency safety guard for order mutation workflows.
  *
  * Version 1.4.12 deliberately fails closed while the mutation engine is rebuilt
- * around stock, monetary, line-identity, and idempotency invariants.
+ * around stock, monetary, line-identity, idempotency, and recovery invariants.
  */
 class WC_Order_Splitter_Safety_Guard {
 
@@ -16,7 +16,7 @@ class WC_Order_Splitter_Safety_Guard {
 	}
 
 	public static function mutations_enabled() {
-		return defined('WC_ORDER_SPLITTER_MUTATIONS_ENABLED') && true === WC_ORDER_SPLITTER_MUTATIONS_ENABLED;
+		return false;
 	}
 
 	public function guard_unavailable_settings_sections() {
@@ -27,6 +27,7 @@ class WC_Order_Splitter_Safety_Guard {
 		$page = sanitize_key(wp_unslash($_GET['page']));
 		$tab = sanitize_key(wp_unslash($_GET['tab']));
 		$section = sanitize_key(wp_unslash($_GET['section']));
+
 		if ('wc-settings' !== $page || 'orders' !== $tab) {
 			return;
 		}
@@ -38,6 +39,7 @@ class WC_Order_Splitter_Safety_Guard {
 
 		$premium_settings_available = class_exists('WC_Order_Cancellation_Return_Premium_Settings');
 		$appearance_available = class_exists('WC_Order_Cancellation_Return_Premium_Settings_Appearance');
+
 		if ($premium_settings_available && ('appearance' !== $section || $appearance_available)) {
 			return;
 		}
