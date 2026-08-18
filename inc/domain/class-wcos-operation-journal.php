@@ -31,6 +31,9 @@ final class WCOS_Operation_Journal {
             $context['source_snapshot_fingerprint'] = $snapshot['recovery_fingerprint'];
             $context['source_copy_context_signature'] = $snapshot['copy_context_signature'];
         }
+        if (class_exists('WCOS_Price_Precision_Scope')) {
+            $context['price_precision'] = WCOS_Price_Precision_Scope::current_or_store_precision();
+        }
 
         $now = gmdate('c');
         $record = array(
@@ -180,11 +183,6 @@ final class WCOS_Operation_Journal {
         return $updated;
     }
 
-    /**
-     * Persist a non-automatic reconciliation incident, even if the mutation had
-     * already reached completed/compensated. This state is deliberately not
-     * purgeable and can only leave via mark_manual_reconciled().
-     */
     public static function mark_manual_reconciliation(WC_Order $order, $operation_id, array $context = array()) {
         $operation_id = sanitize_key($operation_id);
         $current = self::get($order, $operation_id);
@@ -245,10 +243,6 @@ final class WCOS_Operation_Journal {
         return $updated;
     }
 
-    /**
-     * Return authoritative manual-reconciliation records referenced by the
-     * order-level operation-ID index.
-     */
     public static function manual_reconciliation_records(WC_Order $order) {
         if (!$order->get_id()) {
             return array();
@@ -424,6 +418,16 @@ final class WCOS_Operation_Journal {
                 return false;
             }
         }
+
+        $current_context = isset($current['context']) && is_array($current['context']) ? $current['context'] : array();
+        $replacement_context = isset($replacement['context']) && is_array($replacement['context']) ? $replacement['context'] : array();
+        if (array_key_exists('price_precision', $current_context)) {
+            if (!array_key_exists('price_precision', $replacement_context)
+                || (int) $current_context['price_precision'] !== (int) $replacement_context['price_precision']) {
+                return false;
+            }
+        }
+
         return true;
     }
 
