@@ -20,12 +20,6 @@ final class WCOS_Order_Item_Meta_Policy {
 	const CLASS_BUSINESS = 'business';
 	const CLASS_OPERATIONAL = 'operational';
 
-	/**
-	 * Copy metadata according to the shared classification policy.
-	 *
-	 * The legacy should-copy filter can further restrict business metadata, but
-	 * cannot override a protected/operational classification.
-	 */
 	public static function copy(WC_Order_Item $source, WC_Order_Item $target, $context, array $excluded_keys = array()) {
 		$context = sanitize_key($context);
 		$excluded_keys = array_map('strval', $excluded_keys);
@@ -59,15 +53,9 @@ final class WCOS_Order_Item_Meta_Policy {
 			$copied[] = $key;
 		}
 
-		return array(
-			'copied' => $copied,
-			'excluded' => $excluded,
-		);
+		return array('copied' => $copied, 'excluded' => $excluded);
 	}
 
-	/**
-	 * Return canonical business metadata used by line identity/snapshots.
-	 */
 	public static function business_metadata(WC_Order_Item $item) {
 		$metadata = array();
 		foreach ($item->get_meta_data() as $meta) {
@@ -82,12 +70,42 @@ final class WCOS_Order_Item_Meta_Policy {
 	}
 
 	/**
-	 * Classify one metadata key.
+	 * Private line metadata is ambiguous until an integration declares whether
+	 * it is immutable business configuration or known operational state.
 	 *
-	 * Integrations that own private immutable configuration can opt individual
-	 * keys into business metadata with `wcos_order_item_meta_classification`.
-	 * Protected keys are resolved before filters and are never overridable.
+	 * Business adapters should use `wcos_order_item_meta_classification` and
+	 * return `business`. Operational adapters should leave classification as
+	 * operational and return true from `wcos_order_item_private_meta_is_known_operational`.
+	 * Protected core/mutation keys never require adapter classification.
 	 */
+	public static function unknown_private_keys(WC_Order_Item $item, $context = self::CONTEXT_SPLIT) {
+		$context = sanitize_key((string) $context);
+		$unknown = array();
+		foreach ($item->get_meta_data() as $meta) {
+			$key = (string) $meta->key;
+			if (0 !== strpos($key, '_') || self::is_protected($key)) {
+				continue;
+			}
+			if (self::CLASS_BUSINESS === self::classify($key, $meta->value, $context, $item)) {
+				continue;
+			}
+			$known_operational = (bool) apply_filters(
+				'wcos_order_item_private_meta_is_known_operational',
+				false,
+				$key,
+				$meta->value,
+				$context,
+				$item
+			);
+			if (!$known_operational) {
+				$unknown[] = $key;
+			}
+		}
+		$unknown = array_values(array_unique($unknown));
+		sort($unknown, SORT_STRING);
+		return $unknown;
+	}
+
 	public static function classify($key, $value, $context, WC_Order_Item $item = null) {
 		$key = (string) $key;
 		$context = sanitize_key($context);
@@ -112,10 +130,6 @@ final class WCOS_Order_Item_Meta_Policy {
 			$classification = self::CLASS_OPERATIONAL;
 		}
 
-		/*
-		 * Compatibility hook for early foundation adopters. This is deliberately
-		 * evaluated only for non-protected keys.
-		 */
 		$is_operational = self::CLASS_OPERATIONAL === $classification;
 		$is_operational = (bool) apply_filters(
 			'wcos_order_item_meta_is_operational',
@@ -167,7 +181,6 @@ final class WCOS_Order_Item_Meta_Policy {
 		if (is_object($value) || is_resource($value)) {
 			throw new RuntimeException(
 				sprintf(
-					/* translators: %s: order item metadata key. */
 					__('Business metadata "%s" contains a non-canonical object or resource value. Classify it as operational or normalize it before order mutation.', 'wc-order-splitter'),
 					(string) $meta_key
 				)
@@ -177,7 +190,6 @@ final class WCOS_Order_Item_Meta_Policy {
 		if (is_float($value) && !is_finite($value)) {
 			throw new RuntimeException(
 				sprintf(
-					/* translators: %s: order item metadata key. */
 					__('Business metadata "%s" contains a non-finite numeric value and cannot form a stable line identity.', 'wc-order-splitter'),
 					(string) $meta_key
 				)
@@ -193,7 +205,6 @@ final class WCOS_Order_Item_Meta_Policy {
 			if ($key !== $expected++) {
 				return true;
 			}
-		}
 		return false;
 	}
 }

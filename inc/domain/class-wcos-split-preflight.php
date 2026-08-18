@@ -23,12 +23,10 @@ final class WCOS_Split_Preflight_Exception extends RuntimeException {
 
 /**
  * Read-only production preflight for the first P2 quantity-split surface.
- *
- * Reports intentionally contain no customer/address/payment plaintext. They
- * expose only compatibility facts needed by a future confirmation UI.
+ * Reports intentionally contain no customer/address/payment plaintext.
  */
 final class WCOS_Split_Preflight {
-	const POLICY_VERSION = 2;
+	const POLICY_VERSION = 3;
 
 	public static function policy() {
 		return array(
@@ -44,6 +42,7 @@ final class WCOS_Split_Preflight {
 			'tax' => 'preserve_historical',
 			'physical_stock' => 'no_write',
 			'nested_split' => 'reject',
+			'unknown_private_line_meta' => 'reject',
 		);
 	}
 
@@ -82,6 +81,7 @@ final class WCOS_Split_Preflight {
 			'managed_stock_lines' => 0,
 			'unmanaged_stock_lines' => 0,
 			'backorder_lines' => 0,
+			'unknown_private_meta_keys' => array(),
 			'policy' => self::policy(),
 		);
 
@@ -120,6 +120,7 @@ final class WCOS_Split_Preflight {
 		}
 
 		$order_stock_reduced = (bool) $source->get_data_store()->get_stock_reduced($source->get_id());
+		$unknown_private_meta = array();
 		foreach ($source->get_items('line_item') as $item) {
 			try {
 				$quantity_units = WCOS_Decimal::to_units($item->get_quantity(), 6);
@@ -132,6 +133,11 @@ final class WCOS_Split_Preflight {
 			if (0 !== ($quantity_units % 1000000)) {
 				$report['fractional_quantity_lines']++;
 			}
+
+			$unknown_private_meta = array_merge(
+				$unknown_private_meta,
+				WCOS_Order_Item_Meta_Policy::unknown_private_keys($item, WCOS_Order_Item_Meta_Policy::CONTEXT_SPLIT)
+			);
 
 			$product = $item->get_product();
 			if (!$product) {
@@ -157,6 +163,17 @@ final class WCOS_Split_Preflight {
 			if (!$order_stock_reduced || $reduced_units < 0 || $reduced_units > $quantity_units) {
 				return self::reject($report, 'invalid_stock_marker', __('The source order contains inconsistent reduced-stock markers.', 'wc-order-splitter'));
 			}
+		}
+
+		$unknown_private_meta = array_values(array_unique(array_map('strval', $unknown_private_meta)));
+		sort($unknown_private_meta, SORT_STRING);
+		$report['unknown_private_meta_keys'] = $unknown_private_meta;
+		if (!empty($unknown_private_meta)) {
+			return self::reject(
+				$report,
+				'unclassified_private_metadata',
+				__('The source order contains private line-item metadata that has not been classified by a compatibility adapter.', 'wc-order-splitter')
+			);
 		}
 
 		try {

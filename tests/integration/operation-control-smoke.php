@@ -25,7 +25,6 @@ wcos_control_assert(WCOS_Operation_Lock::refresh($order_id, $lease_one, 30, $ope
 wcos_control_assert(WCOS_Operation_Lock::refresh($order_id, $lease_one, 30, $operation_one), 'The second rapid lease refresh was mistaken for a lost lease.');
 $rapid = get_option('wcos_mutation_lock_' . $order_id);
 wcos_control_assert(is_array($rapid) && isset($rapid['revision']) && (int) $rapid['revision'] >= 3, 'Lease refresh revision did not advance monotonically.');
-
 $lock_key = 'wcos_mutation_lock_' . $order_id;
 $expired = get_option($lock_key);
 wcos_control_assert(is_array($expired), 'Mutation lease option is missing.');
@@ -88,5 +87,6 @@ require __DIR__ . '/p2-quantity-split-adapter-smoke.php';
 require __DIR__ . '/p2-stock-matrix-smoke.php';
 require __DIR__ . '/p2-charge-tax-matrix-smoke.php';
 require __DIR__ . '/p2-production-side-effect-smoke.php';
+require __DIR__ . '/p2-metadata-compatibility-smoke.php';
 
 echo "operation-lock-and-journal-ok\n";
