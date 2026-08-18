@@ -108,11 +108,19 @@ $tests['split request canonicalization is deterministic'] = static function() {
 	), $plan);
 };
 
-$tests['split request rejects normalized key collisions'] = static function() {
+$tests['split request rejects normalized child key collisions'] = static function() {
 	assert_throws(static function() {
 		WCOS_Split_Plan::canonicalize_request(array(
 			'Child A' => array(1 => 1),
 			'childa' => array(2 => 1),
+		));
+	}, InvalidArgumentException::class);
+};
+
+$tests['split request rejects normalized source item ID collisions'] = static function() {
+	assert_throws(static function() {
+		WCOS_Split_Plan::canonicalize_request(array(
+			'child-a' => array('01' => '0.25', 1 => '0.50'),
 		));
 	}, InvalidArgumentException::class);
 };
@@ -146,11 +154,7 @@ $tests['mutation contract accepts conserved snapshot'] = static function() {
 
 $tests['mutation contract rejects monetary drift'] = static function() {
 	assert_throws(static function() {
-		WCOS_Mutation_Contract::assert_conserved(
-			array('grand_total' => '10.00'),
-			array('grand_total' => '9.99'),
-			2
-		);
+		WCOS_Mutation_Contract::assert_conserved(array('grand_total' => '10.00'), array('grand_total' => '9.99'), 2);
 	}, RuntimeException::class);
 };
 
@@ -202,11 +206,7 @@ $tests['mutation contract rejects per-rate tax-row drift hidden by equal aggrega
 
 $tests['mutation contract rejects currency drift'] = static function() {
 	assert_throws(static function() {
-		WCOS_Mutation_Contract::assert_conserved(
-			array('currencies' => array('USD')),
-			array('currencies' => array('EUR')),
-			2
-		);
+		WCOS_Mutation_Contract::assert_conserved(array('currencies' => array('USD')), array('currencies' => array('EUR')), 2);
 	}, RuntimeException::class);
 };
 
