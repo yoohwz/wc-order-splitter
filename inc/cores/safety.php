@@ -15,7 +15,7 @@ class WC_Order_Splitter_Safety_Guard {
 	}
 
 	public static function mutations_enabled() {
-		return defined('WC_ORDER_SPLITTER_MUTATIONS_ENABLED') && true === WC_ORDER_SPLITTER_MUTATIONS_ENABLED;
+		return false;
 	}
 
 	public function render_admin_notice() {
