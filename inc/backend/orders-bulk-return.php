@@ -58,7 +58,10 @@ class WooCommerce_Order_Splitter_Orders_Bulk_Return {
 				if (!$engine) {
 					$engine = new WC_Order_Splitter_Order_Mutation_Engine();
 				}
-				$engine->return_split_order($order);
+				$original = $engine->return_split_order($order);
+				if ($original instanceof WC_Order) {
+					WC_Order_Splitter_Charge_Integrity::normalize_after_return($original);
+				}
 				$queued++;
 			} catch (Throwable $error) {
 				$order->add_order_note(sprintf(__('Bulk return failed: %s', 'wc-order-splitter'), $error->getMessage()), false);
