@@ -139,9 +139,7 @@ final class WCOS_Operation_Journal {
 				$record['status'] = $status;
 				$record['stage'] = $stage;
 				$record['updated_at'] = $now;
-				if ($terminal) {
-					$record['completed_at'] = $now;
-				}
+				$record['completed_at'] = $terminal ? $now : null;
 				$record['context'] = array_merge(
 					isset($record['context']) && is_array($record['context']) ? $record['context'] : array(),
 					$context
