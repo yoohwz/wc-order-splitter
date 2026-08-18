@@ -36,7 +36,8 @@ WCOS_Order_Totals_Rebuilder::rebuild($source, 2);
 $source->save();
 $source = wc_get_order($source->get_id());
 $source_id = $source->get_id();
-$line = reset($source->get_items('line_item'));
+$line_items = $source->get_items('line_item');
+$line = reset($line_items);
 $operation_id = sanitize_key('source-save-crash-' . wp_generate_uuid4());
 $plan = array(
 	'child-one' => array(
@@ -44,22 +45,40 @@ $plan = array(
 	),
 );
 
-$thrown = false;
-$after_save = static function($order) use ($source_id, &$thrown) {
-	if (!$thrown && $order instanceof WC_Order && $order->get_id() === $source_id) {
-		$thrown = true;
-		throw new RuntimeException('Injected crash after WooCommerce persisted the source order.');
+/*
+ * Commit guard runs first at this same priority and durably records the planned
+ * post-source signatures. Persist the already-mutated source ourselves, then
+ * throw before WCOS_Split_Order_Service can record source_persisted. This
+ * deterministically models a process crash in the exact persistence/checkpoint
+ * window without depending on WooCommerce datastore-specific hooks.
+ */
+$injected = false;
+$injector = static function($stage, WC_Order $stage_source, array $children, $stage_operation_id) use ($source_id, $operation_id, &$injected) {
+	if ($injected
+		|| 'before_source_save' !== $stage
+		|| $stage_source->get_id() !== $source_id
+		|| sanitize_key($stage_operation_id) !== $operation_id) {
+		return;
 	}
+
+	$planned = WCOS_Operation_Journal::get($stage_source, $operation_id);
+	wcos_source_crash_assert(is_array($planned), 'Planned source commit journal is missing before injected persistence.');
+	wcos_source_crash_assert(!empty($planned['context']['source_signature_after']), 'Planned post-source signature was not recorded before injected persistence.');
+	wcos_source_crash_assert(!empty($planned['context']['source_recovery_signature_after']), 'Planned relation-aware recovery signature was not recorded before injected persistence.');
+
+	$injected = true;
+	$stage_source->save();
+	throw new RuntimeException('Injected crash after WooCommerce persisted the source order.');
 };
-add_action('woocommerce_after_order_object_save', $after_save, PHP_INT_MAX, 1);
+add_action('wcos_split_mutation_checkpoint', $injector, PHP_INT_MAX, 4);
 
 try {
 	(new WCOS_Split_Order_Service())->split($source, $plan, $operation_id);
 } catch (RuntimeException $expected) {
 	/* The service may rethrow or may finalize the conserved persisted state. */
 }
-remove_action('woocommerce_after_order_object_save', $after_save, PHP_INT_MAX);
-wcos_source_crash_assert($thrown, 'The source-save crash injector did not execute.');
+remove_action('wcos_split_mutation_checkpoint', $injector, PHP_INT_MAX);
+wcos_source_crash_assert($injected, 'The source-save crash injector did not execute.');
 
 $source = wc_get_order($source_id);
 $record = WCOS_Operation_Journal::get($source, $operation_id);
@@ -88,7 +107,8 @@ $persisted_children = WCOS_Order_Relation_Repository::find(
 	-1
 );
 wcos_source_crash_assert(1 === count($persisted_children), 'Retry after source-save crash created duplicate children.');
-wcos_source_crash_assert($child->get_id() === reset($persisted_children)->get_id(), 'Retry returned a different child than the durable operation result.');
+$persisted_child = reset($persisted_children);
+wcos_source_crash_assert($child->get_id() === $persisted_child->get_id(), 'Retry returned a different child than the durable operation result.');
 
 $source = wc_get_order($source_id);
 $record = WCOS_Operation_Journal::get($source, $operation_id);
