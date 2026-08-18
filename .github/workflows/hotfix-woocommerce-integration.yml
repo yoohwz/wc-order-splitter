@@ -1,0 +1,84 @@
+name: Hotfix WooCommerce integration
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'wc-order-splitter.php'
+      - 'inc/**'
+      - 'tests/integration/hotfix-smoke.php'
+      - '.wp-env.json'
+      - '.github/workflows/hotfix-woocommerce-integration.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hotfix-integration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  read-only-smoke:
+    name: Read-only smoke (${{ matrix.storage }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        storage: [legacy, hpos]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install wp-env
+        run: npm install --global @wordpress/env
+
+      - name: Start pinned WordPress and WooCommerce environment
+        run: wp-env start
+
+      - name: Activate WooCommerce and Order Splitter
+        shell: bash
+        run: |
+          set -euo pipefail
+          wp-env run cli wp plugin activate woocommerce
+          wp-env run cli wp plugin activate wc-order-splitter
+          wp-env run cli wp plugin status woocommerce
+          wp-env run cli wp plugin status wc-order-splitter
+
+      - name: Configure order storage
+        shell: bash
+        env:
+          STORAGE_MODE: ${{ matrix.storage }}
+        run: |
+          set -euo pipefail
+
+          if [ "$STORAGE_MODE" = 'hpos' ]; then
+            wp-env run cli wp option update woocommerce_custom_orders_table_enabled yes
+          else
+            wp-env run cli wp option update woocommerce_custom_orders_table_enabled no
+          fi
+
+          wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled no
+          wp-env run cli wp cache flush
+
+      - name: Run fail-closed read-only smoke test
+        shell: bash
+        env:
+          STORAGE_MODE: ${{ matrix.storage }}
+        run: |
+          set -euo pipefail
+          wp-env run cli wp eval-file /var/www/html/wp-content/plugins/wc-order-splitter/tests/integration/hotfix-smoke.php "$STORAGE_MODE"
+
+      - name: Print debug log on failure
+        if: failure()
+        run: wp-env run cli sh -lc 'test ! -f /var/www/html/wp-content/debug.log || cat /var/www/html/wp-content/debug.log'
+
+      - name: Stop environment
+        if: always()
+        run: wp-env stop
