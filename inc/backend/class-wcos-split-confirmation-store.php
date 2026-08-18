@@ -17,6 +17,10 @@ final class WCOS_Split_Confirmation_Exception extends RuntimeException {
 
 /**
  * Short-lived non-PII confirmation record for review -> execute transport.
+ *
+ * The confirmation token is mandatory before the first mutation write. Once a
+ * durable journal exists, that journal becomes the replay authority so an
+ * interrupted operation can be resumed after the confirmation TTL expires.
  */
 final class WCOS_Split_Confirmation_Store {
     const SCHEMA_VERSION = 1;
@@ -62,15 +66,15 @@ final class WCOS_Split_Confirmation_Store {
         $operation_id = sanitize_key((string) $operation_id);
         $token = (string) $token;
         $user_id = absint($user_id);
-        if (!self::is_uuid($operation_id) || '' === $token || !$user_id) {
+        if (!self::is_uuid($operation_id) || !$user_id) {
             throw new WCOS_Split_Confirmation_Exception('invalid_identity', __('The Split confirmation identity is invalid.', 'wc-order-splitter'));
         }
 
         $record = get_transient(self::key($operation_id));
         if (!is_array($record)) {
-            throw new WCOS_Split_Confirmation_Exception('expired', __('The Split confirmation expired. Review the plan again before executing it.', 'wc-order-splitter'));
+            return self::durable_replay($source, $operation_id);
         }
-        if (!isset($record['token_hash']) || !hash_equals((string) $record['token_hash'], self::token_hash($token))) {
+        if ('' === $token || !isset($record['token_hash']) || !hash_equals((string) $record['token_hash'], self::token_hash($token))) {
             throw new WCOS_Split_Confirmation_Exception('invalid_token', __('The Split confirmation token is invalid.', 'wc-order-splitter'));
         }
         if (absint($record['source_order_id']) !== $source->get_id() || absint($record['user_id']) !== $user_id) {
@@ -78,7 +82,7 @@ final class WCOS_Split_Confirmation_Store {
         }
         if (empty($record['expires_at']) || (int) $record['expires_at'] < time()) {
             self::delete($operation_id);
-            throw new WCOS_Split_Confirmation_Exception('expired', __('The Split confirmation expired. Review the plan again before executing it.', 'wc-order-splitter'));
+            return self::durable_replay($source, $operation_id);
         }
         if (!isset($record['policy_version']) || (int) $record['policy_version'] !== (int) WCOS_Split_Preflight::POLICY_VERSION) {
             throw new WCOS_Split_Confirmation_Exception('policy_changed', __('The Split safety policy changed after this plan was reviewed. Review the plan again before executing it.', 'wc-order-splitter'));
@@ -87,11 +91,6 @@ final class WCOS_Split_Confirmation_Store {
         $precision = WCOS_Price_Precision_Scope::validate(isset($record['price_precision']) ? $record['price_precision'] : null);
         $precision_token = WCOS_Price_Precision_Scope::begin($precision);
         try {
-            /*
-             * The caller may have loaded this order under a different ambient
-             * precision. Rehydrate inside the reviewed precision before source
-             * signature validation for the same reason the Split adapter does.
-             */
             $scoped_source = wc_get_order($source->get_id());
             if (!$scoped_source instanceof WC_Order) {
                 throw new WCOS_Split_Confirmation_Exception('source_missing', __('The source order is no longer available.', 'wc-order-splitter'));
@@ -112,6 +111,7 @@ final class WCOS_Split_Confirmation_Store {
             $record['operation_id'] = $operation_id;
             $record['plan'] = WCOS_Split_Plan::canonicalize_request(isset($record['plan']) && is_array($record['plan']) ? $record['plan'] : array());
             $record['price_precision'] = $precision;
+            $record['replay_authority'] = is_array($journal) ? 'journal' : 'confirmation';
             return $record;
         } finally {
             WCOS_Price_Precision_Scope::end($precision_token);
@@ -124,6 +124,40 @@ final class WCOS_Split_Confirmation_Store {
             return false;
         }
         return delete_transient(self::key($operation_id));
+    }
+
+    private static function durable_replay(WC_Order $source, $operation_id) {
+        $journal = WCOS_Operation_Journal::get($source, $operation_id);
+        if (!is_array($journal)) {
+            throw new WCOS_Split_Confirmation_Exception('expired', __('The Split confirmation expired. Review the plan again before executing it.', 'wc-order-splitter'));
+        }
+        if (!isset($journal['type']) || 'split' !== sanitize_key((string) $journal['type'])
+            || !isset($journal['source_order_id']) || absint($journal['source_order_id']) !== $source->get_id()) {
+            throw new WCOS_Split_Confirmation_Exception('journal_mismatch', __('The durable Split operation does not match this source order.', 'wc-order-splitter'));
+        }
+
+        $status = isset($journal['status']) ? sanitize_key((string) $journal['status']) : '';
+        if ('manual_reconciliation' === $status) {
+            throw new WCOS_Split_Confirmation_Exception('manual_reconciliation', __('This Split operation requires manual reconciliation before it can continue.', 'wc-order-splitter'));
+        }
+        if (in_array($status, array('manual_reconciled', 'compensated'), true)) {
+            throw new WCOS_Split_Confirmation_Exception('operation_closed', __('This Split operation has been closed and cannot be replayed.', 'wc-order-splitter'));
+        }
+
+        $context = isset($journal['context']) && is_array($journal['context']) ? $journal['context'] : array();
+        if (empty($context['plan']) || !is_array($context['plan']) || !array_key_exists('price_precision', $context)) {
+            throw new WCOS_Split_Confirmation_Exception('journal_incomplete', __('The durable Split operation is missing replay information and requires manual review.', 'wc-order-splitter'));
+        }
+
+        return array(
+            'schema_version' => self::SCHEMA_VERSION,
+            'operation_id' => $operation_id,
+            'source_order_id' => $source->get_id(),
+            'plan' => WCOS_Split_Plan::canonicalize_request($context['plan']),
+            'price_precision' => WCOS_Price_Precision_Scope::validate($context['price_precision']),
+            'policy_version' => isset($context['policy_version']) ? absint($context['policy_version']) : 0,
+            'replay_authority' => 'journal',
+        );
     }
 
     private static function token_hash($token) {
