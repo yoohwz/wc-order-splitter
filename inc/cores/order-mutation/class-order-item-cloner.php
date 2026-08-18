@@ -80,7 +80,7 @@ final class WC_Order_Splitter_Order_Item_Cloner {
 		);
 		$item->set_props(array_merge($props, $overrides));
 		WC_Order_Splitter_Mutation_Support::copy_item_meta($source, $item, false);
-		$this->set_source_item_reference($source, $item);
+		$this->set_source_item_reference($source, $item, !empty($overrides));
 		return $item;
 	}
 
@@ -96,7 +96,7 @@ final class WC_Order_Splitter_Order_Item_Cloner {
 		);
 		$item->set_props(array_merge($props, $overrides));
 		WC_Order_Splitter_Mutation_Support::copy_item_meta($source, $item, false);
-		$this->set_source_item_reference($source, $item);
+		$this->set_source_item_reference($source, $item, !empty($overrides));
 		return $item;
 	}
 
@@ -109,7 +109,7 @@ final class WC_Order_Splitter_Order_Item_Cloner {
 		);
 		$item->set_props(array_merge($props, $overrides));
 		WC_Order_Splitter_Mutation_Support::copy_item_meta($source, $item, false);
-		$this->set_source_item_reference($source, $item);
+		$this->set_source_item_reference($source, $item, !empty($overrides));
 		return $item;
 	}
 
@@ -138,8 +138,11 @@ final class WC_Order_Splitter_Order_Item_Cloner {
 		}
 	}
 
-	private function set_source_item_reference($source, $target) {
-		$source_item_id = absint($source->get_meta(self::META_SOURCE_ITEM_ID, true));
+	private function set_source_item_reference($source, $target, $reset_reference = false) {
+		$source_item_id = 0;
+		if (!$reset_reference) {
+			$source_item_id = absint($source->get_meta(self::META_SOURCE_ITEM_ID, true));
+		}
 		if (!$source_item_id) {
 			$source_item_id = absint($source->get_id());
 		}
