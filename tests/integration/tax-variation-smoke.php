@@ -10,6 +10,10 @@ function wcos_tax_variation_assert($condition, $message) {
 	}
 }
 
+function wcos_tax_variation_units($value, $precision = 2) {
+	return WCOS_Decimal::to_units($value, (int) $precision);
+}
+
 function wcos_tax_variation_line($order, $variation_id) {
 	foreach ($order->get_items('line_item') as $item) {
 		if ((int) $item->get_variation_id() === (int) $variation_id) {
@@ -23,8 +27,8 @@ function wcos_tax_variation_tax_totals($order) {
 	$totals = array();
 	foreach ($order->get_items('tax') as $item) {
 		$totals[(int) $item->get_rate_id()] = array(
-			'cart' => (string) $item->get_tax_total(),
-			'shipping' => (string) $item->get_shipping_tax_total(),
+			'cart' => wcos_tax_variation_units($item->get_tax_total()),
+			'shipping' => wcos_tax_variation_units($item->get_shipping_tax_total()),
 		);
 	}
 	ksort($totals, SORT_NUMERIC);
@@ -158,30 +162,30 @@ $child_blue = wcos_tax_variation_line($child, $variation_blue_id);
 wcos_tax_variation_assert($source_red && $source_blue && $child_red && $child_blue, 'Variations sharing one parent product were collapsed or lost.');
 
 foreach (array($source_red, $source_blue, $child_red, $child_blue) as $item) {
-	wcos_tax_variation_assert('1' === (string) $item->get_quantity(), 'A variation quantity was not allocated exactly.');
+	wcos_tax_variation_assert(1000000 === wcos_tax_variation_units($item->get_quantity(), 6), 'A variation quantity was not allocated exactly.');
 }
 wcos_tax_variation_assert('red' === (string) $source_red->get_meta('configuration', true), 'Source red configuration metadata changed.');
 wcos_tax_variation_assert('blue' === (string) $source_blue->get_meta('configuration', true), 'Source blue configuration metadata changed.');
 wcos_tax_variation_assert('red' === (string) $child_red->get_meta('configuration', true), 'Child red configuration metadata was lost.');
 wcos_tax_variation_assert('blue' === (string) $child_blue->get_meta('configuration', true), 'Child blue configuration metadata was lost.');
 
-wcos_tax_variation_assert('10' === (string) $source_red->get_subtotal(), 'Source red historical subtotal was not allocated exactly.');
-wcos_tax_variation_assert('10' === (string) $child_red->get_subtotal(), 'Child red historical subtotal was not allocated exactly.');
-wcos_tax_variation_assert('15' === (string) $source_blue->get_subtotal(), 'Source blue historical subtotal was not allocated exactly.');
-wcos_tax_variation_assert('15' === (string) $child_blue->get_subtotal(), 'Child blue historical subtotal was not allocated exactly.');
-wcos_tax_variation_assert('1' === (string) $source_red->get_total_tax(), 'Source red historical tax was not allocated exactly.');
-wcos_tax_variation_assert('1' === (string) $child_red->get_total_tax(), 'Child red historical tax was not allocated exactly.');
-wcos_tax_variation_assert('1.5' === (string) $source_blue->get_total_tax(), 'Source blue historical tax was not allocated exactly.');
-wcos_tax_variation_assert('1.5' === (string) $child_blue->get_total_tax(), 'Child blue historical tax was not allocated exactly.');
+wcos_tax_variation_assert(1000 === wcos_tax_variation_units($source_red->get_subtotal()), 'Source red historical subtotal was not allocated exactly.');
+wcos_tax_variation_assert(1000 === wcos_tax_variation_units($child_red->get_subtotal()), 'Child red historical subtotal was not allocated exactly.');
+wcos_tax_variation_assert(1500 === wcos_tax_variation_units($source_blue->get_subtotal()), 'Source blue historical subtotal was not allocated exactly.');
+wcos_tax_variation_assert(1500 === wcos_tax_variation_units($child_blue->get_subtotal()), 'Child blue historical subtotal was not allocated exactly.');
+wcos_tax_variation_assert(100 === wcos_tax_variation_units($source_red->get_total_tax()), 'Source red historical tax was not allocated exactly.');
+wcos_tax_variation_assert(100 === wcos_tax_variation_units($child_red->get_total_tax()), 'Child red historical tax was not allocated exactly.');
+wcos_tax_variation_assert(150 === wcos_tax_variation_units($source_blue->get_total_tax()), 'Source blue historical tax was not allocated exactly.');
+wcos_tax_variation_assert(150 === wcos_tax_variation_units($child_blue->get_total_tax()), 'Child blue historical tax was not allocated exactly.');
 
 $expected_tax_totals = array(
-	101 => array('cart' => '1', 'shipping' => '0'),
-	202 => array('cart' => '1.5', 'shipping' => '0'),
+	101 => array('cart' => 100, 'shipping' => 0),
+	202 => array('cart' => 150, 'shipping' => 0),
 );
 wcos_tax_variation_assert($expected_tax_totals === wcos_tax_variation_tax_totals($source), 'Source historical tax rows were not synchronized by rate.');
 wcos_tax_variation_assert($expected_tax_totals === wcos_tax_variation_tax_totals($child), 'Child historical tax rows were not cloned and synchronized by rate.');
-wcos_tax_variation_assert('27.5' === (string) $source->get_total(), 'Source historical grand total was not allocated exactly.');
-wcos_tax_variation_assert('27.5' === (string) $child->get_total(), 'Child historical grand total was not allocated exactly.');
+wcos_tax_variation_assert(2750 === wcos_tax_variation_units($source->get_total()), 'Source historical grand total was not allocated exactly.');
+wcos_tax_variation_assert(2750 === wcos_tax_variation_units($child->get_total()), 'Child historical grand total was not allocated exactly.');
 
 $after_contract = WCOS_Order_Contract_Snapshot::aggregate(array($source, $child), 2);
 WCOS_Mutation_Contract::assert_conserved($before_contract, $after_contract, 2);
