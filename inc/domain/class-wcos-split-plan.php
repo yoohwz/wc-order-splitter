@@ -32,6 +32,9 @@ final class WCOS_Split_Plan {
 				if (!$item_id || $quantity_units <= 0) {
 					throw new InvalidArgumentException(__('Split item IDs and quantities must be positive.', 'wc-order-splitter'));
 				}
+				if (isset($canonical[$child_key][$item_id])) {
+					throw new InvalidArgumentException(__('Two split item keys normalize to the same source item ID.', 'wc-order-splitter'));
+				}
 				$canonical[$child_key][$item_id] = WCOS_Decimal::from_units($quantity_units, 6);
 			}
 			ksort($canonical[$child_key], SORT_NUMERIC);
@@ -63,7 +66,7 @@ final class WCOS_Split_Plan {
 
 		foreach ($totals_by_item as $item_id => $split_units) {
 			if ($split_units >= $source_quantities[$item_id]) {
-				throw new InvalidArgumentException(__('The hardened split engine requires every source line to retain a positive quantity.', 'wc-order-splitter'));
+				throw new InvalidArgumentException(__('The hardened split engine requires every affected source line to retain a positive quantity.', 'wc-order-splitter'));
 			}
 		}
 
