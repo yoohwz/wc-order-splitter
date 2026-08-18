@@ -3,6 +3,8 @@
 defined('ABSPATH') || exit;
 
 final class WC_Order_Splitter_Order_Item_Cloner {
+	const META_SOURCE_ITEM_ID = '_wc_order_splitter_source_item_id';
+
 	public function copy_order_context($source, $target, $created_via) {
 		$target->set_currency($source->get_currency());
 		$target->set_customer_id($source->get_customer_id());
@@ -78,6 +80,7 @@ final class WC_Order_Splitter_Order_Item_Cloner {
 		);
 		$item->set_props(array_merge($props, $overrides));
 		WC_Order_Splitter_Mutation_Support::copy_item_meta($source, $item, false);
+		$this->set_source_item_reference($source, $item);
 		return $item;
 	}
 
@@ -93,6 +96,7 @@ final class WC_Order_Splitter_Order_Item_Cloner {
 		);
 		$item->set_props(array_merge($props, $overrides));
 		WC_Order_Splitter_Mutation_Support::copy_item_meta($source, $item, false);
+		$this->set_source_item_reference($source, $item);
 		return $item;
 	}
 
@@ -105,6 +109,7 @@ final class WC_Order_Splitter_Order_Item_Cloner {
 		);
 		$item->set_props(array_merge($props, $overrides));
 		WC_Order_Splitter_Mutation_Support::copy_item_meta($source, $item, false);
+		$this->set_source_item_reference($source, $item);
 		return $item;
 	}
 
@@ -130,6 +135,16 @@ final class WC_Order_Splitter_Order_Item_Cloner {
 			foreach ($source_order->get_items($type) as $source_item) {
 				$target_order->add_item($this->clone_item($source_item, array(), $include_reduced_stock));
 			}
+		}
+	}
+
+	private function set_source_item_reference($source, $target) {
+		$source_item_id = absint($source->get_meta(self::META_SOURCE_ITEM_ID, true));
+		if (!$source_item_id) {
+			$source_item_id = absint($source->get_id());
+		}
+		if ($source_item_id) {
+			$target->update_meta_data(self::META_SOURCE_ITEM_ID, $source_item_id);
 		}
 	}
 }
