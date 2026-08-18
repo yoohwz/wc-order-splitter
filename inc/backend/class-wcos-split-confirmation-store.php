@@ -77,8 +77,11 @@ final class WCOS_Split_Confirmation_Store {
             throw new WCOS_Split_Confirmation_Exception('owner_mismatch', __('The Split confirmation does not belong to this user and order.', 'wc-order-splitter'));
         }
         if (empty($record['expires_at']) || (int) $record['expires_at'] < time()) {
-            delete_transient(self::key($operation_id));
+            self::delete($operation_id);
             throw new WCOS_Split_Confirmation_Exception('expired', __('The Split confirmation expired. Review the plan again before executing it.', 'wc-order-splitter'));
+        }
+        if (!isset($record['policy_version']) || (int) $record['policy_version'] !== (int) WCOS_Split_Preflight::POLICY_VERSION) {
+            throw new WCOS_Split_Confirmation_Exception('policy_changed', __('The Split safety policy changed after this plan was reviewed. Review the plan again before executing it.', 'wc-order-splitter'));
         }
 
         $journal = WCOS_Operation_Journal::get($source, $operation_id);
@@ -97,6 +100,14 @@ final class WCOS_Split_Confirmation_Store {
         $record['plan'] = WCOS_Split_Plan::canonicalize_request(isset($record['plan']) && is_array($record['plan']) ? $record['plan'] : array());
         $record['price_precision'] = WCOS_Price_Precision_Scope::validate($record['price_precision']);
         return $record;
+    }
+
+    public static function delete($operation_id) {
+        $operation_id = sanitize_key((string) $operation_id);
+        if (!self::is_uuid($operation_id)) {
+            return false;
+        }
+        return delete_transient(self::key($operation_id));
     }
 
     private static function token_hash($token) {
