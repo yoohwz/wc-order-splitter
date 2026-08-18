@@ -1,11 +1,18 @@
-name: Build plugin package
+name: Release package
 
 on:
-  push:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
     branches:
       - main
-      - 'codex/**'
-  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: release-package-main
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -13,11 +20,14 @@ permissions:
 jobs:
   build:
     name: Build reproducible ZIP
+    if: (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout validated main revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Validate release metadata and hard-off runtime
         shell: bash
@@ -72,7 +82,9 @@ jobs:
             'js/post-action-tip.js' \
             'js/split-table.js' \
             'inc/mutation-v2' \
-            'tests'; do
+            'tests' \
+            'docs' \
+            'AGENTS.md'; do
             if test -e "$package_root/$forbidden_path"; then
               echo "Unsafe or development-only path entered package: $forbidden_path" >&2
               exit 1
@@ -102,8 +114,11 @@ jobs:
           unzip -t wc-order-splitter.zip
           unzip -l wc-order-splitter.zip
           unzip -p wc-order-splitter.zip wc-order-splitter/wc-order-splitter.php | grep -Fq 'Plugin Name: Order Splitter for WooCommerce'
-          unzip -p wc-order-splitter.zip wc-order-splitter/readme.txt | grep -Fq 'Stable tag: 1.4.12'
-          if unzip -Z1 wc-order-splitter.zip | grep -E '(^|/)(tests|docs|node_modules|inc/mutation-v2)(/|$)'; then
+          archive_version=$(unzip -p wc-order-splitter.zip wc-order-splitter/wc-order-splitter.php | sed -n 's/^ \* Version: //p' | head -n 1)
+          archive_stable_tag=$(unzip -p wc-order-splitter.zip wc-order-splitter/readme.txt | sed -n 's/^Stable tag: //p' | head -n 1)
+          test -n "$archive_version"
+          test "$archive_version" = "$archive_stable_tag"
+          if unzip -Z1 wc-order-splitter.zip | grep -E '(^|/)(tests|docs|node_modules|inc/mutation-v2)(/|$)|(^|/)AGENTS\.md$'; then
             echo 'Development-only content entered the ZIP.' >&2
             exit 1
           fi
@@ -111,7 +126,7 @@ jobs:
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wc-order-splitter-${{ github.sha }}
+          name: wc-order-splitter-${{ github.event.workflow_run.head_sha || github.sha }}
           path: wc-order-splitter.zip
           if-no-files-found: error
           retention-days: 14

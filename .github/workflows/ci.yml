@@ -4,8 +4,13 @@ on:
   push:
     branches:
       - main
-      - 'codex/**'
   pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -40,7 +45,7 @@ jobs:
         run: php tests/unit/run.php
 
   foundation-contract:
-    name: P1 hard-off and architecture contract
+    name: Architecture and hard-off contract
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -61,12 +66,15 @@ jobs:
             exit 1
           fi
 
-      - name: Verify P1 remains internally hard off
+      - name: Verify mutation runtime remains internally hard off
         shell: bash
         run: |
           set -euo pipefail
-          grep -Fq 'Version: 1.4.12' wc-order-splitter.php
-          grep -Fq 'Stable tag: 1.4.12' readme.txt
+          plugin_version=$(sed -n 's/^ \* Version: //p' wc-order-splitter.php | head -n 1)
+          stable_tag=$(sed -n 's/^Stable tag: //p' readme.txt | head -n 1)
+          test -n "$plugin_version"
+          test -n "$stable_tag"
+          test "$plugin_version" = "$stable_tag"
           grep -Fq 'Requires at least: 6.5' wc-order-splitter.php
           grep -Fq 'Requires at least: 6.5' readme.txt
           grep -A2 -F 'public static function mutations_enabled()' inc/cores/safety.php | grep -Fq 'return false;'
@@ -107,6 +115,106 @@ jobs:
           grep -Fq 'WCOS_Order_Mutation_Authorizer::assert_workflow' inc/domain/class-wcos-mutation-gateway.php
           grep -Fq 'inc/domain/' AGENTS.md
           grep -Fq 'inc/domain/' docs/order-mutation-v2-contract.md
+
+  package-check:
+    name: Package safety contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Validate release metadata and hard-off runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          plugin_version=$(sed -n 's/^ \* Version: //p' wc-order-splitter.php | head -n 1)
+          stable_tag=$(sed -n 's/^Stable tag: //p' readme.txt | head -n 1)
+
+          test -n "$plugin_version"
+          test -n "$stable_tag"
+          test "$plugin_version" = "$stable_tag"
+          grep -A2 -F 'public static function mutations_enabled()' inc/cores/safety.php | grep -Fq 'return false;'
+          grep -Fq 'private static $states = array(' inc/domain/class-wcos-feature-gates.php
+          test ! -d inc/mutation-v2
+
+          telemetry_host='yoexpress''.''top'
+          if grep -R --line-number --fixed-strings "$telemetry_host" \
+            wc-order-splitter.php readme.txt changelog.txt inc js \
+            --include='*.php' --include='*.js' --include='*.txt'; then
+            echo 'Removed telemetry endpoint must not be present in distributable source.' >&2
+            exit 1
+          fi
+
+          if grep -R --line-number -E 'WC_ORDER_SPLITTER_(MUTATIONS|SPLIT|DUPLICATE|MERGE|RETURN|BULK_RETURN)_ENABLED' \
+            wc-order-splitter.php inc/cores inc/domain; then
+            echo 'Externally overrideable mutation gates must not return.' >&2
+            exit 1
+          fi
+
+      - name: Build package tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_root="$RUNNER_TEMP/package/wc-order-splitter"
+          mkdir -p "$package_root"
+
+          rsync -a ./ "$package_root/" --exclude-from='.distignore'
+
+          find "$package_root" -type f -name '*.php' -print0 | while IFS= read -r -d '' file; do
+            php -l "$file" >/dev/null
+          done
+
+          for forbidden_path in \
+            'inc/backend/actions' \
+            'inc/backend/orders-bulk-return.php' \
+            'inc/backend/order-split-button.php' \
+            'inc/backend/order-return-option.php' \
+            'inc/backend/order-duplicate-option.php' \
+            'inc/backend/order-merge-option.php' \
+            'js/bulk-return-action.js' \
+            'js/merge-action.js' \
+            'js/post-action-tip.js' \
+            'js/split-table.js' \
+            'inc/mutation-v2' \
+            'tests' \
+            'docs' \
+            'AGENTS.md'; do
+            if test -e "$package_root/$forbidden_path"; then
+              echo "Unsafe or development-only path entered package: $forbidden_path" >&2
+              exit 1
+            fi
+          done
+
+          if find "$package_root" -type l | grep -q .; then
+            echo 'Release package must not contain symbolic links.' >&2
+            exit 1
+          fi
+
+          if grep -R --line-number -E 'yoexpress\.top|WC_Order_Splitter_Push_Subscription' "$package_root"; then
+            echo 'Removed telemetry code entered the package.' >&2
+            exit 1
+          fi
+
+          touch -t 200001010000 "$package_root"
+          find "$package_root" -exec touch -t 200001010000 {} +
+
+          cd "$RUNNER_TEMP/package"
+          find wc-order-splitter -type f -print | LC_ALL=C sort | zip -X -q "$GITHUB_WORKSPACE/wc-order-splitter.zip" -@
+
+      - name: Inspect package
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -t wc-order-splitter.zip
+          unzip -p wc-order-splitter.zip wc-order-splitter/wc-order-splitter.php | grep -Fq 'Plugin Name: Order Splitter for WooCommerce'
+          archive_version=$(unzip -p wc-order-splitter.zip wc-order-splitter/wc-order-splitter.php | sed -n 's/^ \* Version: //p' | head -n 1)
+          archive_stable_tag=$(unzip -p wc-order-splitter.zip wc-order-splitter/readme.txt | sed -n 's/^Stable tag: //p' | head -n 1)
+          test -n "$archive_version"
+          test "$archive_version" = "$archive_stable_tag"
+          if unzip -Z1 wc-order-splitter.zip | grep -E '(^|/)(tests|docs|node_modules|inc/mutation-v2)(/|$)|(^|/)AGENTS\.md$'; then
+            echo 'Development-only content entered the ZIP.' >&2
+            exit 1
+          fi
 
   integration-smoke:
     name: WooCommerce 11.0.1 / ${{ matrix.storage }} storage
@@ -217,6 +325,9 @@ jobs:
       - name: Verify mutation lease and durable journal controls
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/operation-control-smoke.php
 
+      - name: Verify mutation leases stay bound to their operation ID
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/lease-operation-binding-smoke.php
+
       - name: Verify governance, authorization, and metadata policy
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/governance-smoke.php
 
@@ -237,6 +348,15 @@ jobs:
 
       - name: Verify retry idempotency at every persistence boundary
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/failure-matrix-smoke.php
+
+      - name: Verify source-save crash recovery contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/source-save-crash-smoke.php
+
+      - name: Verify authoritative journal survives bounded display history
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/journal-durability-smoke.php
+
+      - name: Reject corrupted reduced-stock source markers
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/stock-marker-validation-smoke.php
 
       - name: Verify real concurrent worker lease exclusion
         if: matrix.storage == 'hpos'
@@ -270,3 +390,27 @@ jobs:
       - name: Stop WordPress
         if: always()
         run: npx wp-env stop
+
+  required:
+    name: Required CI
+    if: always()
+    needs:
+      - php-syntax
+      - foundation-contract
+      - package-check
+      - integration-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all required jobs passed
+        env:
+          PHP_SYNTAX_RESULT: ${{ needs['php-syntax'].result }}
+          FOUNDATION_RESULT: ${{ needs['foundation-contract'].result }}
+          PACKAGE_RESULT: ${{ needs['package-check'].result }}
+          INTEGRATION_RESULT: ${{ needs['integration-smoke'].result }}
+        run: |
+          set -euo pipefail
+          test "$PHP_SYNTAX_RESULT" = success
+          test "$FOUNDATION_RESULT" = success
+          test "$PACKAGE_RESULT" = success
+          test "$INTEGRATION_RESULT" = success
+          echo "required-ci-ok"
