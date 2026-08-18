@@ -47,7 +47,6 @@ class WC_Order_Splitter_Script {
 		WCOS_Mutation_Commit_Guard::bootstrap();
 		include_once $root . 'domain/class-wcos-duplicate-order-service.php';
 		include_once $root . 'domain/class-wcos-split-order-service.php';
-		include_once $root . 'domain/class-wcos-split-recovery-signature.php';
 		include_once $root . 'domain/class-wcos-split-compensator.php';
 		include_once $root . 'domain/class-wcos-mutation-recovery-coordinator.php';
 		WCOS_Mutation_Recovery_Coordinator::bootstrap();
