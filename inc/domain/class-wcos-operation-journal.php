@@ -11,8 +11,14 @@ final class WCOS_Operation_Journal {
 	const MAX_ENTRIES = 20;
 
 	public static function start(WC_Order $order, $operation_id, $type, array $context = array()) {
+		$operation_id = sanitize_key($operation_id);
+		$existing = self::get($order, $operation_id);
+		if (is_array($existing)) {
+			return false;
+		}
+
 		return self::write($order, array(
-			'operation_id' => sanitize_key($operation_id),
+			'operation_id' => $operation_id,
 			'type' => sanitize_key($type),
 			'status' => 'started',
 			'started_at' => gmdate('c'),
@@ -29,16 +35,23 @@ final class WCOS_Operation_Journal {
 		return self::transition($order, $operation_id, 'failed', $context);
 	}
 
-	public static function has_completed(WC_Order $order, $operation_id) {
+	public static function get(WC_Order $order, $operation_id) {
+		$operation_id = sanitize_key($operation_id);
 		foreach (self::entries($order) as $entry) {
-			if (isset($entry['operation_id'], $entry['status']) && $entry['operation_id'] === $operation_id && 'completed' === $entry['status']) {
-				return true;
+			if (isset($entry['operation_id']) && $entry['operation_id'] === $operation_id) {
+				return $entry;
 			}
 		}
-		return false;
+		return null;
+	}
+
+	public static function has_completed(WC_Order $order, $operation_id) {
+		$entry = self::get($order, $operation_id);
+		return is_array($entry) && isset($entry['status']) && 'completed' === $entry['status'];
 	}
 
 	private static function transition(WC_Order $order, $operation_id, $status, array $context) {
+		$operation_id = sanitize_key($operation_id);
 		$entries = self::entries($order);
 		$found = false;
 		foreach ($entries as &$entry) {
