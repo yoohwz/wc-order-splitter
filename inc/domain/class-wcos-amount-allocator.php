@@ -5,9 +5,12 @@ if (!defined('ABSPATH') && 'cli' !== PHP_SAPI) {
 }
 
 /**
- * Deterministically allocates an amount while preserving the exact minor-unit sum.
+ * Deterministically allocates an amount while preserving the exact minor-unit
+ * sum. Monetary values and weights are converted to integers before division.
  */
 final class WCOS_Amount_Allocator {
+
+	const WEIGHT_PRECISION = 6;
 
 	/**
 	 * @param int|float|string $amount    Amount to allocate.
@@ -17,31 +20,29 @@ final class WCOS_Amount_Allocator {
 	 */
 	public static function allocate($amount, array $weights, $precision = 2) {
 		$precision = (int) $precision;
-		if ($precision < 0 || $precision > 8) {
-			throw new InvalidArgumentException('Precision must be between 0 and 8.');
-		}
-
 		if (empty($weights)) {
 			throw new InvalidArgumentException('At least one allocation weight is required.');
 		}
 
-		$factor = 10 ** $precision;
-		$units = (int) round(((float) $amount) * $factor, 0, PHP_ROUND_HALF_UP);
-		$sign = $units < 0 ? -1 : 1;
-		$absolute_units = abs($units);
-
-		$total_weight = 0.0;
+		$amount_units = WCOS_Decimal::to_units($amount, $precision);
+		$sign = $amount_units < 0 ? -1 : 1;
+		$absolute_units = abs($amount_units);
 		$normalized = array();
+		$total_weight = 0;
+
 		foreach ($weights as $key => $weight) {
-			$weight = (float) $weight;
-			if ($weight < 0) {
+			$weight_units = WCOS_Decimal::to_units($weight, self::WEIGHT_PRECISION);
+			if ($weight_units < 0) {
 				throw new InvalidArgumentException('Allocation weights cannot be negative.');
 			}
-			$normalized[$key] = $weight;
-			$total_weight += $weight;
+			if ($weight_units > PHP_INT_MAX - $total_weight) {
+				throw new OverflowException('Allocation weight total exceeds the supported integer range.');
+			}
+			$normalized[$key] = $weight_units;
+			$total_weight += $weight_units;
 		}
 
-		if ($total_weight <= 0.0) {
+		if ($total_weight <= 0) {
 			if (0 === $absolute_units) {
 				return self::format_zero_allocations(array_keys($normalized), $precision);
 			}
@@ -53,13 +54,13 @@ final class WCOS_Amount_Allocator {
 		$allocated_units = 0;
 		$position = 0;
 
-		foreach ($normalized as $key => $weight) {
-			$raw = ($absolute_units * $weight) / $total_weight;
-			$base = (int) floor($raw);
+		foreach ($normalized as $key => $weight_units) {
+			$product = self::safe_multiply($absolute_units, $weight_units);
+			$base = intdiv($product, $total_weight);
 			$base_units[$key] = $base;
 			$fractions[] = array(
 				'key' => $key,
-				'fraction' => $raw - $base,
+				'remainder' => $product % $total_weight,
 				'position' => $position++,
 			);
 			$allocated_units += $base;
@@ -68,22 +69,26 @@ final class WCOS_Amount_Allocator {
 		usort(
 			$fractions,
 			static function($left, $right) {
-				if ($left['fraction'] === $right['fraction']) {
+				if ($left['remainder'] === $right['remainder']) {
 					return $left['position'] <=> $right['position'];
 				}
-				return ($left['fraction'] > $right['fraction']) ? -1 : 1;
+				return $left['remainder'] > $right['remainder'] ? -1 : 1;
 			}
 		);
 
 		$remainder = $absolute_units - $allocated_units;
+		if ($remainder > count($fractions)) {
+			throw new RuntimeException('Allocation remainder exceeded the largest-remainder bound.');
+		}
+
 		for ($index = 0; $index < $remainder; $index++) {
-			$key = $fractions[$index % count($fractions)]['key'];
+			$key = $fractions[$index]['key'];
 			$base_units[$key]++;
 		}
 
 		$result = array();
 		foreach ($base_units as $key => $value) {
-			$result[$key] = self::format_units($value * $sign, $precision);
+			$result[$key] = WCOS_Decimal::from_units($value * $sign, $precision);
 		}
 
 		return $result;
@@ -92,13 +97,18 @@ final class WCOS_Amount_Allocator {
 	private static function format_zero_allocations(array $keys, $precision) {
 		$result = array();
 		foreach ($keys as $key) {
-			$result[$key] = self::format_units(0, $precision);
+			$result[$key] = WCOS_Decimal::from_units(0, $precision);
 		}
 		return $result;
 	}
 
-	private static function format_units($units, $precision) {
-		$factor = 10 ** $precision;
-		return number_format($units / $factor, $precision, '.', '');
+	private static function safe_multiply($left, $right) {
+		if (0 === $left || 0 === $right) {
+			return 0;
+		}
+		if ($left > intdiv(PHP_INT_MAX, $right)) {
+			throw new OverflowException('Allocation product exceeds the supported integer range.');
+		}
+		return $left * $right;
 	}
 }
