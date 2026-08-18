@@ -15,6 +15,7 @@ final class WCOS_Mutation_Contract {
 			'line_subtotal',
 			'line_total',
 			'discount_total',
+			'discount_tax',
 			'fees_total',
 			'shipping_total',
 			'tax_total',
@@ -38,15 +39,27 @@ final class WCOS_Mutation_Contract {
 		);
 
 		if (isset($before['line_quantities']) || isset($after['line_quantities'])) {
-			$before_lines = isset($before['line_quantities']) ? (array) $before['line_quantities'] : array();
-			$after_lines = isset($after['line_quantities']) ? (array) $after['line_quantities'] : array();
-			ksort($before_lines, SORT_STRING);
-			ksort($after_lines, SORT_STRING);
+			$before_lines = self::normalize_line_quantities(
+				isset($before['line_quantities']) ? (array) $before['line_quantities'] : array()
+			);
+			$after_lines = self::normalize_line_quantities(
+				isset($after['line_quantities']) ? (array) $after['line_quantities'] : array()
+			);
 
 			if ($before_lines !== $after_lines) {
 				throw new RuntimeException('Line quantity conservation failed.');
 			}
 		}
+	}
+
+	private static function normalize_line_quantities(array $lines) {
+		$normalized = array();
+		foreach ($lines as $identity => $quantity) {
+			$factor = 1000000;
+			$normalized[(string) $identity] = (int) round(((float) $quantity) * $factor, 0, PHP_ROUND_HALF_UP);
+		}
+		ksort($normalized, SORT_STRING);
+		return $normalized;
 	}
 
 	private static function assert_decimal_equal($before, $after, $precision, $label) {
