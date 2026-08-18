@@ -131,6 +131,7 @@ class WC_Order_Splitter_Script {
 		include_once plugin_dir_path(__FILE__) . 'order-mutation/class-mutation-support.php';
 		include_once plugin_dir_path(__FILE__) . 'order-mutation/class-operation-journal.php';
 		include_once plugin_dir_path(__FILE__) . 'order-mutation/class-order-item-cloner.php';
+		include_once plugin_dir_path(__FILE__) . 'order-mutation/class-charge-integrity.php';
 		include_once plugin_dir_path(__FILE__) . 'order-mutation/class-order-mutation-engine.php';
 		include_once plugin_dir_path(__FILE__) . '../backend/settings.php';
 		include_once plugin_dir_path(__FILE__) . 'order-mutation/class-mutation-settings.php';
