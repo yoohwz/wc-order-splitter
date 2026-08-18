@@ -22,18 +22,26 @@ wcos_control_assert(is_string($lease_one) && '' !== $lease_one, 'First mutation 
 wcos_control_assert(false === WCOS_Operation_Lock::acquire($order_id, $operation_two, 30), 'A concurrent mutation acquired the same order lease.');
 wcos_control_assert(WCOS_Operation_Lock::is_owned($order_id, $lease_one), 'The first worker did not own its lease.');
 
-/* Expire the first lease and prove stale release cannot delete its successor. */
+/* Consecutive refreshes in one second must remain successful and monotonic. */
+wcos_control_assert(WCOS_Operation_Lock::refresh($order_id, $lease_one, 30, $operation_one), 'The first rapid lease refresh failed.');
+wcos_control_assert(WCOS_Operation_Lock::refresh($order_id, $lease_one, 30, $operation_one), 'The second rapid lease refresh was mistaken for a lost lease.');
+$rapid = get_option('wcos_mutation_lock_' . $order_id);
+wcos_control_assert(is_array($rapid) && isset($rapid['revision']) && (int) $rapid['revision'] >= 3, 'Lease refresh revision did not advance monotonically.');
+
+/* Expire the first lease: the stale owner cannot refresh it. */
 $lock_key = 'wcos_mutation_lock_' . $order_id;
 $expired = get_option($lock_key);
 wcos_control_assert(is_array($expired), 'Mutation lease option is missing.');
 $expired['expires_at'] = time() - 1;
 update_option($lock_key, $expired, false);
+wcos_control_assert(false === WCOS_Operation_Lock::refresh($order_id, $lease_one, 30, $operation_one), 'An expired worker refreshed its stale lease.');
 
+/* A new operation may take over, and stale release cannot delete its successor. */
 $lease_two = WCOS_Operation_Lock::acquire($order_id, $operation_two, 30);
 wcos_control_assert(is_string($lease_two) && '' !== $lease_two && $lease_two !== $lease_one, 'Expired lease was not replaced with a unique successor.');
 wcos_control_assert(false === WCOS_Operation_Lock::release($order_id, $lease_one), 'A stale worker released the successor lease.');
 wcos_control_assert(WCOS_Operation_Lock::is_owned($order_id, $lease_two), 'The successor lease disappeared after stale release.');
-wcos_control_assert(WCOS_Operation_Lock::refresh($order_id, $lease_two, 60), 'The active lease could not be refreshed.');
+wcos_control_assert(WCOS_Operation_Lock::refresh($order_id, $lease_two, 60, $operation_two), 'The active lease could not be refreshed.');
 wcos_control_assert(WCOS_Operation_Lock::release($order_id, $lease_two), 'The active worker could not release its lease.');
 wcos_control_assert(false === get_option($lock_key, false), 'Mutation lease option remained after release.');
 
