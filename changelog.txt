@@ -2,6 +2,15 @@
 
 == Changelog ==
 
+= 1.4.12 (Aug 18, 2026) =
+* Security/Privacy: Removed the automatic external subscription request and its data transmission path.
+* Safety: Temporarily disabled split, duplicate, merge, return, and bulk-return mutations while integrity safeguards are applied.
+* Safety: Guarded unavailable premium-only settings sections from direct URL access.
+* Compliance: Removed the WordPress.org URL from the `Plugin URI` header.
+* Compatibility: Raised the minimum WordPress version to 6.5 for Core plugin-dependency support.
+* Compatibility: Updated the declared WooCommerce tested version to 11.0.
+* Improve: Kept settings and order relationship labels available during the safety release.
+
 = 1.4.11 (Jun 13, 2026) =
 * Fix: Hardened AJAX capability checks for split and bulk return actions.
 * Fix: Validated split quantities against each original line item.
