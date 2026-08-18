@@ -48,8 +48,8 @@ final class WCOS_Split_Preflight {
         );
     }
 
-    public static function assert_supported(WC_Order $source) {
-        $report = self::report($source);
+    public static function assert_supported(WC_Order $source, $precision = null) {
+        $report = self::report($source, $precision);
         if (empty($report['supported'])) {
             throw new WCOS_Split_Preflight_Exception(
                 isset($report['reason']) ? $report['reason'] : 'unsupported',
@@ -60,7 +60,10 @@ final class WCOS_Split_Preflight {
         return $report;
     }
 
-    public static function report(WC_Order $source) {
+    public static function report(WC_Order $source, $precision = null) {
+        $precision = null === $precision
+            ? WCOS_Price_Precision_Scope::store_precision()
+            : WCOS_Price_Precision_Scope::validate($precision);
         $report = array(
             'supported' => false,
             'reason' => '',
@@ -70,6 +73,7 @@ final class WCOS_Split_Preflight {
             'status' => sanitize_key((string) $source->get_status()),
             'currency' => (string) $source->get_currency(),
             'prices_include_tax' => (bool) $source->get_prices_include_tax(),
+            'price_precision' => $precision,
             'is_paid' => (bool) $source->is_paid(),
             'line_count' => count($source->get_items('line_item')),
             'shipping_count' => count($source->get_items('shipping')),
@@ -91,7 +95,7 @@ final class WCOS_Split_Preflight {
         );
 
         foreach ($source->get_items('fee') as $fee) {
-            if (WCOS_Decimal::to_units($fee->get_total(), wc_get_price_decimals()) < 0) {
+            if (WCOS_Decimal::to_units($fee->get_total(), $precision) < 0) {
                 $report['negative_fee_count']++;
             }
         }
@@ -210,7 +214,7 @@ final class WCOS_Split_Preflight {
         }
 
         try {
-            WCOS_Order_Totals_Rebuilder::assert_consistent($source, wc_get_price_decimals());
+            WCOS_Order_Totals_Rebuilder::assert_consistent($source, $precision);
         } catch (Throwable $throwable) {
             return self::reject($report, 'inconsistent_totals', __('The source order totals are internally inconsistent and cannot be split safely.', 'wc-order-splitter'));
         }
