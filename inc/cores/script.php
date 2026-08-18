@@ -27,13 +27,7 @@ class WC_Order_Splitter_Script {
 		include_once plugin_dir_path(__FILE__) . '../backend/yoohw-woo-settings-tabs-reorder.php';
 		include_once plugin_dir_path(__FILE__) . 'safety.php';
 
-		if (defined('WC_ORDER_SPLITTER_MUTATIONS_ENABLED') && true === WC_ORDER_SPLITTER_MUTATIONS_ENABLED) {
-			include_once plugin_dir_path(__FILE__) . '../backend/orders-bulk-return.php';
-			include_once plugin_dir_path(__FILE__) . '../backend/order-split-button.php';
-			include_once plugin_dir_path(__FILE__) . '../backend/order-return-option.php';
-			include_once plugin_dir_path(__FILE__) . '../backend/order-duplicate-option.php';
-			include_once plugin_dir_path(__FILE__) . '../backend/order-merge-option.php';
-		}
+		// Legacy mutation handlers are deliberately never loaded in 1.4.12.
 	}
 }
 
