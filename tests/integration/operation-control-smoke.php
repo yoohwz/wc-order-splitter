@@ -87,5 +87,6 @@ $order->delete(true);
 require __DIR__ . '/p2-quantity-split-adapter-smoke.php';
 require __DIR__ . '/p2-stock-matrix-smoke.php';
 require __DIR__ . '/p2-charge-tax-matrix-smoke.php';
+require __DIR__ . '/p2-production-side-effect-smoke.php';
 
 echo "operation-lock-and-journal-ok\n";
