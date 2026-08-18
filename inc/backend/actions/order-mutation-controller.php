@@ -107,6 +107,9 @@ final class WC_Order_Splitter_Mutation_Controller {
 	public function return_order($order) {
 		try {
 			$original = $this->engine->return_split_order($order);
+			if ($original instanceof WC_Order) {
+				WC_Order_Splitter_Charge_Integrity::normalize_after_return($original);
+			}
 			$url = $original ? $original->get_edit_order_url() : $this->orders_list_url();
 			wp_safe_redirect(add_query_arg('wcos_action_tip', 'return', $url));
 			exit;
@@ -184,7 +187,10 @@ final class WC_Order_Splitter_Mutation_Controller {
 				}
 			} else {
 				try {
-					$this->engine->return_split_order($order);
+					$original = $this->engine->return_split_order($order);
+					if ($original instanceof WC_Order) {
+						WC_Order_Splitter_Charge_Integrity::normalize_after_return($original);
+					}
 					$queued++;
 				} catch (Throwable $error) {
 					// Continue so one invalid order does not prevent the remaining selections.
@@ -212,7 +218,10 @@ final class WC_Order_Splitter_Mutation_Controller {
 			wp_set_current_user(absint($user_id));
 		}
 		try {
-			$this->engine->return_split_order($order);
+			$original = $this->engine->return_split_order($order);
+			if ($original instanceof WC_Order) {
+				WC_Order_Splitter_Charge_Integrity::normalize_after_return($original);
+			}
 		} catch (Throwable $error) {
 			$order->add_order_note(sprintf(__('Queued return failed: %s', 'wc-order-splitter'), $error->getMessage()), false);
 			throw $error;
@@ -248,6 +257,7 @@ final class WC_Order_Splitter_Mutation_Controller {
 				throw new WC_Order_Splitter_Mutation_Exception(__('The split operation is missing its idempotency key. Preview the split again.', 'wc-order-splitter'));
 			}
 			$result = $this->engine->split($order, $plan, $policies, $idempotency_key);
+			WC_Order_Splitter_Charge_Integrity::normalize_after_split($order, $result['new_order_ids']);
 			wp_send_json_success($result);
 		} catch (Throwable $error) {
 			$this->send_error($error);
