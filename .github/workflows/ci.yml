@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   php-syntax:
-    name: PHP syntax (PHP ${{ matrix.php }})
+    name: PHP syntax and unit contracts (PHP ${{ matrix.php }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -40,8 +40,13 @@ jobs:
         run: php tests/unit/run.php
 
   integration-smoke:
-    name: WordPress + WooCommerce + HPOS smoke
+    name: WooCommerce 11.0 / ${{ matrix.storage }} storage
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        storage: [legacy, hpos, hpos-sync]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,29 +62,75 @@ jobs:
       - name: Start WordPress
         run: npx wp-env start
 
-      - name: Install and activate WooCommerce
-        run: npx wp-env run cli wp plugin install woocommerce --activate
+      - name: Install and activate WooCommerce 11.0.0
+        run: npx wp-env run cli wp plugin install woocommerce --version=11.0.0 --activate
 
       - name: Activate Order Splitter
         run: npx wp-env run cli wp plugin activate wc-order-splitter
 
-      - name: Enable HPOS
+      - name: Configure legacy order storage
+        if: matrix.storage == 'legacy'
+        run: |
+          npx wp-env run cli wp option update woocommerce_custom_orders_table_enabled no
+          npx wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled no
+
+      - name: Configure HPOS-only order storage
+        if: matrix.storage == 'hpos'
+        run: |
+          npx wp-env run cli wp option update woocommerce_custom_orders_table_enabled yes
+          npx wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled no
+
+      - name: Configure HPOS compatibility mode
+        if: matrix.storage == 'hpos-sync'
         run: |
           npx wp-env run cli wp option update woocommerce_custom_orders_table_enabled yes
           npx wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled yes
 
-      - name: Verify plugin and safety mode
+      - name: Verify plugin, storage mode, and fail-closed runtime
         shell: bash
+        env:
+          EXPECTED_STORAGE: ${{ matrix.storage }}
         run: |
           set -euo pipefail
           npx wp-env run cli wp plugin is-active woocommerce
           npx wp-env run cli wp plugin is-active wc-order-splitter
-          npx wp-env run cli wp eval 'if (!defined("WC_ORDER_SPLITTER_MUTATIONS_ENABLED") || WC_ORDER_SPLITTER_MUTATIONS_ENABLED !== false) { exit(1); } echo "safety-mode-ok\n";'
+          npx wp-env run cli wp eval '
+            $expected = getenv("EXPECTED_STORAGE");
+            $hpos = \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
+            if (("legacy" === $expected && $hpos) || ("legacy" !== $expected && !$hpos)) { exit(1); }
+            $gates = array(
+              "WC_ORDER_SPLITTER_MUTATIONS_ENABLED",
+              "WC_ORDER_SPLITTER_SPLIT_ENABLED",
+              "WC_ORDER_SPLITTER_DUPLICATE_ENABLED",
+              "WC_ORDER_SPLITTER_MERGE_ENABLED",
+              "WC_ORDER_SPLITTER_RETURN_ENABLED",
+              "WC_ORDER_SPLITTER_BULK_RETURN_ENABLED"
+            );
+            foreach ($gates as $gate) {
+              if (!defined($gate) || false !== constant($gate)) { exit(1); }
+            }
+            if (WCOS_Feature_Gates::any_enabled()) { exit(1); }
+            $legacy_hooks = array(
+              array("wp_ajax_split_order", false),
+              array("wp_ajax_split_order_by_category", false),
+              array("wp_ajax_split_order_by_stock_status", false),
+              array("wp_ajax_merge_order", false),
+              array("woocommerce_order_action_yoos_duplicate_order", false),
+              array("woocommerce_order_action_yoos_return_order", false)
+            );
+            foreach ($legacy_hooks as $hook) {
+              if (false !== has_action($hook[0])) { exit(1); }
+            }
+            echo "storage-and-safety-mode-ok\n";
+          '
 
-      - name: Verify duplicate mutation service invariants
+      - name: Verify mutation lease and journal controls
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/operation-control-smoke.php
+
+      - name: Verify duplicate integrity, idempotency, and recovery
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/duplicate-smoke.php
 
-      - name: Verify split conservation and idempotency
+      - name: Verify split conservation, idempotency, and recovery
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/split-smoke.php
 
       - name: Stop WordPress
@@ -93,20 +144,48 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Reject removed telemetry endpoint
+      - name: Reject removed telemetry integration
         shell: bash
         run: |
           set -euo pipefail
           telemetry_host='yoexpress''.''top'
+          test ! -e inc/cores/api/push-subscription.php
           if grep -R --line-number --fixed-strings "$telemetry_host" . --exclude-dir=.git; then
             echo 'Removed telemetry endpoint must not be present.' >&2
             exit 1
           fi
+          if grep -R --line-number --fixed-strings 'WC_Order_Splitter_Push_Subscription' . --exclude-dir=.git; then
+            echo 'Removed telemetry class must not be referenced.' >&2
+            exit 1
+          fi
 
-      - name: Verify mutations fail closed in 1.4.12
+      - name: Verify 1.4.12 remains fail closed
         shell: bash
         run: |
           set -euo pipefail
-          grep -Fq "define('WC_ORDER_SPLITTER_MUTATIONS_ENABLED', false);" wc-order-splitter.php
           grep -Fq 'Stable tag: 1.4.12' readme.txt
           grep -Fq 'Version: 1.4.12' wc-order-splitter.php
+          grep -Fq "'WC_ORDER_SPLITTER_MUTATIONS_ENABLED'," wc-order-splitter.php
+          grep -Fq "'WC_ORDER_SPLITTER_SPLIT_ENABLED'," wc-order-splitter.php
+          grep -Fq "'WC_ORDER_SPLITTER_DUPLICATE_ENABLED'," wc-order-splitter.php
+          grep -Fq "'WC_ORDER_SPLITTER_MERGE_ENABLED'," wc-order-splitter.php
+          grep -Fq "'WC_ORDER_SPLITTER_RETURN_ENABLED'," wc-order-splitter.php
+          grep -Fq "'WC_ORDER_SPLITTER_BULK_RETURN_ENABLED'," wc-order-splitter.php
+          grep -Fq 'define($gate, false);' wc-order-splitter.php
+          grep -Fq 'Legacy mutation handlers are deliberately never loaded here.' inc/cores/script.php
+
+      - name: Reject legacy mutation handler loading
+        shell: bash
+        run: |
+          set -euo pipefail
+          for legacy_handler in \
+            'orders-bulk-return.php' \
+            'order-split-button.php' \
+            'order-return-option.php' \
+            'order-duplicate-option.php' \
+            'order-merge-option.php'; do
+            if grep -F "$legacy_handler" inc/cores/script.php; then
+              echo "Legacy mutation handler must not be loaded: $legacy_handler" >&2
+              exit 1
+            fi
+          done
