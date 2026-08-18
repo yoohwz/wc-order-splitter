@@ -28,15 +28,17 @@ final class WCOS_Split_Preflight_Exception extends RuntimeException {
  * expose only compatibility facts needed by a future confirmation UI.
  */
 final class WCOS_Split_Preflight {
-	const POLICY_VERSION = 1;
+	const POLICY_VERSION = 2;
 
 	public static function policy() {
 		return array(
 			'policy_version' => self::POLICY_VERSION,
 			'shipping' => 'keep_on_source',
 			'fees' => 'keep_on_source',
+			'negative_fees' => 'reject',
 			'coupons' => 'reject',
 			'refunds' => 'reject',
+			'payment' => 'source_only',
 			'payment_transaction' => 'keep_on_source',
 			'child_status' => 'pending',
 			'tax' => 'preserve_historical',
@@ -67,9 +69,11 @@ final class WCOS_Split_Preflight {
 			'status' => sanitize_key((string) $source->get_status()),
 			'currency' => (string) $source->get_currency(),
 			'prices_include_tax' => (bool) $source->get_prices_include_tax(),
+			'is_paid' => (bool) $source->is_paid(),
 			'line_count' => count($source->get_items('line_item')),
 			'shipping_count' => count($source->get_items('shipping')),
 			'fee_count' => count($source->get_items('fee')),
+			'negative_fee_count' => 0,
 			'coupon_count' => count($source->get_items('coupon')),
 			'refund_count' => count($source->get_refunds()),
 			'has_transaction' => '' !== (string) $source->get_transaction_id(),
@@ -80,6 +84,12 @@ final class WCOS_Split_Preflight {
 			'backorder_lines' => 0,
 			'policy' => self::policy(),
 		);
+
+		foreach ($source->get_items('fee') as $fee) {
+			if (WCOS_Decimal::to_units($fee->get_total(), wc_get_price_decimals()) < 0) {
+				$report['negative_fee_count']++;
+			}
+		}
 
 		if (!$source->get_id()) {
 			return self::reject($report, 'unpersisted_order', __('The source order must be persisted before it can be split.', 'wc-order-splitter'));
@@ -92,6 +102,9 @@ final class WCOS_Split_Preflight {
 		}
 		if ('' === (string) $source->get_currency()) {
 			return self::reject($report, 'missing_currency', __('The source order does not have a currency.', 'wc-order-splitter'));
+		}
+		if ($report['negative_fee_count'] > 0) {
+			return self::reject($report, 'negative_fee_policy_missing', __('Orders containing negative fee rows are not supported until an explicit discount-like fee policy is implemented.', 'wc-order-splitter'));
 		}
 		if ($report['coupon_count'] > 0) {
 			return self::reject($report, 'coupon_policy_missing', __('Orders containing coupon rows are not supported until a coupon allocation policy is implemented.', 'wc-order-splitter'));
