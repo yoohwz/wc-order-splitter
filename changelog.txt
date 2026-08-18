@@ -2,6 +2,23 @@
 
 == Changelog ==
 
+= 1.5.0 (Aug 18, 2026) =
+* New: Rebuilt Split, Duplicate, Merge, and Return on a shared order-mutation engine.
+* New: Added operation snapshots, UUIDs, per-order locks, structured journals, and compensation paths for supported failures.
+* New: Added variation-aware exact line identity and protected metadata handling.
+* New: Added preflight preview and explicit confirmation for Split and Merge.
+* New: Added explicit shipping allocation policies with `keep_on_original` as the safe default.
+* New: Added residual-aware monetary, tax, and `_reduced_stock` allocation.
+* New: Added semantic relationship links for legacy and HPOS order screens.
+* New: Bulk Return now uses Action Scheduler when available.
+* New: Added unit tests, WooCommerce HPOS on/off smoke tests, Plugin Check CI, and deterministic release archives.
+* Fix: Duplicate now creates new order-item objects, preserves currency, avoids transaction IDs, and no longer uses `checkout-draft`.
+* Fix: Merge blocks self-merge and validates compatibility before mutation.
+* Fix: Category split preserves uncategorized and deleted-product lines and groups by stable category IDs.
+* Fix: Return and Merge use variation-aware line identity and transfer stock bookkeeping rather than matching only parent product IDs.
+* Privacy: Removed automatic external subscription/telemetry transmission.
+* Compliance: Removed the invalid WordPress.org `Plugin URI` header and added a WooCommerce runtime dependency guard.
+
 = 1.4.12 (Aug 18, 2026) =
 * Security/Privacy: Removed the automatic external subscription request and its data transmission path.
 * Safety: Temporarily disabled split, duplicate, merge, and return mutations while integrity safeguards are applied.
