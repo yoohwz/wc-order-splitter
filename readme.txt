@@ -1,7 +1,7 @@
 === Order Splitter for WooCommerce ===
 Contributors: yoohw
 Tags: woocommerce, split order, order management, duplicate order, merge orders
-Requires at least: 6.3
+Requires at least: 6.5
 Tested up to: 7.0
 WC tested up to: 11.0
 Requires PHP: 7.4
@@ -76,6 +76,7 @@ Older release notes are available in `changelog.txt`.
 * Safety: Temporarily disabled split, duplicate, merge, return, and bulk-return mutations while the order mutation engine is hardened.
 * Safety: Added an admin notice explaining the temporary fail-closed mode without modifying existing order data.
 * Compliance: Replaced the WordPress.org URL in `Plugin URI` with the plugin's source repository URL.
+* Compatibility: Raised the minimum WordPress version to 6.5 so Core can enforce the WooCommerce plugin dependency.
 * Compatibility: Updated the declared WooCommerce tested version to 11.0.
 
 = 1.4.11 (Jun 13, 2026) =
