@@ -8,10 +8,23 @@ use Automattic\WooCommerce\Utilities\OrderUtil;
  * Storage-aware lookup for mutation relation metadata.
  *
  * HPOS accepts WC_Order_Query meta_query directly. The legacy CPT store does
- * not, so its documented datastore filter is used to inject an equivalent
- * WP_Query meta condition without bypassing WooCommerce order hydration.
+ * not. For legacy only, supported _wcos_ relation queries are tokenized before
+ * datastore validation and injected through WooCommerce's CPT query filter.
  */
 final class WCOS_Order_Relation_Repository {
+
+	private static $bootstrapped = false;
+	private static $legacy_contexts = array();
+
+	public static function bootstrap() {
+		if (self::$bootstrapped) {
+			return;
+		}
+		self::$bootstrapped = true;
+
+		add_filter('woocommerce_order_query_args', array(__CLASS__, 'tokenize_legacy_query'), 9);
+		add_filter('woocommerce_order_data_store_cpt_get_orders_query', array(__CLASS__, 'inject_legacy_query'), 10, 2);
+	}
 
 	/**
 	 * @param array $conditions Meta conditions containing key/value and optional compare/type.
@@ -30,40 +43,72 @@ final class WCOS_Order_Relation_Repository {
 			'type' => 'shop_order',
 			'orderby' => 'ID',
 			'order' => 'ASC',
+			'meta_query' => array_merge(array('relation' => 'AND'), $conditions),
 		);
 
-		if (self::uses_hpos()) {
-			$args['meta_query'] = array_merge(array('relation' => 'AND'), $conditions);
-			return array_values(array_filter(wc_get_orders($args), array(__CLASS__, 'is_order')));
+		return array_values(array_filter(wc_get_orders($args), array(__CLASS__, 'is_order')));
+	}
+
+	public static function tokenize_legacy_query($query_args) {
+		if (self::uses_hpos() || empty($query_args['meta_query']) || !is_array($query_args['meta_query'])) {
+			return $query_args;
 		}
 
-		$lookup_token = 'wcos_' . sanitize_key(wp_generate_uuid4());
-		$args['wcos_relation_lookup'] = $lookup_token;
-		$filter = static function($wp_query_args, $query_vars) use ($lookup_token, $conditions) {
-			if (!isset($query_vars['wcos_relation_lookup']) || $lookup_token !== $query_vars['wcos_relation_lookup']) {
-				return $wp_query_args;
-			}
+		$conditions = self::supported_relation_query($query_args['meta_query']);
+		if (null === $conditions) {
+			return $query_args;
+		}
 
-			unset($wp_query_args['wcos_relation_lookup']);
-			if (!isset($wp_query_args['meta_query']) || !is_array($wp_query_args['meta_query'])) {
-				$wp_query_args['meta_query'] = array();
-			}
-			$wp_query_args['meta_query'][] = array_merge(array('relation' => 'AND'), $conditions);
+		$token = 'wcos_' . sanitize_key(wp_generate_uuid4());
+		self::$legacy_contexts[$token] = $conditions;
+		unset($query_args['meta_query']);
+		$query_args['wcos_relation_lookup'] = $token;
+		return $query_args;
+	}
+
+	public static function inject_legacy_query($wp_query_args, $query_vars) {
+		$token = isset($query_vars['wcos_relation_lookup']) ? sanitize_key($query_vars['wcos_relation_lookup']) : '';
+		if ('' === $token || !isset(self::$legacy_contexts[$token])) {
 			return $wp_query_args;
-		};
-
-		add_filter('woocommerce_order_data_store_cpt_get_orders_query', $filter, 10, 2);
-		try {
-			$orders = wc_get_orders($args);
-		} finally {
-			remove_filter('woocommerce_order_data_store_cpt_get_orders_query', $filter, 10);
 		}
 
-		return array_values(array_filter($orders, array(__CLASS__, 'is_order')));
+		$conditions = self::$legacy_contexts[$token];
+		unset(self::$legacy_contexts[$token], $wp_query_args['wcos_relation_lookup']);
+
+		if (!isset($wp_query_args['meta_query']) || !is_array($wp_query_args['meta_query'])) {
+			$wp_query_args['meta_query'] = array();
+		}
+		$wp_query_args['meta_query'][] = array_merge(array('relation' => 'AND'), $conditions);
+		return $wp_query_args;
 	}
 
 	public static function is_order($order) {
 		return $order instanceof WC_Order;
+	}
+
+	private static function supported_relation_query(array $meta_query) {
+		$relation = isset($meta_query['relation']) ? strtoupper((string) $meta_query['relation']) : 'AND';
+		if ('AND' !== $relation) {
+			return null;
+		}
+
+		$conditions = array();
+		foreach ($meta_query as $key => $condition) {
+			if ('relation' === $key) {
+				continue;
+			}
+			if (!is_array($condition) || empty($condition['key'])) {
+				return null;
+			}
+			try {
+				$normalized = self::normalize_conditions(array($condition));
+			} catch (InvalidArgumentException $exception) {
+				return null;
+			}
+			$conditions[] = reset($normalized);
+		}
+
+		return empty($conditions) ? null : $conditions;
 	}
 
 	private static function normalize_conditions(array $conditions) {
