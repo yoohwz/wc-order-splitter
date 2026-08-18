@@ -19,7 +19,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate release metadata
+      - name: Validate release metadata and hard-off runtime
         shell: bash
         run: |
           set -euo pipefail
@@ -29,10 +29,18 @@ jobs:
           test -n "$plugin_version"
           test -n "$stable_tag"
           test "$plugin_version" = "$stable_tag"
-          grep -Fq "define('WC_ORDER_SPLITTER_MUTATIONS_ENABLED', false);" wc-order-splitter.php
+          grep -A2 -F 'public static function mutations_enabled()' inc/cores/safety.php | grep -Fq 'return false;'
+          grep -Fq 'private static $states = array(' inc/domain/class-wcos-feature-gates.php
+          test ! -d inc/mutation-v2
 
           if grep -R --line-number --fixed-strings 'yoexpress.top' . --exclude-dir=.git; then
             echo 'Removed telemetry endpoint must not be present.' >&2
+            exit 1
+          fi
+
+          if grep -R --line-number -E 'WC_ORDER_SPLITTER_(MUTATIONS|SPLIT|DUPLICATE|MERGE|RETURN|BULK_RETURN)_ENABLED' \
+            wc-order-splitter.php inc/cores inc/domain; then
+            echo 'Externally overrideable mutation gates must not return.' >&2
             exit 1
           fi
 
@@ -43,21 +51,38 @@ jobs:
           package_root="$RUNNER_TEMP/package/wc-order-splitter"
           mkdir -p "$package_root"
 
-          rsync -a ./ "$package_root/" \
-            --exclude '.git/' \
-            --exclude '.github/' \
-            --exclude '.gitignore' \
-            --exclude 'tests/' \
-            --exclude 'docs/' \
-            --exclude '*.zip' \
-            --exclude '.DS_Store'
+          rsync -a ./ "$package_root/" --exclude-from='.distignore'
 
           find "$package_root" -type f -name '*.php' -print0 | while IFS= read -r -d '' file; do
             php -l "$file" >/dev/null
           done
 
+          for forbidden_path in \
+            'inc/backend/actions' \
+            'inc/backend/orders-bulk-return.php' \
+            'inc/backend/order-split-button.php' \
+            'inc/backend/order-return-option.php' \
+            'inc/backend/order-duplicate-option.php' \
+            'inc/backend/order-merge-option.php' \
+            'js/bulk-return-action.js' \
+            'js/merge-action.js' \
+            'js/post-action-tip.js' \
+            'js/split-table.js' \
+            'inc/mutation-v2' \
+            'tests'; do
+            if test -e "$package_root/$forbidden_path"; then
+              echo "Unsafe or development-only path entered package: $forbidden_path" >&2
+              exit 1
+            fi
+          done
+
           if find "$package_root" -type l | grep -q .; then
             echo 'Release package must not contain symbolic links.' >&2
+            exit 1
+          fi
+
+          if grep -R --line-number -E 'yoexpress\.top|WC_Order_Splitter_Push_Subscription' "$package_root"; then
+            echo 'Removed telemetry code entered the package.' >&2
             exit 1
           fi
 
@@ -71,9 +96,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          unzip -t wc-order-splitter.zip
           unzip -l wc-order-splitter.zip
           unzip -p wc-order-splitter.zip wc-order-splitter/wc-order-splitter.php | grep -Fq 'Plugin Name: Order Splitter for WooCommerce'
           unzip -p wc-order-splitter.zip wc-order-splitter/readme.txt | grep -Fq 'Stable tag: 1.4.12'
+          if unzip -Z1 wc-order-splitter.zip | grep -E '(^|/)(tests|docs|node_modules|inc/mutation-v2)(/|$)'; then
+            echo 'Development-only content entered the ZIP.' >&2
+            exit 1
+          fi
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
