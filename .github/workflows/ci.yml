@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'hotfix/**'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  php-syntax:
+    name: PHP syntax (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.1', '8.3']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Lint PHP files
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            php -l "$file"
+          done < <(find . -type f -name '*.php' -print0)
+
+  release-contract:
+    name: Emergency release contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reject removed telemetry endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R --line-number --fixed-strings 'yoexpress.top' . --exclude-dir=.git; then
+            echo 'Removed telemetry endpoint must not be present.' >&2
+            exit 1
+          fi
+
+      - name: Verify mutation handlers are not loaded
+        shell: bash
+        run: |
+          set -euo pipefail
+          script='inc/cores/script.php'
+          for path in \
+            '../backend/orders-bulk-return.php' \
+            '../backend/order-split-button.php' \
+            '../backend/order-return-option.php' \
+            '../backend/order-duplicate-option.php' \
+            '../backend/order-merge-option.php'; do
+            if grep -Fq "$path" "$script"; then
+              echo "Unsafe mutation module is still loaded: $path" >&2
+              exit 1
+            fi
+          done
+
+      - name: Verify release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'Version: 1.4.12' wc-order-splitter.php
+          grep -Fq 'Requires at least: 6.5' wc-order-splitter.php
+          grep -Fq 'Stable tag: 1.4.12' readme.txt
+          grep -Fq 'Requires at least: 6.5' readme.txt
