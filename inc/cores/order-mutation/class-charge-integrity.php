@@ -24,22 +24,18 @@ final class WC_Order_Splitter_Charge_Integrity {
 			return;
 		}
 
-		$before_total = WC_Order_Splitter_Mutation_Support::decimal($order->get_total());
+		$before = WC_Order_Splitter_Mutation_Support::order_totals($order);
 		self::merge_returned_coupons($order);
 		self::merge_returned_shipping($order);
 		self::merge_returned_fees($order);
-		$order->calculate_totals(false);
+
+		// This pass only normalizes the persisted charge-row structure. The mutation
+		// engine has already validated the historical monetary aggregates, so do not
+		// re-price or re-derive them from current line data here.
 		$order->save();
 
-		$after_total = WC_Order_Splitter_Mutation_Support::decimal($order->get_total());
-		$tolerance = pow(10, -WC_Order_Splitter_Mutation_Support::decimals()) / 2;
-		if (abs($before_total - $after_total) > $tolerance) {
-			throw new WC_Order_Splitter_Mutation_Exception(
-				__('Returning split charges changed the order total.', 'wc-order-splitter'),
-				0,
-				array('before' => $before_total, 'after' => $after_total)
-			);
-		}
+		$after = WC_Order_Splitter_Mutation_Support::order_totals($order);
+		self::assert_totals_unchanged($before, $after);
 	}
 
 	private static function normalize_coupon_allocations($orders, $source_order_id) {
@@ -193,6 +189,20 @@ final class WC_Order_Splitter_Charge_Integrity {
 			);
 		}
 		return $result;
+	}
+
+	private static function assert_totals_unchanged($before, $after) {
+		$tolerance = pow(10, -WC_Order_Splitter_Mutation_Support::decimals()) / 2;
+		foreach ($before as $field => $expected) {
+			$actual = isset($after[$field]) ? $after[$field] : 0;
+			if (abs((float) $expected - (float) $actual) > $tolerance) {
+				throw new WC_Order_Splitter_Mutation_Exception(
+					sprintf(__('Returning split charges changed the %s aggregate.', 'wc-order-splitter'), $field),
+					0,
+					array('field' => $field, 'before' => $expected, 'after' => $actual)
+				);
+			}
+		}
 	}
 
 	private static function items_summary($order) {
