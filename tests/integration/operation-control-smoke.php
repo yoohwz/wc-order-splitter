@@ -50,6 +50,7 @@ wcos_control_assert(
 
 $record = WCOS_Operation_Journal::get(wc_get_order($order_id), $journal_operation);
 wcos_control_assert(is_array($record) && 'started' === $record['status'], 'Durable journal was not readable through a fresh order object.');
+wcos_control_assert(null === $record['completed_at'], 'A new journal unexpectedly has a terminal timestamp.');
 wcos_control_assert($fingerprint === $record['fingerprint'], 'Journal fingerprint was not preserved.');
 
 $fingerprint_rejected = false;
@@ -68,6 +69,21 @@ wcos_control_assert(
 	'Journal checkpoint failed.'
 );
 wcos_control_assert(
+	WCOS_Operation_Journal::fail($order, $journal_operation, array('error' => 'injected failure')),
+	'Journal failure transition failed.'
+);
+$record = WCOS_Operation_Journal::get(wc_get_order($order_id), $journal_operation);
+wcos_control_assert('failed' === $record['status'] && !empty($record['completed_at']), 'Failed journal state did not receive a terminal timestamp.');
+
+wcos_control_assert(
+	WCOS_Operation_Journal::resume($order, $journal_operation, array('retry' => true)),
+	'Journal resume transition failed.'
+);
+$record = WCOS_Operation_Journal::get(wc_get_order($order_id), $journal_operation);
+wcos_control_assert('started' === $record['status'] && 'resumed' === $record['stage'], 'Journal did not return to an active state.');
+wcos_control_assert(null === $record['completed_at'], 'Resumed journal retained a terminal timestamp.');
+
+wcos_control_assert(
 	WCOS_Operation_Journal::mark_committed($order, $journal_operation, array('target_order_ids' => array(123))),
 	'Journal commit marker failed.'
 );
@@ -78,8 +94,9 @@ wcos_control_assert(
 
 $record = WCOS_Operation_Journal::get(wc_get_order($order_id), $journal_operation);
 wcos_control_assert('completed' === $record['status'] && 'completed' === $record['stage'], 'Journal did not persist terminal state.');
+wcos_control_assert(!empty($record['completed_at']), 'Completed journal is missing its terminal timestamp.');
 wcos_control_assert(true === $record['context']['verified'], 'Journal context was not merged across transitions.');
-wcos_control_assert(count($record['checkpoints']) >= 4, 'Journal checkpoints were not retained.');
+wcos_control_assert(count($record['checkpoints']) >= 6, 'Journal checkpoints were not retained.');
 
 $fresh_order = wc_get_order($order_id);
 $summary = (array) $fresh_order->get_meta(WCOS_Operation_Journal::SUMMARY_META_KEY, true);
@@ -91,6 +108,7 @@ foreach ($summary as $entry) {
 	}
 }
 wcos_control_assert(is_array($summary_entry) && 'completed' === $summary_entry['status'], 'Bounded order-meta audit summary was not updated.');
+wcos_control_assert(!empty($summary_entry['completed_at']), 'Audit summary is missing the terminal timestamp.');
 
 wcos_control_assert(WCOS_Operation_Journal::delete($order, $journal_operation), 'Durable journal cleanup failed.');
 $order->delete(true);
