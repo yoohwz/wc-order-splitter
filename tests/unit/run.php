@@ -138,6 +138,10 @@ $tests['mutation contract accepts conserved snapshot'] = static function() {
 		'grand_total' => '106.70',
 		'stock_reduced' => '3.000000',
 		'line_quantities' => array('line-a' => '2.000000', 'line-b' => '1.000000'),
+		'tax_by_rate' => array(
+			'101' => array('cart' => '4.20', 'shipping' => '0.50'),
+			'202' => array('cart' => '5.00', 'shipping' => '0.00'),
+		),
 		'currencies' => array('USD'),
 	);
 	WCOS_Mutation_Contract::assert_conserved($before, $before, 2);
@@ -149,6 +153,31 @@ $tests['mutation contract rejects monetary drift'] = static function() {
 			WCOS_Mutation_Contract::assert_conserved(
 				array('grand_total' => '10.00'),
 				array('grand_total' => '9.99'),
+				2
+			);
+		},
+		RuntimeException::class
+	);
+};
+
+$tests['mutation contract rejects per-rate tax drift hidden by equal aggregate tax'] = static function() {
+	assert_throws(
+		static function() {
+			WCOS_Mutation_Contract::assert_conserved(
+				array(
+					'tax_total' => '10.00',
+					'tax_by_rate' => array(
+						'101' => array('cart' => '4.00', 'shipping' => '0.00'),
+						'202' => array('cart' => '6.00', 'shipping' => '0.00'),
+					),
+				),
+				array(
+					'tax_total' => '10.00',
+					'tax_by_rate' => array(
+						'101' => array('cart' => '5.00', 'shipping' => '0.00'),
+						'202' => array('cart' => '5.00', 'shipping' => '0.00'),
+					),
+				),
 				2
 			);
 		},
