@@ -75,7 +75,7 @@ final class WCOS_Order_Item_Meta_Policy {
 			if (self::CLASS_BUSINESS !== self::classify($key, $meta->value, self::CONTEXT_IDENTITY, $item)) {
 				continue;
 			}
-			$metadata[$key][] = self::normalize_identity_value($meta->value);
+			$metadata[$key][] = self::normalize_identity_value($meta->value, $key);
 		}
 		ksort($metadata, SORT_STRING);
 		return $metadata;
@@ -152,11 +152,11 @@ final class WCOS_Order_Item_Meta_Policy {
 		return false;
 	}
 
-	private static function normalize_identity_value($value) {
+	private static function normalize_identity_value($value, $meta_key = '') {
 		if (is_array($value)) {
 			$normalized = array();
 			foreach ($value as $key => $item) {
-				$normalized[$key] = self::normalize_identity_value($item);
+				$normalized[$key] = self::normalize_identity_value($item, $meta_key);
 			}
 			if (self::is_associative($normalized)) {
 				ksort($normalized, SORT_STRING);
@@ -165,7 +165,23 @@ final class WCOS_Order_Item_Meta_Policy {
 		}
 
 		if (is_object($value) || is_resource($value)) {
-			return maybe_serialize($value);
+			throw new RuntimeException(
+				sprintf(
+					/* translators: %s: order item metadata key. */
+					__('Business metadata "%s" contains a non-canonical object or resource value. Classify it as operational or normalize it before order mutation.', 'wc-order-splitter'),
+					(string) $meta_key
+				)
+			);
+		}
+
+		if (is_float($value) && !is_finite($value)) {
+			throw new RuntimeException(
+				sprintf(
+					/* translators: %s: order item metadata key. */
+					__('Business metadata "%s" contains a non-finite numeric value and cannot form a stable line identity.', 'wc-order-splitter'),
+					(string) $meta_key
+				)
+			);
 		}
 
 		return $value;
@@ -177,6 +193,7 @@ final class WCOS_Order_Item_Meta_Policy {
 			if ($key !== $expected++) {
 				return true;
 			}
+		}
 		return false;
 	}
 }
