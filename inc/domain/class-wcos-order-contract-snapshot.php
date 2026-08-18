@@ -22,6 +22,7 @@ final class WCOS_Order_Contract_Snapshot {
 		$stock_reduced = 0;
 		$line_quantities = array();
 		$currencies = array();
+		$tax_by_rate = array();
 
 		foreach ($orders as $order) {
 			if (!$order instanceof WC_Order) {
@@ -53,6 +54,20 @@ final class WCOS_Order_Contract_Snapshot {
 			foreach ($order->get_items('shipping') as $item) {
 				$money['shipping_total'] = self::safe_add($money['shipping_total'], WCOS_Decimal::to_units($item->get_total(), $precision));
 			}
+			foreach ($order->get_items('tax') as $item) {
+				$rate_id = (string) absint($item->get_rate_id());
+				if (!isset($tax_by_rate[$rate_id])) {
+					$tax_by_rate[$rate_id] = array('cart' => 0, 'shipping' => 0);
+				}
+				$tax_by_rate[$rate_id]['cart'] = self::safe_add(
+					$tax_by_rate[$rate_id]['cart'],
+					WCOS_Decimal::to_units($item->get_tax_total(), $precision)
+				);
+				$tax_by_rate[$rate_id]['shipping'] = self::safe_add(
+					$tax_by_rate[$rate_id]['shipping'],
+					WCOS_Decimal::to_units($item->get_shipping_tax_total(), $precision)
+				);
+			}
 		}
 
 		$result = array();
@@ -63,8 +78,19 @@ final class WCOS_Order_Contract_Snapshot {
 			$line_quantities[$identity] = WCOS_Decimal::from_units($units, 6);
 		}
 		ksort($line_quantities, SORT_STRING);
+
+		$formatted_tax_by_rate = array();
+		ksort($tax_by_rate, SORT_STRING);
+		foreach ($tax_by_rate as $rate_id => $totals) {
+			$formatted_tax_by_rate[$rate_id] = array(
+				'cart' => WCOS_Decimal::from_units($totals['cart'], $precision),
+				'shipping' => WCOS_Decimal::from_units($totals['shipping'], $precision),
+			);
+		}
+
 		$result['stock_reduced'] = WCOS_Decimal::from_units($stock_reduced, 6);
 		$result['line_quantities'] = $line_quantities;
+		$result['tax_by_rate'] = $formatted_tax_by_rate;
 		$result['currencies'] = array_values(array_unique(array_map('strval', $currencies)));
 		return $result;
 	}
