@@ -1,0 +1,84 @@
+name: Build plugin package
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build reproducible ZIP
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          plugin_version=$(sed -n 's/^ \* Version: //p' wc-order-splitter.php | head -n 1)
+          stable_tag=$(sed -n 's/^Stable tag: //p' readme.txt | head -n 1)
+
+          test -n "$plugin_version"
+          test -n "$stable_tag"
+          test "$plugin_version" = "$stable_tag"
+          grep -Fq "define('WC_ORDER_SPLITTER_MUTATIONS_ENABLED', false);" wc-order-splitter.php
+
+          if grep -R --line-number --fixed-strings 'yoexpress.top' . --exclude-dir=.git; then
+            echo 'Removed telemetry endpoint must not be present.' >&2
+            exit 1
+          fi
+
+      - name: Build package tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_root="$RUNNER_TEMP/package/wc-order-splitter"
+          mkdir -p "$package_root"
+
+          rsync -a ./ "$package_root/" \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude '.gitignore' \
+            --exclude 'tests/' \
+            --exclude 'docs/' \
+            --exclude '*.zip' \
+            --exclude '.DS_Store'
+
+          find "$package_root" -type f -name '*.php' -print0 | while IFS= read -r -d '' file; do
+            php -l "$file" >/dev/null
+          done
+
+          if find "$package_root" -type l | grep -q .; then
+            echo 'Release package must not contain symbolic links.' >&2
+            exit 1
+          fi
+
+          touch -t 200001010000 "$package_root"
+          find "$package_root" -exec touch -t 200001010000 {} +
+
+          cd "$RUNNER_TEMP/package"
+          find wc-order-splitter -type f -print | LC_ALL=C sort | zip -X -q "$GITHUB_WORKSPACE/wc-order-splitter.zip" -@
+
+      - name: Inspect package
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -l wc-order-splitter.zip
+          unzip -p wc-order-splitter.zip wc-order-splitter/wc-order-splitter.php | grep -Fq 'Plugin Name: Order Splitter for WooCommerce'
+          unzip -p wc-order-splitter.zip wc-order-splitter/readme.txt | grep -Fq 'Stable tag: 1.4.12'
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wc-order-splitter-${{ github.sha }}
+          path: wc-order-splitter.zip
+          if-no-files-found: error
+          retention-days: 14
