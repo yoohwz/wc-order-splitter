@@ -91,10 +91,21 @@ final class WCOS_Split_Admin_Controller {
                 get_current_user_id()
             );
         } catch (WCOS_Split_Confirmation_Exception $exception) {
+            $http_statuses = array(
+                'invalid_identity' => 400,
+                'invalid_token' => 403,
+                'owner_mismatch' => 403,
+                'expired' => 410,
+                'source_changed' => 409,
+                'source_missing' => 404,
+                'policy_changed' => 409,
+                'precision_mismatch' => 409,
+            );
+            $reason = $exception->get_reason();
             throw new WCOS_Split_Transport_Exception(
-                'confirmation_' . $exception->get_reason(),
+                'confirmation_' . $reason,
                 $exception->getMessage(),
-                'source_changed' === $exception->get_reason() ? 409 : 403,
+                isset($http_statuses[$reason]) ? $http_statuses[$reason] : 403,
                 false
             );
         }
@@ -199,7 +210,7 @@ final class WCOS_Split_Admin_Controller {
         $disabled = !$this->current_surface_supported;
         $description_id = 'wcos-split-launcher-description-' . $order->get_id();
 
-        echo '<button type="button" class="button wcos-split-launcher" aria-haspopup="dialog" aria-controls="' . esc_attr($dialog_id) . '" aria-describedby="' . esc_attr($description_id) . '"' . disabled($disabled, true, false) . '>';
+        echo '<button type="button" class="button wcos-split-launcher" aria-haspopup="dialog"' . ($disabled ? '' : ' aria-controls="' . esc_attr($dialog_id) . '"') . ' aria-describedby="' . esc_attr($description_id) . '"' . disabled($disabled, true, false) . '>';
         echo esc_html__('Split order', 'wc-order-splitter');
         echo '</button>';
         echo '<span id="' . esc_attr($description_id) . '" class="description wcos-split-launcher-description">';
@@ -211,8 +222,9 @@ final class WCOS_Split_Admin_Controller {
         if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT) || !$this->is_order_edit_screen()) {
             return;
         }
-        wp_enqueue_style('wcos-split-admin', plugins_url('../../css/p2-split-admin.css', __FILE__), array(), WC_ORDER_SPLITTER_VERSION);
-        wp_enqueue_script('wcos-split-admin', plugins_url('../../js/p2-split-admin.js', __FILE__), array(), WC_ORDER_SPLITTER_VERSION, true);
+        $plugin_file = dirname(__DIR__, 2) . '/wc-order-splitter.php';
+        wp_enqueue_style('wcos-split-admin', plugins_url('css/p2-split-admin.css', $plugin_file), array(), WC_ORDER_SPLITTER_VERSION);
+        wp_enqueue_script('wcos-split-admin', plugins_url('js/p2-split-admin.js', $plugin_file), array(), WC_ORDER_SPLITTER_VERSION, true);
         wp_localize_script(
             'wcos-split-admin',
             'wcosSplitAdminStrings',
@@ -221,7 +233,7 @@ final class WCOS_Split_Admin_Controller {
                 'reviewReady' => __('The plan passed server review. Confirm the acknowledgement to execute it.', 'wc-order-splitter'),
                 'executing' => __('Executing Split…', 'wc-order-splitter'),
                 'completed' => __('Split completed successfully.', 'wc-order-splitter'),
-                'invalidPlan' => __('Enter at least one quantity smaller than its source line quantity.', 'wc-order-splitter'),
+                'invalidPlan' => __('Enter at least one quantity and keep a positive residual quantity on every affected source line.', 'wc-order-splitter'),
                 'requestFailed' => __('The Split request could not be completed.', 'wc-order-splitter'),
                 'childOrder' => __('Child order', 'wc-order-splitter'),
                 'reloadOrder' => __('Reload source order', 'wc-order-splitter'),
@@ -247,6 +259,8 @@ final class WCOS_Split_Admin_Controller {
         $title_id = $dialog_id . '-title';
         $description_id = $dialog_id . '-description';
         $nonce = wp_create_nonce('wcos_split_order_' . $order->get_id());
+        $fractional_supported = !empty($preflight['fractional_quantity_supported']);
+        $step = $fractional_supported ? '0.000001' : '1';
 
         ob_start();
         ?>
@@ -256,44 +270,39 @@ final class WCOS_Split_Admin_Controller {
                 <div class="wcos-split-dialog__header">
                     <div>
                         <h2 id="<?php echo esc_attr($title_id); ?>"><?php esc_html_e('Review quantity split', 'wc-order-splitter'); ?></h2>
-                        <p id="<?php echo esc_attr($description_id); ?>"><?php esc_html_e('Choose quantities to move into up to ten pending child orders. Every affected source line must retain a positive quantity.', 'wc-order-splitter'); ?></p>
+                        <p id="<?php echo esc_attr($description_id); ?>"><?php esc_html_e('Enter the quantity from each source line to move into each pending child order. Every affected source line must retain a positive quantity.', 'wc-order-splitter'); ?></p>
                     </div>
                     <button type="button" class="button-link wcos-split-close" aria-label="<?php esc_attr_e('Close Split dialog', 'wc-order-splitter'); ?>"><span aria-hidden="true">×</span></button>
                 </div>
 
                 <form class="wcos-split-form" novalidate>
-                    <div class="wcos-split-table-wrap" tabindex="0" aria-label="<?php esc_attr_e('Order lines available for splitting', 'wc-order-splitter'); ?>">
+                    <div class="wcos-split-table-wrap" tabindex="0" aria-label="<?php esc_attr_e('Order line quantities allocated to child orders', 'wc-order-splitter'); ?>">
                         <table class="widefat striped wcos-split-table">
                             <thead>
                                 <tr>
                                     <th scope="col"><?php esc_html_e('Product', 'wc-order-splitter'); ?></th>
                                     <th scope="col"><?php esc_html_e('Current quantity', 'wc-order-splitter'); ?></th>
-                                    <th scope="col"><?php esc_html_e('Target child', 'wc-order-splitter'); ?></th>
-                                    <th scope="col"><?php esc_html_e('Quantity to move', 'wc-order-splitter'); ?></th>
+                                    <?php for ($child_index = 1; $child_index <= 10; $child_index++) : ?>
+                                        <th scope="col"><?php echo esc_html(sprintf(__('Child %d', 'wc-order-splitter'), $child_index)); ?></th>
+                                    <?php endfor; ?>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php foreach ($order->get_items('line_item') as $item_id => $item) :
                                     $quantity = WCOS_Decimal::normalize($item->get_quantity(), 6);
-                                    $fractional = 0 !== (WCOS_Decimal::to_units($item->get_quantity(), 6) % 1000000);
-                                    $quantity_id = 'wcos-split-quantity-' . $order->get_id() . '-' . $item_id;
-                                    $target_id = 'wcos-split-target-' . $order->get_id() . '-' . $item_id;
                                     ?>
                                     <tr data-item-id="<?php echo esc_attr($item_id); ?>" data-source-quantity="<?php echo esc_attr($quantity); ?>">
-                                        <td><?php echo esc_html($item->get_name()); ?></td>
+                                        <th scope="row"><?php echo esc_html($item->get_name()); ?></th>
                                         <td><?php echo esc_html($quantity); ?></td>
-                                        <td>
-                                            <label class="screen-reader-text" for="<?php echo esc_attr($target_id); ?>"><?php echo esc_html(sprintf(__('Target child for %s', 'wc-order-splitter'), $item->get_name())); ?></label>
-                                            <select id="<?php echo esc_attr($target_id); ?>" class="wcos-split-target">
-                                                <?php for ($child_index = 1; $child_index <= 10; $child_index++) : ?>
-                                                    <option value="child-<?php echo esc_attr($child_index); ?>"><?php echo esc_html(sprintf(__('Child %d', 'wc-order-splitter'), $child_index)); ?></option>
-                                                <?php endfor; ?>
-                                            </select>
-                                        </td>
-                                        <td>
-                                            <label class="screen-reader-text" for="<?php echo esc_attr($quantity_id); ?>"><?php echo esc_html(sprintf(__('Quantity to move for %s', 'wc-order-splitter'), $item->get_name())); ?></label>
-                                            <input id="<?php echo esc_attr($quantity_id); ?>" class="wcos-split-quantity" type="number" min="0" max="<?php echo esc_attr($quantity); ?>" step="<?php echo esc_attr($fractional ? '0.000001' : '1'); ?>" inputmode="decimal" value="0" />
-                                        </td>
+                                        <?php for ($child_index = 1; $child_index <= 10; $child_index++) :
+                                            $child_key = 'child-' . $child_index;
+                                            $quantity_id = 'wcos-split-quantity-' . $order->get_id() . '-' . $item_id . '-' . $child_index;
+                                            ?>
+                                            <td>
+                                                <label class="screen-reader-text" for="<?php echo esc_attr($quantity_id); ?>"><?php echo esc_html(sprintf(__('Quantity of %1$s to move to Child %2$d', 'wc-order-splitter'), $item->get_name(), $child_index)); ?></label>
+                                                <input id="<?php echo esc_attr($quantity_id); ?>" class="wcos-split-quantity" data-child-key="<?php echo esc_attr($child_key); ?>" type="number" min="0" max="<?php echo esc_attr($quantity); ?>" step="<?php echo esc_attr($step); ?>" inputmode="decimal" value="0" />
+                                            </td>
+                                        <?php endfor; ?>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>
@@ -309,6 +318,7 @@ final class WCOS_Split_Admin_Controller {
                             <li><?php esc_html_e('The Split request must not write physical product stock.', 'wc-order-splitter'); ?></li>
                             <li><?php esc_html_e('Coupons, refunds, negative fees, nested splits, and unclassified private line metadata are rejected before mutation.', 'wc-order-splitter'); ?></li>
                             <li><?php esc_html_e('Extensions that change stock directly in the database instead of WooCommerce stock APIs are unsupported unless they provide an explicit compatibility adapter.', 'wc-order-splitter'); ?></li>
+                            <li><?php echo esc_html($fractional_supported ? __('Fractional quantities are enabled by the active WooCommerce quantity integration.', 'wc-order-splitter') : __('The active WooCommerce quantity integration only supports integer Split quantities.', 'wc-order-splitter')); ?></li>
                         </ul>
                     </div>
 
@@ -401,6 +411,7 @@ final class WCOS_Split_Admin_Controller {
             return false;
         }
         $hpos_screen = function_exists('wc_get_page_screen_id') ? wc_get_page_screen_id('shop-order') : 'woocommerce_page_wc-orders';
-        return 'shop_order' === $screen->id || ($hpos_screen === $screen->id && !empty($_GET['id']));
+        $hpos_order_id = isset($_GET['id']) ? absint(wp_unslash($_GET['id'])) : 0;
+        return 'shop_order' === $screen->id || ($hpos_screen === $screen->id && $hpos_order_id > 0);
     }
 }
