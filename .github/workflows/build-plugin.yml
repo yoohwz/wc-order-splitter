@@ -33,8 +33,11 @@ jobs:
           grep -Fq 'private static $states = array(' inc/domain/class-wcos-feature-gates.php
           test ! -d inc/mutation-v2
 
-          if grep -R --line-number --fixed-strings 'yoexpress.top' . --exclude-dir=.git; then
-            echo 'Removed telemetry endpoint must not be present.' >&2
+          telemetry_host='yoexpress''.''top'
+          if grep -R --line-number --fixed-strings "$telemetry_host" \
+            wc-order-splitter.php readme.txt changelog.txt inc js \
+            --include='*.php' --include='*.js' --include='*.txt'; then
+            echo 'Removed telemetry endpoint must not be present in distributable source.' >&2
             exit 1
           fi
 
