@@ -1,4 +1,13 @@
-jQuery(document).ready(function($) {
+jQuery(function($) {
+    'use strict';
+
+    var state = {
+        items: [],
+        mode: 'default',
+        preview: null,
+        splitData: {}
+    };
+
     function escapeHtml(value) {
         return String(value === undefined || value === null ? '' : value)
             .replace(/&/g, '&amp;')
@@ -8,240 +17,251 @@ jQuery(document).ready(function($) {
             .replace(/'/g, '&#039;');
     }
 
-    function escapeHtmlAttr(value) {
-        return escapeHtml(value).replace(/`/g, '&#096;');
+    function orderId() {
+        return parseInt($('#split-order-container').data('order-id'), 10) || 0;
     }
 
-    function buildExternalLink(url, label, className) {
-        return '<a href="' + escapeHtmlAttr(url) + '" class="' + escapeHtmlAttr(className || '') + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(label) + '</a>';
-    }
-
-    function showPostSplitTip() {
-        var storedTip = null;
-
-        try {
-            storedTip = window.localStorage.getItem('wcosPostSplitTip');
-            window.localStorage.removeItem('wcosPostSplitTip');
-        } catch (error) {
-            storedTip = null;
+    function responseMessage(response, fallback) {
+        if (response && response.data && typeof response.data === 'object' && response.data.message) {
+            return response.data.message;
         }
+        if (response && typeof response.data === 'string') {
+            return response.data;
+        }
+        return fallback;
+    }
 
-        if (!storedTip || $('.wcos-post-split-tip').length) {
+    function announce(message, type) {
+        var $status = $('#wc-order-splitter-status');
+        if (!$status.length) {
             return;
         }
-
-        var tip = '<div class="notice notice-success inline wcos-post-split-tip">' +
-            '<p>' + escapeHtml(storedTip) + ' ' +
-            buildExternalLink(splitOrderTranslations.premiumUrl, splitOrderTranslations.learnMore, '') +
-            '</p>' +
-            '<button type="button" class="notice-dismiss"><span class="screen-reader-text">' + escapeHtml(splitOrderTranslations.dismiss) + '</span></button>' +
-            '</div>';
-
-        $('#split-order-container').before(tip);
+        $status.attr('class', type === 'error' ? 'notice notice-error inline' : 'notice notice-info inline');
+        $status.html('<p>' + escapeHtml(message) + '</p>');
     }
 
-    showPostSplitTip();
+    function setExpanded(expanded) {
+        $('.split-order').attr('aria-expanded', expanded ? 'true' : 'false');
+        $('#split-order-container').prop('hidden', !expanded);
+    }
 
-    $(document).on('click', '.wcos-post-split-tip .notice-dismiss', function() {
-        $(this).closest('.wcos-post-split-tip').remove();
-    });
-
-    $('.split-order').on('click', function() {
-        var orderId = woocommerce_admin_meta_boxes.post_id;
-
-        // Toggle the display of the split order container
-        var container = $('#split-order-container');
-        if (container.is(':visible')) {
-            container.hide();
-            return;
-        }
-
-        // AJAX request to get order items
-        $.ajax({
-            url: splitOrderTranslations.ajaxUrl,
-            type: 'POST',
-            data: {
-                action: 'get_order_items',
-                order_id: orderId,
-                nonce: splitOrderTranslations.nonce
-            },
-            success: function(response) {
-                if (response.success) {
-                    displayOrderItems(response.data, container);
-                } else {
-                    alert(splitOrderTranslations.unableToFetch);
-                }
-            },
-            error: function() {
-                alert(splitOrderTranslations.errorOccurredFetchingOrder);
+    function loadItems() {
+        announce(splitOrderTranslations.loadingItems, 'info');
+        return $.post(splitOrderTranslations.ajaxUrl, {
+            action: 'get_order_items',
+            order_id: orderId(),
+            nonce: splitOrderTranslations.nonce
+        }).done(function(response) {
+            if (!response.success) {
+                announce(responseMessage(response, splitOrderTranslations.unableToFetch), 'error');
+                return;
             }
+            state.items = response.data || [];
+            renderEditor();
+        }).fail(function() {
+            announce(splitOrderTranslations.errorOccurredFetchingOrder, 'error');
         });
-    });
+    }
 
-    function displayOrderItems(items, container) {
-        var splitMethod = $('#split-method').val() || 'default'; // Default value
-        var showCategory = splitMethod === 'category';
-        var showStockStatus = splitMethod === 'stock-status';
-    
-        var html = '<table class="woocommerce_order_items">';
-        html += '<thead><tr><th class="product-column">' + escapeHtml(splitOrderTranslations.product) + '</th>';
+    function renderShell() {
+        var html = '';
+        html += '<div id="wc-order-splitter-status" class="notice notice-info inline" aria-live="polite"><p>' + escapeHtml(splitOrderTranslations.loadingItems) + '</p></div>';
+        html += '<div id="wc-order-splitter-editor"></div>';
+        html += '<div id="wc-order-splitter-preview" aria-live="polite"></div>';
+        $('#split-order-container').html(html);
+    }
+
+    function renderEditor() {
+        var showCategory = state.mode === 'category';
+        var showStock = state.mode === 'stock-status';
+        var disabled = state.mode !== 'default';
+        var html = '<table class="widefat striped wc-order-splitter-table"><thead><tr>';
+        html += '<th scope="col">' + escapeHtml(splitOrderTranslations.product) + '</th>';
         if (showCategory) {
-            html += '<th class="category-column">' + escapeHtml(splitOrderTranslations.category) + '</th>';
+            html += '<th scope="col">' + escapeHtml(splitOrderTranslations.category) + '</th>';
         }
-        if (showStockStatus) {
-            html += '<th class="stock-status-column">' + escapeHtml(splitOrderTranslations.stockStatus) + '</th>';
+        if (showStock) {
+            html += '<th scope="col">' + escapeHtml(splitOrderTranslations.stockStatus) + '</th>';
         }
-        html += '<th class="order-column">' + escapeHtml(splitOrderTranslations.order) + '</th><th class="quantity-column">' + escapeHtml(splitOrderTranslations.quantity) + '</th><th class="split-quantity-column">' + escapeHtml(splitOrderTranslations.splitQuantity) + '</th></tr></thead><tbody>';
-    
-        $.each(items, function(index, item) {
-            var itemId = parseInt(item.id, 10) || 0;
-            var itemQuantity = parseInt(item.quantity, 10) || 0;
+        html += '<th scope="col">' + escapeHtml(splitOrderTranslations.order) + '</th>';
+        html += '<th scope="col">' + escapeHtml(splitOrderTranslations.quantity) + '</th>';
+        html += '<th scope="col">' + escapeHtml(splitOrderTranslations.splitQuantity) + '</th></tr></thead><tbody>';
 
+        $.each(state.items, function(index, item) {
+            var itemId = parseInt(item.id, 10) || 0;
+            var qty = parseFloat(item.quantity) || 0;
+            var inputId = 'wc-order-splitter-qty-' + itemId;
+            var orderSelectId = 'wc-order-splitter-destination-' + itemId;
             html += '<tr>';
-            html += '<td>' + escapeHtml(item.name) + '</td>';
+            html += '<th scope="row">' + escapeHtml(item.name) + '</th>';
             if (showCategory) {
                 html += '<td>' + escapeHtml(item.category) + '</td>';
             }
-            if (showStockStatus) {
+            if (showStock) {
                 html += '<td>' + escapeHtml(item.stock_status) + '</td>';
             }
-            html += '<td><select name="split_order[' + itemId + ']"' + (splitMethod !== 'default' ? ' disabled' : '') + '>';
+            html += '<td><label class="screen-reader-text" for="' + orderSelectId + '">' + escapeHtml(splitOrderTranslations.order) + '</label>';
+            html += '<select id="' + orderSelectId + '" name="split_order[' + itemId + ']"' + (disabled ? ' disabled' : '') + '>';
             for (var i = 1; i <= 10; i++) {
-                html += '<option value="' + escapeHtmlAttr(splitOrderTranslations.newOrder + i) + '">' + escapeHtml(splitOrderTranslations.newOrder + i) + '</option>';
+                html += '<option value="child-' + i + '">' + escapeHtml(splitOrderTranslations.newOrder + i) + '</option>';
             }
             html += '</select></td>';
-            html += '<td>' + itemQuantity + '</td>';
-            html += '<td><input type="number" name="split_quantity[' + itemId + ']" min="0" max="' + itemQuantity + '"' + (splitMethod !== 'default' ? ' disabled' : '') + '></td>';
+            html += '<td>' + escapeHtml(item.quantity) + '</td>';
+            html += '<td><label class="screen-reader-text" for="' + inputId + '">' + escapeHtml(splitOrderTranslations.splitQuantity + ': ' + item.name) + '</label>';
+            html += '<input id="' + inputId + '" type="number" step="any" min="0" max="' + escapeHtml(qty) + '" name="split_quantity[' + itemId + ']"' + (disabled ? ' disabled' : '') + '></td>';
             html += '</tr>';
         });
-    
         html += '</tbody></table>';
+
         html += '<div class="wcos-split-toolbar">';
-        html += '<button type="button" class="button button-secondary cancel-split-order">' + escapeHtml(splitOrderTranslations.cancel) + '</button>';
-        html += '<select id="split-method" class="split-method" aria-describedby="wcos-split-mode-hint">';
+        html += '<label for="split-method">' + escapeHtml(splitOrderTranslations.splitMethod) + '</label> ';
+        html += '<select id="split-method" class="split-method">';
         html += '<option value="default">' + escapeHtml(splitOrderTranslations.default) + '</option>';
-        html += '<option value="unit" disabled title="' + escapeHtmlAttr(splitOrderTranslations.premiumModeHint) + '">' + escapeHtml(splitOrderTranslations.unit) + '</option>';
-        html += '<option value="group" disabled title="' + escapeHtmlAttr(splitOrderTranslations.premiumModeHint) + '">' + escapeHtml(splitOrderTranslations.group) + '</option>';
-        html += '<option value="ingroup" disabled title="' + escapeHtmlAttr(splitOrderTranslations.premiumModeHint) + '">' + escapeHtml(splitOrderTranslations.inGroup) + '</option>';
-        html += '<option value="nongroup" disabled title="' + escapeHtmlAttr(splitOrderTranslations.premiumModeHint) + '">' + escapeHtml(splitOrderTranslations.nonGroup) + '</option>';
         html += '<option value="category">' + escapeHtml(splitOrderTranslations.category) + '</option>';
         html += '<option value="stock-status">' + escapeHtml(splitOrderTranslations.stockStatus) + '</option>';
-        html += '<option value="tags" disabled title="' + escapeHtmlAttr(splitOrderTranslations.premiumModeHint) + '">' + escapeHtml(splitOrderTranslations.tag) + '</option>';
-        html += '<option value="attribute" disabled title="' + escapeHtmlAttr(splitOrderTranslations.premiumModeHint) + '">' + escapeHtml(splitOrderTranslations.attribute) + '</option>';
-        html += '<option value="bundle" disabled title="' + escapeHtmlAttr(splitOrderTranslations.premiumModeHint) + '">' + escapeHtml(splitOrderTranslations.bundle) + '</option>';
-        html += '<option value="vendor" disabled title="' + escapeHtmlAttr(splitOrderTranslations.premiumModeHint) + '">' + escapeHtml(splitOrderTranslations.vendor) + '</option>';
-        html += '</select>';
-        html += '<button type="button" class="button button-primary split-order-confirm">' + escapeHtml(splitOrderTranslations.splitIt) + '</button>';
+        html += '</select> ';
+        html += '<button type="button" class="button button-primary wc-order-splitter-preview-button">' + escapeHtml(splitOrderTranslations.previewSplit) + '</button> ';
+        html += '<button type="button" class="button wc-order-splitter-cancel">' + escapeHtml(splitOrderTranslations.cancel) + '</button>';
         html += '</div>';
-        html += '<div id="wcos-split-mode-hint" class="wcos-limit-state">' +
-            '<strong>' + escapeHtml(splitOrderTranslations.premiumModeHintTitle) + '</strong> ' +
-            escapeHtml(splitOrderTranslations.premiumModeHint) + ' ' +
-            buildExternalLink(splitOrderTranslations.premiumUrl, splitOrderTranslations.learnMore, '') +
-            '</div>';
-    
-        // Populate the container with the table and show it
-        container.html(html).show();
-    
-        // Set the dropdown to the previously selected value
-        $('#split-method').val(splitMethod);
+
+        $('#wc-order-splitter-editor').html(html);
+        $('#split-method').val(state.mode);
+        $('#wc-order-splitter-preview').empty();
+        state.preview = null;
+        announce(splitOrderTranslations.previewRequired, 'info');
     }
 
-    // Event handler to disable/enable split quantity and order fields based on split method selection
-    $(document).on('change', '#split-method', function() {
-        var splitMethod = $(this).val();
-        if (splitMethod !== 'default') {
-            $('#split-order-container input[name^="split_quantity"]').prop('disabled', true);
-            $('#split-order-container select[name^="split_order"]').prop('disabled', true);
-        } else {
-            $('#split-order-container input[name^="split_quantity"]').prop('disabled', false);
-            $('#split-order-container select[name^="split_order"]').prop('disabled', false);
+    function collectSplitData() {
+        var data = {};
+        if (state.mode !== 'default') {
+            return data;
         }
-
-        // Re-display order items to add/remove the category or stock status column
-        var orderId = woocommerce_admin_meta_boxes.post_id;
-        $.ajax({
-            url: splitOrderTranslations.ajaxUrl,
-            type: 'POST',
-            data: {
-                action: 'get_order_items',
-                order_id: orderId,
-                nonce: splitOrderTranslations.nonce
-            },
-            success: function(response) {
-                if (response.success) {
-                    displayOrderItems(response.data, $('#split-order-container'));
-                } else {
-                    alert(splitOrderTranslations.unableToFetch);
-                }
-            },
-            error: function() {
-                alert(splitOrderTranslations.errorOccurredFetchingOrder);
+        $('#wc-order-splitter-editor input[name^="split_quantity"]').each(function() {
+            var match = String($(this).attr('name')).match(/\[(\d+)\]/);
+            if (!match) {
+                return;
             }
+            var itemId = match[1];
+            var quantity = parseFloat($(this).val());
+            if (!(quantity > 0)) {
+                return;
+            }
+            data[itemId] = {
+                quantity: quantity,
+                order: $('select[name="split_order[' + itemId + ']"]').val()
+            };
         });
+        return data;
+    }
+
+    function previewSplit() {
+        var $button = $('.wc-order-splitter-preview-button');
+        state.splitData = collectSplitData();
+        $button.prop('disabled', true).text(splitOrderTranslations.previewing);
+        announce(splitOrderTranslations.previewing, 'info');
+
+        $.post(splitOrderTranslations.ajaxUrl, {
+            action: 'preview_order_split',
+            order_id: orderId(),
+            split_mode: state.mode,
+            split_data: state.splitData,
+            nonce: splitOrderTranslations.nonce
+        }).done(function(response) {
+            if (!response.success) {
+                announce(responseMessage(response, splitOrderTranslations.failedToSplitOrder), 'error');
+                return;
+            }
+            state.preview = response.data;
+            renderPreview(response.data);
+        }).fail(function() {
+            announce(splitOrderTranslations.errorOccurred, 'error');
+        }).always(function() {
+            $button.prop('disabled', false).text(splitOrderTranslations.previewSplit);
+        });
+    }
+
+    function renderPreview(preview) {
+        var html = '<div class="wc-order-splitter-preview-card">';
+        html += '<h3>' + escapeHtml(splitOrderTranslations.previewTitle) + '</h3>';
+        html += '<p>' + escapeHtml(splitOrderTranslations.previewPolicy + ': ' + preview.policies.shipping_policy) + '</p>';
+        $.each(preview.destinations || {}, function(destination, data) {
+            html += '<section><h4>' + escapeHtml(destination) + '</h4><ul>';
+            $.each(data.items || [], function(index, item) {
+                html += '<li>' + escapeHtml(item.name + ' × ' + item.quantity) + '</li>';
+            });
+            html += '</ul><p>' + escapeHtml(splitOrderTranslations.previewAmount + ': ' + data.total + ' ' + preview.currency) + '</p></section>';
+        });
+        html += '<p><strong>' + escapeHtml(splitOrderTranslations.confirmWarning) + '</strong></p>';
+        html += '<button type="button" class="button button-primary wc-order-splitter-confirm">' + escapeHtml(splitOrderTranslations.confirmSplit) + '</button> ';
+        html += '<button type="button" class="button wc-order-splitter-cancel-preview">' + escapeHtml(splitOrderTranslations.changeAllocation) + '</button>';
+        html += '</div>';
+        $('#wc-order-splitter-preview').html(html);
+        announce(splitOrderTranslations.previewReady, 'info');
+        $('.wc-order-splitter-confirm').trigger('focus');
+    }
+
+    function confirmSplit() {
+        if (!state.preview) {
+            announce(splitOrderTranslations.previewRequired, 'error');
+            return;
+        }
+        var action = state.mode === 'category' ? 'split_order_by_category' : (state.mode === 'stock-status' ? 'split_order_by_stock_status' : 'split_order');
+        var $button = $('.wc-order-splitter-confirm');
+        $button.prop('disabled', true).text(splitOrderTranslations.splitting);
+
+        $.post(splitOrderTranslations.ajaxUrl, {
+            action: action,
+            order_id: orderId(),
+            split_mode: state.mode,
+            split_data: state.splitData,
+            nonce: splitOrderTranslations.nonce,
+            confirm_nonce: state.preview.confirm_nonce,
+            idempotency_key: state.preview.idempotency_key
+        }).done(function(response) {
+            if (!response.success) {
+                announce(responseMessage(response, splitOrderTranslations.failedToSplitOrder), 'error');
+                $button.prop('disabled', false).text(splitOrderTranslations.confirmSplit);
+                return;
+            }
+            try {
+                window.localStorage.setItem('wcosPostActionTip', JSON.stringify({
+                    action: 'split',
+                    message: splitOrderTranslations.orderSplitSuccess + ' ' + (response.data.new_order_ids || []).join(', ')
+                }));
+            } catch (error) {}
+            window.location.reload();
+        }).fail(function() {
+            announce(splitOrderTranslations.errorOccurred, 'error');
+            $button.prop('disabled', false).text(splitOrderTranslations.confirmSplit);
+        });
+    }
+
+    $(document).on('click', '.split-order', function() {
+        var expanded = $(this).attr('aria-expanded') === 'true';
+        if (expanded) {
+            setExpanded(false);
+            return;
+        }
+        setExpanded(true);
+        renderShell();
+        loadItems();
     });
 
-    // Event handler for the Cancel button
-    $(document).on('click', '.cancel-split-order', function() {
-        $('#split-order-container').hide();
+    $(document).on('change', '#split-method', function() {
+        state.mode = $(this).val();
+        renderEditor();
     });
-        
-    // Event handler for 'Split it' button
-    $(document).on('click', '.split-order-confirm', function() {
-        var splitMethod = $('#split-method').val();
-        var action = splitMethod === 'category' ? 'split_order_by_category' : (splitMethod === 'stock-status' ? 'split_order_by_stock_status' : 'split_order');
-        var $button = $(this);
-        var originalButtonText = $button.text();
 
-        // Update button text to "Splitting..." and disable the button
-        $button.text(splitOrderTranslations.splitting).prop('disabled', true);
-
-        var orderId = woocommerce_admin_meta_boxes.post_id;
-        var splitData = {};
-
-        $('#split-order-container input[name^="split_quantity"]').each(function() {
-            var itemId = $(this).attr('name').match(/\[(\d+)\]/)[1];
-            var quantity = parseInt($(this).val(), 10);
-            var selectedOrder = $('select[name="split_order[' + itemId + ']"]').val();
-
-            if (quantity > 0) {
-                splitData[itemId] = {
-                    quantity: quantity,
-                    order: selectedOrder
-                };
-            }
-        });
-
-        // AJAX request to create a new order with the split items
-        $.ajax({
-            url: splitOrderTranslations.ajaxUrl,
-            type: 'POST',
-            data: {
-                action: action,
-                order_id: orderId,
-                split_data: splitData,
-                nonce: splitOrderTranslations.nonce
-            },
-            success: function(response) {
-                if (response.success) {
-                    try {
-                        window.localStorage.setItem(
-                            'wcosPostActionTip',
-                            JSON.stringify({
-                                action: 'split',
-                                message: splitOrderTranslations.orderSplitSuccess + ' ' + response.data.new_order_ids.join(', ') + '. ' + splitOrderTranslations.splitSuccessTip
-                            })
-                        );
-                    } catch (error) {}
-                    window.location.reload();
-                } else {
-                    alert(response.data || splitOrderTranslations.failedToSplitOrder);
-                }
-                $button.text(originalButtonText).prop('disabled', false);
-            },
-            error: function() {
-                alert(splitOrderTranslations.errorOccurred);
-                $button.text(originalButtonText).prop('disabled', false);
-            }
-        });
+    $(document).on('click', '.wc-order-splitter-preview-button', previewSplit);
+    $(document).on('click', '.wc-order-splitter-confirm', confirmSplit);
+    $(document).on('click', '.wc-order-splitter-cancel-preview', function() {
+        state.preview = null;
+        $('#wc-order-splitter-preview').empty();
+        announce(splitOrderTranslations.previewRequired, 'info');
+        $('.wc-order-splitter-preview-button').trigger('focus');
+    });
+    $(document).on('click', '.wc-order-splitter-cancel', function() {
+        setExpanded(false);
+        $('.split-order').trigger('focus');
     });
 });

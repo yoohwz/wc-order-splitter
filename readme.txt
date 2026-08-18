@@ -1,150 +1,116 @@
 === Order Splitter for WooCommerce ===
 Contributors: yoohw
-Tags: woocommerce, split order, order management, duplicate order, merge orders
+Tags: woocommerce, split order, order management
 Requires at least: 6.3
 Tested up to: 7.0
-WC tested up to: 10.8
+WC tested up to: 11.0
 Requires PHP: 7.4
-Stable tag: 1.4.11
+Stable tag: 1.5.0
 License: GPLv3 or later
 License URI: https://www.gnu.org/licenses/gpl-3.0.html
 
-Split WooCommerce orders by quantity, category, or stock status. Duplicate, merge, and return split orders from the admin.
+Split, duplicate, merge, and return WooCommerce orders with explicit safeguards for stock, tax, shipping, currency, and order totals.
 
 == Description ==
 
-Order Splitter for WooCommerce helps store managers split WooCommerce orders into smaller orders directly from the order edit screen. Use it when one customer order needs separate fulfillment, separate shipping batches, partial processing, vendor handling, or operational review.
+Order Splitter for WooCommerce provides administrative order-mutation tools built on WooCommerce CRUD APIs for both legacy order storage and High-Performance Order Storage (HPOS).
 
-The plugin works inside the WooCommerce admin area and supports manual order splitting by product quantity, category, and stock status. It also includes tools for duplicating orders, merging orders, returning split orders to the original order, and showing split-order labels in the order list.
+Version 1.5.0 rebuilds the mutation layer around explicit validation and conservation checks instead of blindly copying order data.
 
-[Premium version](https://yoohw.com/product/woocommerce-advanced-order-actions/) | [Documentation](https://docs.yoohw.com/category/woocommerce-advanced-order-actions/) | [Support](https://yoohw.com/support/)  | [Demo](https://sandbox.yoohw.com/demo/wcaoa_demo.html)
+= Split orders =
 
-= What you can do =
+* Split product quantities into one or more child orders.
+* Split by product category or current stock status.
+* Review a preflight preview before any mutation is applied.
+* Allocate product line values, historical tax data, currency, and `_reduced_stock` bookkeeping across related orders.
+* Keep existing shipping charges on the original order by default.
+* Optionally allocate shipping proportionally or create zero-value shipping references on child orders.
+* Protect normal admin retries with an idempotency key and per-order mutation lock.
 
-* Split WooCommerce orders into one or more new orders.
-* Split line items by custom quantities.
-* Split orders by product category.
-* Split orders by stock status.
-* Duplicate an order from the order actions menu.
-* Merge compatible orders from the order edit screen.
-* Return split orders back to the original order.
-* Keep or exclude shipping fees from split orders.
-* Control which order statuses can be split.
-* Allow or restrict shop manager access.
-* Display original and split order labels in admin.
+= Duplicate orders =
 
-Order Splitter for WooCommerce is designed for stores that need cleaner order operations without leaving the WooCommerce dashboard.
+* Creates new WooCommerce order-item objects instead of reusing persisted source items.
+* Preserves currency, customer context, line values, historical tax data, shipping, fees, and coupons.
+* Does not copy the source transaction ID.
+* Creates the duplicate as a normal pending order instead of `checkout-draft`.
+* Does not mark duplicate stock as already reduced.
 
-== When to use Order Splitter ==
+= Merge compatible orders =
 
-Use this plugin when your store needs to:
+Merge requires a compatibility preflight and explicit confirmation. By default, source and target must have matching order type, currency, customer, payment method, status, billing/shipping addresses, and stock-reduction state. Refunded or paid orders are rejected by the free safety workflow.
 
-* Ship items from one order in separate packages.
-* Process backordered and in-stock items separately.
-* Split fulfillment by category, warehouse, supplier, or team workflow.
-* Duplicate an existing order for admin processing.
-* Merge orders that should be handled together.
-* Undo a split by returning split orders to the original order.
+Product lines are matched using product ID, variation ID, tax class, name, and business metadata rather than parent product ID alone.
 
-== Split methods ==
+= Return split orders =
 
-= Split by quantity =
+A split child can be returned only through a verified split relationship. The return workflow restores exact product identities and allocated stock markers and records returned state so repeated return requests do not repeat the mutation.
 
-Move selected quantities from each line item into new orders. This is useful when a customer buys multiple units and only part of the order should be processed separately.
+= Order relationships =
 
-= Split by category =
+Order edit screens and both legacy and HPOS order lists show semantic links between original, split, duplicate, and merged orders.
 
-Create split orders based on product categories. This helps stores route different product groups to different fulfillment teams or shipping workflows.
+= Privacy =
 
-= Split by stock status =
+Order Splitter for WooCommerce does not automatically transmit site, administrator, customer, or order data to a YoOhw server. Version 1.4.12 removed the previous automatic subscription request path.
 
-Separate items by stock status so available, unavailable, or backordered products can be handled with clearer order batches.
-
-== Settings ==
-
-Go to WooCommerce > Settings > Orders to configure Order Splitter.
-
-Available settings include:
-
-* Allowed order statuses for splitting.
-* Shipping fee handling for split orders.
-* Split-order labels in the admin order list.
-* Shop manager permission for splitting orders.
-
-== Premium options ==
-
-The free version focuses on manual order splitting and core admin order tools. The Premium version is available for stores that need advanced order automation and deeper workflow controls.
-
-Premium options include automated split rules, product groups, tag and attribute splitting, bundle and vendor splitting, split-order email controls, custom order status controls after splitting, and advanced duplicate or merge workflows.
+[Premium version](https://yoohw.com/product/woocommerce-advanced-order-actions/) | [Documentation](https://docs.yoohw.com/category/woocommerce-advanced-order-actions/) | [Support](https://yoohw.com/support/) | [Demo](https://sandbox.yoohw.com/demo/wcaoa_demo.html)
 
 == Installation ==
 
 1. Upload the `wc-order-splitter` folder to `/wp-content/plugins/`, or install the plugin from the WordPress plugin directory.
-2. Activate the plugin from Plugins in the WordPress admin.
-3. Make sure WooCommerce is installed and active.
-4. Go to WooCommerce > Settings > Orders and review the Order Splitter settings.
-
-== Usage ==
-
-1. Open WooCommerce > Orders.
-2. Edit the order you want to split.
-3. Click Split order.
-4. Choose the split method.
-5. Enter the quantities or review the grouped split table.
-6. Click Split it.
-7. Review the new order IDs and the updated original order.
-
-The Split order button only appears for orders that match the allowed statuses and contain enough items or quantity to split.
+2. Activate WooCommerce.
+3. Activate Order Splitter for WooCommerce.
+4. Go to WooCommerce > Settings > Orders to configure allowed statuses, shipping allocation, labels, and shop-manager access.
 
 == Frequently Asked Questions ==
 
-= Does this plugin support High-Performance Order Storage (HPOS)? =
+= Which shipping allocation should I use? =
 
-Yes. Order Splitter for WooCommerce declares compatibility with WooCommerce High-Performance Order Storage.
+`Keep charges on original order` is the safest default because it does not create additional shipping revenue. `Allocate proportionally` divides the existing historical shipping amount across the resulting orders. `Zero-value reference copies` leaves all shipping revenue on the original while adding zero-value shipping references to children.
 
-= Can I split one order into multiple new orders? =
+= Does splitting change physical stock? =
 
-Yes. You can move selected item quantities into different new orders from the split table.
+The mutation engine checks that normal split and return operations do not alter physical product stock. Existing `_reduced_stock` bookkeeping is allocated between related orders so later stock restoration uses the appropriate quantities.
 
-= Can I split an order by category? =
+= Can every pair of orders be merged? =
 
-Yes. The plugin can split order items by product category.
+No. Merge intentionally rejects incompatible or high-risk combinations. Paid or refunded orders are rejected by default, as are orders with different currencies, customers, statuses, payment methods, addresses, order types, or stock-reduction states.
 
-= Can I split backordered items from in-stock items? =
+= Does this plugin support HPOS? =
 
-Yes. Use the stock status split method to separate items by stock status.
-
-= Does the plugin copy customer and order data to split orders? =
-
-Yes. Split orders are created from the original order and keep the customer/order context needed for admin processing.
-
-= Can shop managers split orders? =
-
-Yes, if the shop manager permission setting is enabled in WooCommerce > Settings > Orders.
-
-= Can I undo a split order? =
-
-You can return split orders back to the original order using the return split order action.
-
-= Where are older changelog entries? =
-
-Older release notes are available in `changelog.txt`.
+The plugin uses WooCommerce order CRUD/data-store APIs and declares HPOS compatibility. The repository CI runs the same mutation smoke scenario with HPOS disabled and enabled before a release is accepted.
 
 == Changelog ==
+
+= 1.5.0 (Aug 18, 2026) =
+* New: Rebuilt Split, Duplicate, Merge, and Return on a shared order-mutation engine.
+* New: Added operation snapshots, UUIDs, per-order locks, structured journals, and compensation paths for supported failures.
+* New: Added exact product-line identity using variation, tax class, and business metadata.
+* New: Added preflight preview and explicit confirmation for Split and Merge.
+* New: Added explicit shipping-allocation policies with `keep_on_original` as the safe default.
+* New: Added residual-aware monetary, tax, and `_reduced_stock` allocation.
+* New: Added semantic relationship links for legacy and HPOS order screens.
+* New: Bulk Return now uses Action Scheduler when available.
+* New: Added unit tests, WooCommerce HPOS on/off smoke tests, Plugin Check CI, and deterministic Git release archives.
+* Fix: Duplicate now creates new item objects, preserves currency, avoids transaction IDs, and no longer uses `checkout-draft`.
+* Fix: Merge blocks self-merge and validates compatibility before mutation.
+* Fix: Category split preserves uncategorized/deleted-product lines and groups by stable category IDs.
+* Fix: Return and Merge use variation-aware line identity and transfer stock bookkeeping instead of matching only parent product IDs.
+* Privacy: Removed automatic external subscription/telemetry transmission.
+* Compliance: Removed the invalid WordPress.org `Plugin URI` header value and added a WooCommerce runtime dependency guard.
+
+= 1.4.12 (Aug 18, 2026) =
+* Security/Privacy: Removed the automatic external subscription request and its data transmission path.
+* Safety: Temporarily disabled split, duplicate, merge, and return mutations while integrity safeguards were applied.
+* Compliance: Removed the WordPress.org URL from the `Plugin URI` header.
 
 = 1.4.11 (Jun 13, 2026) =
 * Fix: Hardened AJAX capability checks for split and bulk return actions.
 * Fix: Validated split quantities against each original line item.
 * Improve: Declared WooCommerce HPOS compatibility and updated order edit redirects.
 * Improve: Scoped admin assets to WooCommerce order and settings screens.
-* Improve: Added throttled inline post-action tips after split, duplicate, merge, and return workflows.
-
-= 1.4.10 (Apr 24, 2026) =
-* Fix: Updated incorrect translation strings.
-* Improve: WooCommerce 10.7 compatibility.
-* Improve: Cleaned and optimized code.
 
 == Upgrade Notice ==
 
-= 1.4.11 =
-Security hardening, HPOS compatibility improvements, scoped admin assets, and updated WordPress.org readme content.
+= 1.5.0 =
+Major order-integrity release. Split, Duplicate, Merge, and Return now use a shared mutation engine with preflight validation, stock/tax/total checks, locks, journals, and an HPOS integration-test matrix.

@@ -3,30 +3,30 @@
 defined('ABSPATH') || exit;
 
 class WooCommerce_Order_Splitter_Edit_Order_Return_Option {
-
 	public function __construct() {
 		add_filter('woocommerce_order_actions', array($this, 'add_return_order_action'));
-		$this->includes();
 	}
 
 	public function add_return_order_action($actions) {
 		global $theorder;
 
-		// Retrieve allowed statuses from the settings
-		$allowed_statuses = get_option('order_splitter_status_allowed', []);
-
-		if (current_user_can('administrator')) {
-			// Check if it's a split order, has not been trashed, and the status is in the allowed statuses
-			if ($theorder->get_meta('yoos_original_order') && 'trash' !== $theorder->get_status() && in_array('wc-' . $theorder->get_status(), $allowed_statuses, true)) {
-				$actions['yoos_return_order'] = __('Return to the original order', 'wc-order-splitter');
-			}
+		if (!$theorder instanceof WC_Order || !WC_Order_Splitter_Mutation_Support::current_user_can_manage_order($theorder->get_id())) {
+			return $actions;
+		}
+		if ('trash' === $theorder->get_status() || 'yes' === $theorder->get_meta(WC_Order_Splitter_Mutation_Support::META_RETURNED, true)) {
+			return $actions;
 		}
 
-		return $actions;
-	}
+		$original_id = absint($theorder->get_meta(WC_Order_Splitter_Mutation_Support::META_ORIGINAL_ID, true));
+		if (!$original_id) {
+			$original_id = absint($theorder->get_meta('yoos_original_order', true));
+		}
+		if (!$original_id || !WC_Order_Splitter_Mutation_Support::current_user_can_manage_order($original_id)) {
+			return $actions;
+		}
 
-	public function includes() {
-		include_once plugin_dir_path(__FILE__) . '/actions/return-order.php';
+		$actions['yoos_return_order'] = __('Return to the original order', 'wc-order-splitter');
+		return $actions;
 	}
 }
 

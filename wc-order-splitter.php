@@ -1,9 +1,8 @@
 <?php
 /**
  * Plugin Name: Order Splitter for WooCommerce
- * Plugin URI: https://wordpress.org/plugins/wc-order-splitter/
- * Description: Split WooCommerce orders by quantity, category, or stock status from the admin.
- * Version: 1.4.11
+ * Description: Split, duplicate, merge, and return WooCommerce orders using integrity-preserving order mutations.
+ * Version: 1.5.0
  * Author: YoOhw.com
  * Author URI: https://yoohw.com
  * Requires at least: 6.3
@@ -18,6 +17,9 @@ if (!defined('ABSPATH')) {
 	exit;
 }
 
+$wc_order_splitter_plugin_data = get_file_data(__FILE__, array('Version' => 'Version'), false);
+define('WC_ORDER_SPLITTER_VERSION', isset($wc_order_splitter_plugin_data['Version']) ? $wc_order_splitter_plugin_data['Version'] : '1.5.0');
+
 add_action('before_woocommerce_init', function() {
 	if (class_exists(\Automattic\WooCommerce\Utilities\FeaturesUtil::class)) {
 		\Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility('custom_order_tables', __FILE__, true);
@@ -25,18 +27,8 @@ add_action('before_woocommerce_init', function() {
 });
 
 class WooCommerce_Order_Splitter {
-	
 	public function __construct() {
-		$wcos_plugin_data = get_file_data(__FILE__, ['Version' => 'Version'], false);
-		$wcos_plugin_version = isset($wcos_plugin_data['Version']) ? $wcos_plugin_data['Version'] : '';
-		define('WC_ORDER_SPLITTER_VERSION', $wcos_plugin_version);
-
-		add_filter('plugin_action_links_' . plugin_basename(__FILE__), [$this, 'add_action_links']);
-
-		$this->includes();
-	}
-
-	public function includes() {
+		add_filter('plugin_action_links_' . plugin_basename(__FILE__), array($this, 'add_action_links'));
 		include_once plugin_dir_path(__FILE__) . 'inc/cores/script.php';
 	}
 
@@ -51,7 +43,35 @@ class WooCommerce_Order_Splitter {
 	}
 }
 
-// Initialize the plugin
-new WooCommerce_Order_Splitter();
+function wc_order_splitter_missing_woocommerce_notice() {
+	if (!current_user_can('activate_plugins')) {
+		return;
+	}
+	echo '<div class="notice notice-error"><p>' . esc_html__('Order Splitter for WooCommerce requires WooCommerce to be installed and active.', 'wc-order-splitter') . '</p></div>';
+}
 
-register_activation_hook(__FILE__, array('WooCommerce_Order_Splitter_Settings', 'set_default_settings'));
+function wc_order_splitter_bootstrap() {
+	if (!class_exists('WooCommerce')) {
+		add_action('admin_notices', 'wc_order_splitter_missing_woocommerce_notice');
+		return;
+	}
+	new WooCommerce_Order_Splitter();
+}
+add_action('plugins_loaded', 'wc_order_splitter_bootstrap', 20);
+
+function wc_order_splitter_activate() {
+	$defaults = array(
+		'order_splitter_status_allowed' => array('wc-processing'),
+		'order_splitter_shipping_policy' => 'keep_on_original',
+		'order_splitter_disable_split_order_email' => 'none',
+		'order_splitter_shop_manager_permission' => 'no',
+		'order_splitter_order_label' => 'yes',
+	);
+
+	foreach ($defaults as $key => $value) {
+		if (false === get_option($key, false)) {
+			add_option($key, $value);
+		}
+	}
+}
+register_activation_hook(__FILE__, 'wc_order_splitter_activate');

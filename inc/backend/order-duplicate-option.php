@@ -3,31 +3,28 @@
 defined('ABSPATH') || exit;
 
 class WooCommerce_Order_Splitter_Duplicate_Order_Option {
-
 	public function __construct() {
 		add_filter('woocommerce_order_actions', array($this, 'add_duplicate_order_action'));
-		$this->includes();
 	}
 
 	public function add_duplicate_order_action($actions) {
 		global $theorder;
 
-		// Retrieve allowed statuses from the settings
-		$allowed_statuses = get_option('order_splitter_status_allowed', []);
-
-		if (current_user_can('administrator')) {
-			// Check if the status is in the allowed statuses
-			if ('trash' !== $theorder->get_status() && in_array('wc-' . $theorder->get_status(), $allowed_statuses, true)) {
-				$actions['yoos_duplicate_order'] = __('Duplicate this order', 'wc-order-splitter');
-			}
+		if (!$theorder instanceof WC_Order) {
+			return $actions;
+		}
+		if (!WC_Order_Splitter_Mutation_Support::current_user_can_manage_order($theorder->get_id())) {
+			return $actions;
+		}
+		if ('trash' === $theorder->get_status() || !WC_Order_Splitter_Mutation_Support::is_status_allowed($theorder)) {
+			return $actions;
+		}
+		if ($theorder->get_meta(WC_Order_Splitter_Mutation_Support::META_MERGED_INTO, true)) {
+			return $actions;
 		}
 
+		$actions['yoos_duplicate_order'] = __('Duplicate this order', 'wc-order-splitter');
 		return $actions;
-
-	}
-
-	public function includes() {
-		include_once plugin_dir_path(__FILE__) . '/actions/duplicate-order.php';
 	}
 }
 
