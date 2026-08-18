@@ -46,6 +46,16 @@ $plan = array(
 );
 
 /*
+ * Track the stage independently so a guard failure before the injector produces
+ * useful evidence rather than being mistaken for a missing action invocation.
+ */
+$last_stage = '';
+$stage_observer = static function($stage) use (&$last_stage) {
+	$last_stage = sanitize_key((string) $stage);
+};
+add_action('wcos_split_mutation_checkpoint', $stage_observer, 1, 1);
+
+/*
  * Commit guard runs first at this same priority and durably records the planned
  * post-source signatures. Persist the already-mutated source ourselves, then
  * throw before WCOS_Split_Order_Service can record source_persisted. This
@@ -72,13 +82,22 @@ $injector = static function($stage, WC_Order $stage_source, array $children, $st
 };
 add_action('wcos_split_mutation_checkpoint', $injector, PHP_INT_MAX, 4);
 
+$first_error = '';
 try {
 	(new WCOS_Split_Order_Service())->split($source, $plan, $operation_id);
 } catch (RuntimeException $expected) {
-	/* The service may rethrow or may finalize the conserved persisted state. */
+	$first_error = $expected->getMessage();
 }
 remove_action('wcos_split_mutation_checkpoint', $injector, PHP_INT_MAX);
-wcos_source_crash_assert($injected, 'The source-save crash injector did not execute.');
+remove_action('wcos_split_mutation_checkpoint', $stage_observer, 1);
+if (!$injected) {
+	throw new RuntimeException(
+		'The source-save crash injector did not execute. Last mutation stage: '
+		. ('' !== $last_stage ? $last_stage : 'none')
+		. '. First attempt error: '
+		. ('' !== $first_error ? $first_error : 'none')
+	);
+}
 
 $source = wc_get_order($source_id);
 $record = WCOS_Operation_Journal::get($source, $operation_id);
