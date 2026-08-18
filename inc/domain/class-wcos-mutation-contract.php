@@ -50,22 +50,34 @@ final class WCOS_Mutation_Contract {
 				throw new RuntimeException('Line quantity conservation failed.');
 			}
 		}
+
+		if (isset($before['currencies']) || isset($after['currencies'])) {
+			$before_currencies = self::normalize_strings(isset($before['currencies']) ? (array) $before['currencies'] : array());
+			$after_currencies = self::normalize_strings(isset($after['currencies']) ? (array) $after['currencies'] : array());
+			if ($before_currencies !== $after_currencies) {
+				throw new RuntimeException('Currency conservation failed.');
+			}
+		}
 	}
 
 	private static function normalize_line_quantities(array $lines) {
 		$normalized = array();
 		foreach ($lines as $identity => $quantity) {
-			$factor = 1000000;
-			$normalized[(string) $identity] = (int) round(((float) $quantity) * $factor, 0, PHP_ROUND_HALF_UP);
+			$normalized[(string) $identity] = WCOS_Decimal::to_units($quantity, 6);
 		}
 		ksort($normalized, SORT_STRING);
 		return $normalized;
 	}
 
+	private static function normalize_strings(array $values) {
+		$values = array_values(array_unique(array_map('strval', $values)));
+		sort($values, SORT_STRING);
+		return $values;
+	}
+
 	private static function assert_decimal_equal($before, $after, $precision, $label) {
-		$factor = 10 ** $precision;
-		$before_units = (int) round(((float) $before) * $factor, 0, PHP_ROUND_HALF_UP);
-		$after_units = (int) round(((float) $after) * $factor, 0, PHP_ROUND_HALF_UP);
+		$before_units = WCOS_Decimal::to_units($before, $precision);
+		$after_units = WCOS_Decimal::to_units($after, $precision);
 
 		if ($before_units !== $after_units) {
 			throw new RuntimeException(sprintf('%s conservation failed: %s != %s.', $label, (string) $before, (string) $after));
