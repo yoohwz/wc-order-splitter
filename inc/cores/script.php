@@ -31,6 +31,7 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-operation-journal.php';
 		include_once $root . 'domain/class-wcos-order-item-cloner.php';
 		include_once $root . 'domain/class-wcos-duplicate-order-service.php';
+		include_once $root . 'domain/class-wcos-split-order-service.php';
 
 		include_once $root . 'backend/settings.php';
 		include_once $root . 'backend/orders.php';
