@@ -18,10 +18,23 @@ final class WCOS_Split_WooCommerce_Adapter {
             throw new InvalidArgumentException(__('A split operation ID is required.', 'wc-order-splitter'));
         }
 
+        $source_id = $source->get_id();
         $precision = WCOS_Price_Precision_Scope::for_operation($source, $operation_id, $confirmed_precision);
         $precision_token = WCOS_Price_Precision_Scope::begin($precision);
 
         try {
+            /*
+             * WooCommerce derives line subtotal/total-tax props while hydrating
+             * order items and that path calls wc_round_tax_total(). Reload only
+             * after the operation precision is pinned so a retry cannot be
+             * rounded by a changed ambient store precision before mutation code
+             * even sees the source.
+             */
+            $source = wc_get_order($source_id);
+            if (!$source instanceof WC_Order) {
+                throw new RuntimeException(__('The source order is no longer available.', 'wc-order-splitter'));
+            }
+
             WCOS_Split_Preflight::assert_supported($source, $precision);
             $stock_token = WCOS_Stock_Side_Effect_Guard::begin($operation_id);
 
@@ -32,7 +45,7 @@ final class WCOS_Split_WooCommerce_Adapter {
             } catch (Throwable $throwable) {
                 $events = WCOS_Stock_Side_Effect_Guard::events($stock_token);
                 if (!empty($events) && WCOS_Stock_Side_Effect_Guard::events_require_manual_reconciliation($events)) {
-                    $this->mark_manual_stock_reconciliation($source->get_id(), $operation_id, $events, $throwable);
+                    $this->mark_manual_stock_reconciliation($source_id, $operation_id, $events, $throwable);
                 }
                 if (!empty($events) && !$throwable instanceof WCOS_Unexpected_Stock_Mutation_Exception) {
                     throw new WCOS_Unexpected_Stock_Mutation_Exception($events, $throwable);
@@ -47,9 +60,14 @@ final class WCOS_Split_WooCommerce_Adapter {
     }
 
     public function preflight(WC_Order $source, $operation_id = '', $confirmed_precision = null) {
+        $source_id = $source->get_id();
         $precision = WCOS_Price_Precision_Scope::for_operation($source, $operation_id, $confirmed_precision);
         $precision_token = WCOS_Price_Precision_Scope::begin($precision);
         try {
+            $source = $source_id ? wc_get_order($source_id) : $source;
+            if (!$source instanceof WC_Order) {
+                throw new RuntimeException(__('The source order is no longer available.', 'wc-order-splitter'));
+            }
             return WCOS_Split_Preflight::report($source, $precision);
         } finally {
             WCOS_Price_Precision_Scope::end($precision_token);
