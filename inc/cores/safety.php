@@ -6,7 +6,7 @@ defined('ABSPATH') || exit;
  * Emergency safety guard for order mutation workflows.
  *
  * Version 1.4.12 deliberately fails closed while the mutation engine is rebuilt
- * around stock, monetary, line-identity, and idempotency invariants.
+ * around stock, monetary, line-identity, idempotency, and recovery invariants.
  */
 class WC_Order_Splitter_Safety_Guard {
 

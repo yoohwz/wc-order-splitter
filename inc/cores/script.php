@@ -22,12 +22,46 @@ class WC_Order_Splitter_Script {
 	}
 
 	public function includes() {
-		include_once plugin_dir_path(__FILE__) . '../backend/settings.php';
-		include_once plugin_dir_path(__FILE__) . '../backend/orders.php';
-		include_once plugin_dir_path(__FILE__) . '../backend/yoohw-woo-settings-tabs-reorder.php';
+		$root = plugin_dir_path(__FILE__) . '../';
+
+		include_once $root . 'domain/class-wcos-decimal.php';
+		include_once $root . 'domain/class-wcos-amount-allocator.php';
+		include_once $root . 'domain/class-wcos-line-identity.php';
+		include_once $root . 'domain/class-wcos-mutation-fingerprint.php';
+		include_once $root . 'domain/class-wcos-mutation-contract.php';
+		include_once $root . 'domain/class-wcos-operation-lock.php';
+		include_once $root . 'domain/class-wcos-feature-gates.php';
+		include_once $root . 'domain/class-wcos-order-mutation-authorizer.php';
+		include_once $root . 'domain/class-wcos-order-item-meta-policy.php';
+		include_once $root . 'domain/class-wcos-order-item-cloner.php';
+		include_once $root . 'domain/class-wcos-split-plan.php';
+		include_once $root . 'domain/class-wcos-order-totals-rebuilder.php';
+		include_once $root . 'domain/class-wcos-tax-item-synchronizer.php';
+		include_once $root . 'domain/class-wcos-order-contract-snapshot.php';
+		include_once $root . 'domain/class-wcos-order-copy-context.php';
+		include_once $root . 'domain/class-wcos-order-mutation-snapshot.php';
+		include_once $root . 'domain/class-wcos-operation-journal.php';
+		include_once $root . 'domain/class-wcos-order-relation-repository.php';
+		WCOS_Order_Relation_Repository::bootstrap();
+		include_once $root . 'domain/class-wcos-mutation-commit-guard.php';
+		WCOS_Mutation_Commit_Guard::bootstrap();
+		include_once $root . 'domain/class-wcos-duplicate-order-service.php';
+		include_once $root . 'domain/class-wcos-split-order-service.php';
+		include_once $root . 'domain/class-wcos-split-compensator.php';
+		include_once $root . 'domain/class-wcos-mutation-recovery-coordinator.php';
+		WCOS_Mutation_Recovery_Coordinator::bootstrap();
+		include_once $root . 'domain/class-wcos-mutation-gateway.php';
+
+		include_once $root . 'backend/settings.php';
+		include_once $root . 'backend/orders.php';
+		include_once $root . 'backend/yoohw-woo-settings-tabs-reorder.php';
 		include_once plugin_dir_path(__FILE__) . 'safety.php';
 
-		// Legacy mutation handlers are deliberately never loaded in 1.4.12.
+		/*
+		 * Legacy mutation handlers are deliberately never loaded here. Future
+		 * controllers must call WCOS_Mutation_Gateway so workflow gates and the
+		 * centralized authorizer cannot be bypassed by controller code.
+		 */
 	}
 }
 
