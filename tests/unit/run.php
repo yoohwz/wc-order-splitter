@@ -51,6 +51,15 @@ $tests['allocator preserves cents deterministically'] = static function() {
 	assert_same(array('a' => '3.34', 'b' => '3.33', 'c' => '3.33'), $result);
 };
 
+$tests['allocator residual tie-break ignores associative input order'] = static function() {
+	$first = WCOS_Amount_Allocator::allocate('0.01', array('b' => '1', 'a' => '1'), 2);
+	$second = WCOS_Amount_Allocator::allocate('0.01', array('a' => '1', 'b' => '1'), 2);
+	assert_same('0.01', $first['a']);
+	assert_same('0.00', $first['b']);
+	assert_same($first['a'], $second['a']);
+	assert_same($first['b'], $second['b']);
+};
+
 $tests['allocator preserves negative amounts'] = static function() {
 	$result = WCOS_Amount_Allocator::allocate('-1.00', array('a' => '1', 'b' => '3'), 2);
 	assert_same(array('a' => '-0.25', 'b' => '-0.75'), $result);
