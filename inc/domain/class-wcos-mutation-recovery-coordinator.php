@@ -25,7 +25,7 @@ final class WCOS_Mutation_Recovery_Coordinator {
 		}
 
 		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
-		if (empty($context['source_snapshot']) || empty($context['source_signature_after'])) {
+		if (empty($context['source_snapshot']) || empty($context['source_recovery_signature_after'])) {
 			return;
 		}
 
@@ -34,11 +34,7 @@ final class WCOS_Mutation_Recovery_Coordinator {
 			$children = self::discover_children($source, $operation_id);
 			WCOS_Split_Compensator::compensate($source, $children, $record);
 		} catch (Throwable $throwable) {
-			/*
-			 * Deliberately do not overwrite the journal here: keeping the original
-			 * recovery_required/compensating state is safer than hiding an
-			 * ambiguous compensation failure. Surface it to diagnostic observers.
-			 */
+			/* Keep the durable ambiguous state visible for a later safe retry. */
 			do_action('wcos_mutation_compensation_error', $throwable, $source, $operation_id, $record);
 		} finally {
 			unset(self::$active[$key]);
