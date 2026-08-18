@@ -79,6 +79,9 @@ jobs:
       - name: Verify duplicate mutation service invariants
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/duplicate-smoke.php
 
+      - name: Verify split conservation and idempotency
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/split-smoke.php
+
       - name: Stop WordPress
         if: always()
         run: npx wp-env stop
