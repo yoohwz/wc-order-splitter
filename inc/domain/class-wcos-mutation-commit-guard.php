@@ -3,8 +3,8 @@
 defined('ABSPATH') || exit;
 
 /**
- * Re-reads source state at Split commit boundaries so an external admin,
- * webhook, or extension cannot be overwritten by a stale in-memory order.
+ * Re-reads source state and refreshes request-local lease ownership at Split
+ * commit boundaries so stale workers cannot continue a long mutation.
  */
 final class WCOS_Mutation_Commit_Guard {
 
@@ -17,8 +17,14 @@ final class WCOS_Mutation_Commit_Guard {
 			return;
 		}
 
+		$source_id = $source->get_id();
+		if (!WCOS_Operation_Lock::refresh_current($source_id)) {
+			throw new RuntimeException(__('The split operation lease was lost before a persistence boundary.', 'wc-order-splitter'));
+		}
+		WCOS_Operation_Lock::assert_current_owned($source_id);
+
 		$operation_id = sanitize_key($operation_id);
-		$fresh_source = wc_get_order($source->get_id());
+		$fresh_source = wc_get_order($source_id);
 		if (!$fresh_source || 'shop_order' !== $fresh_source->get_type()) {
 			throw new RuntimeException(__('The split source order is no longer available at the commit boundary.', 'wc-order-splitter'));
 		}
