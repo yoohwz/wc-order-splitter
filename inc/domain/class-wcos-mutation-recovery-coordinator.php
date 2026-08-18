@@ -34,14 +34,14 @@ final class WCOS_Mutation_Recovery_Coordinator {
 		$lease_token = false;
 		$acquired_here = false;
 		try {
-			if (!WCOS_Operation_Lock::is_current_owned($source_id)) {
+			if (!WCOS_Operation_Lock::is_current_owned_for($source_id, $operation_id)) {
 				$lease_token = WCOS_Operation_Lock::acquire($source_id, $operation_id);
 				if (false === $lease_token) {
-					throw new RuntimeException(__('Automatic mutation recovery could not acquire the source-order lease.', 'wc-order-splitter'));
+					throw new RuntimeException(__('Automatic mutation recovery could not acquire the source-order lease for this operation.', 'wc-order-splitter'));
 				}
 				$acquired_here = true;
 			}
-			WCOS_Operation_Lock::assert_current_owned($source_id);
+			WCOS_Operation_Lock::assert_current_owned_for($source_id, $operation_id);
 
 			$fresh_source = wc_get_order($source_id);
 			if (!$fresh_source || 'shop_order' !== $fresh_source->get_type()) {
