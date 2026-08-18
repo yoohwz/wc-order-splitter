@@ -7,11 +7,14 @@ defined('ABSPATH') || exit;
  *
  * Every acquisition receives a unique lease token. Stale takeover, refresh,
  * and release use compare-and-swap SQL so an expired worker cannot delete or
- * overwrite a newer worker's lease.
+ * overwrite a newer worker's lease. Request-local ownership is also tracked so
+ * commit-boundary guards can refresh long operations without exposing tokens.
  */
 final class WCOS_Operation_Lock {
 
 	const DEFAULT_TTL = 300;
+
+	private static $local_leases = array();
 
 	/**
 	 * @return string|false Unique lease token on success, false when locked.
@@ -29,19 +32,28 @@ final class WCOS_Operation_Lock {
 		$value = self::new_value($operation_id, $ttl);
 
 		if (add_option($key, $value, '', false)) {
+			self::remember($order_id, $value['lease_token'], $operation_id);
 			return $value['lease_token'];
 		}
 
 		$current = get_option($key, null);
 		if (!is_array($current) || empty($current['expires_at'])) {
-			return self::compare_and_swap($key, $current, $value) ? $value['lease_token'] : false;
+			if (self::compare_and_swap($key, $current, $value)) {
+				self::remember($order_id, $value['lease_token'], $operation_id);
+				return $value['lease_token'];
+			}
+			return false;
 		}
 
 		if ((int) $current['expires_at'] > time()) {
 			return false;
 		}
 
-		return self::compare_and_swap($key, $current, $value) ? $value['lease_token'] : false;
+		if (!self::compare_and_swap($key, $current, $value)) {
+			return false;
+		}
+		self::remember($order_id, $value['lease_token'], $operation_id);
+		return $value['lease_token'];
 	}
 
 	public static function refresh($order_id, $lease_token, $ttl = self::DEFAULT_TTL) {
@@ -55,13 +67,26 @@ final class WCOS_Operation_Lock {
 		$key = self::key($order_id);
 		$current = get_option($key, null);
 		if (!self::matches_lease($current, $lease_token)) {
+			self::forget_if_token($order_id, $lease_token);
 			return false;
 		}
 
 		$replacement = $current;
 		$replacement['expires_at'] = time() + $ttl;
 		$replacement['refreshed_at'] = gmdate('c');
-		return self::compare_and_swap($key, $current, $replacement);
+		if (!self::compare_and_swap($key, $current, $replacement)) {
+			return false;
+		}
+		self::remember($order_id, $lease_token, isset($replacement['operation_id']) ? $replacement['operation_id'] : '');
+		return true;
+	}
+
+	public static function refresh_current($order_id, $ttl = self::DEFAULT_TTL) {
+		$order_id = absint($order_id);
+		if (!$order_id || !isset(self::$local_leases[$order_id]['lease_token'])) {
+			return false;
+		}
+		return self::refresh($order_id, self::$local_leases[$order_id]['lease_token'], $ttl);
 	}
 
 	public static function is_owned($order_id, $lease_token) {
@@ -77,6 +102,19 @@ final class WCOS_Operation_Lock {
 			&& (int) $current['expires_at'] > time();
 	}
 
+	public static function is_current_owned($order_id) {
+		$order_id = absint($order_id);
+		return $order_id
+			&& isset(self::$local_leases[$order_id]['lease_token'])
+			&& self::is_owned($order_id, self::$local_leases[$order_id]['lease_token']);
+	}
+
+	public static function assert_current_owned($order_id) {
+		if (!self::is_current_owned($order_id)) {
+			throw new RuntimeException(__('The order mutation lease is no longer owned by this worker.', 'wc-order-splitter'));
+		}
+	}
+
 	public static function release($order_id, $lease_token) {
 		$order_id = absint($order_id);
 		$lease_token = sanitize_key($lease_token);
@@ -87,10 +125,15 @@ final class WCOS_Operation_Lock {
 		$key = self::key($order_id);
 		$current = get_option($key, null);
 		if (!self::matches_lease($current, $lease_token)) {
+			self::forget_if_token($order_id, $lease_token);
 			return false;
 		}
 
-		return self::compare_and_delete($key, $current);
+		$released = self::compare_and_delete($key, $current);
+		if ($released) {
+			self::forget_if_token($order_id, $lease_token);
+		}
+		return $released;
 	}
 
 	private static function new_value($operation_id, $ttl) {
@@ -101,6 +144,21 @@ final class WCOS_Operation_Lock {
 			'refreshed_at' => null,
 			'expires_at' => time() + $ttl,
 		);
+	}
+
+	private static function remember($order_id, $lease_token, $operation_id) {
+		self::$local_leases[absint($order_id)] = array(
+			'lease_token' => sanitize_key($lease_token),
+			'operation_id' => sanitize_key($operation_id),
+		);
+	}
+
+	private static function forget_if_token($order_id, $lease_token) {
+		$order_id = absint($order_id);
+		if (isset(self::$local_leases[$order_id]['lease_token'])
+			&& hash_equals((string) self::$local_leases[$order_id]['lease_token'], (string) $lease_token)) {
+			unset(self::$local_leases[$order_id]);
+		}
 	}
 
 	private static function matches_lease($value, $lease_token) {
@@ -121,12 +179,8 @@ final class WCOS_Operation_Lock {
 			)
 		);
 
-		if (1 !== $updated) {
-			return false;
-		}
-
 		wp_cache_delete($key, 'options');
-		return true;
+		return 1 === $updated;
 	}
 
 	private static function compare_and_delete($key, $current) {
@@ -140,12 +194,8 @@ final class WCOS_Operation_Lock {
 			)
 		);
 
-		if (1 !== $deleted) {
-			return false;
-		}
-
 		wp_cache_delete($key, 'options');
-		return true;
+		return 1 === $deleted;
 	}
 
 	private static function key($order_id) {
