@@ -35,20 +35,36 @@ final class WCOS_Split_Confirmation_Store {
         $operation_id = wp_generate_uuid4();
         $token = wp_generate_password(48, false, false);
         $precision = WCOS_Price_Precision_Scope::validate(isset($preflight['price_precision']) ? $preflight['price_precision'] : wc_get_price_decimals());
-        $now = time();
-        $record = array(
-            'schema_version' => self::SCHEMA_VERSION,
-            'operation_id' => $operation_id,
-            'token_hash' => self::token_hash($token),
-            'source_order_id' => $source->get_id(),
-            'user_id' => $user_id,
-            'source_signature' => WCOS_Order_Contract_Snapshot::source_signature($source),
-            'plan' => WCOS_Split_Plan::canonicalize_request($plan),
-            'price_precision' => $precision,
-            'policy_version' => isset($preflight['policy']['policy_version']) ? absint($preflight['policy']['policy_version']) : 0,
-            'created_at' => $now,
-            'expires_at' => $now + self::TTL,
-        );
+        $precision_token = WCOS_Price_Precision_Scope::begin($precision);
+        try {
+            /*
+             * Review preflight was evaluated under this precision. Rehydrate the
+             * source under the same precision before capturing its confirmation
+             * signature so tax rounding during order-item hydration cannot make
+             * the execute step report a false source_changed conflict.
+             */
+            $scoped_source = wc_get_order($source->get_id());
+            if (!$scoped_source instanceof WC_Order) {
+                throw new RuntimeException(__('The source order is no longer available.', 'wc-order-splitter'));
+            }
+
+            $now = time();
+            $record = array(
+                'schema_version' => self::SCHEMA_VERSION,
+                'operation_id' => $operation_id,
+                'token_hash' => self::token_hash($token),
+                'source_order_id' => $scoped_source->get_id(),
+                'user_id' => $user_id,
+                'source_signature' => WCOS_Order_Contract_Snapshot::source_signature($scoped_source),
+                'plan' => WCOS_Split_Plan::canonicalize_request($plan),
+                'price_precision' => $precision,
+                'policy_version' => isset($preflight['policy']['policy_version']) ? absint($preflight['policy']['policy_version']) : 0,
+                'created_at' => $now,
+                'expires_at' => $now + self::TTL,
+            );
+        } finally {
+            WCOS_Price_Precision_Scope::end($precision_token);
+        }
 
         if (!set_transient(self::key($operation_id), $record, self::TTL)) {
             throw new RuntimeException(__('Unable to create the temporary Split confirmation record.', 'wc-order-splitter'));
