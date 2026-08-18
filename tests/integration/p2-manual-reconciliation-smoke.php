@@ -6,38 +6,43 @@ if (!defined('ABSPATH')) {
 
 /*
  * Extreme fallback: an integration reports that physical stock was already
- * written after the hardened Split has passed persisted verification. The
- * adapter must convert even a completed journal into a durable
- * manual_reconciliation incident and block every later Split on the source.
+ * written after the hardened Split journal has completed but while the service
+ * still owns its source-order lease during best-effort order notes. The adapter
+ * must persist manual_reconciliation before that lease is released.
  */
 $manual_product = wcos_p2_adapter_product('WCOS P2 manual reconciliation', '8.00', 30);
 list($manual_source, $manual_item_id) = wcos_p2_adapter_order($manual_product, 4);
+$manual_source_id = $manual_source->get_id();
 $manual_operation = 'p2-manual-reconciliation-' . wp_generate_uuid4();
 $manual_injected = false;
+$lease_owned_during_injection = false;
 
-$manual_callback = static function($stage) use (&$manual_injected, $manual_product) {
-    if (!$manual_injected && 'after_persisted_verify' === $stage) {
-        $manual_injected = true;
-        WCOS_Stock_Side_Effect_Guard::record_product_stock_write($manual_product);
+$manual_callback = static function($note_id, $note_order) use (&$manual_injected, &$lease_owned_during_injection, $manual_product, $manual_source_id, $manual_operation) {
+    if ($manual_injected || !$note_order instanceof WC_Order) {
+        return;
     }
+    $manual_injected = true;
+    $lease_owned_during_injection = WCOS_Operation_Lock::is_current_owned_for($manual_source_id, $manual_operation);
+    WCOS_Stock_Side_Effect_Guard::record_product_stock_write($manual_product);
 };
-add_action('wcos_split_mutation_checkpoint', $manual_callback, 10, 4);
+add_action('woocommerce_order_note_added', $manual_callback, 10, 2);
 
 $manual_exception = false;
 try {
     (new WCOS_Split_WooCommerce_Adapter())->split(
-        wc_get_order($manual_source->get_id()),
+        wc_get_order($manual_source_id),
         array('child-one' => array($manual_item_id => '1.000000')),
         $manual_operation
     );
 } catch (WCOS_Unexpected_Stock_Mutation_Exception $exception) {
     $manual_exception = WCOS_Stock_Side_Effect_Guard::events_require_manual_reconciliation($exception->get_events());
 }
-remove_action('wcos_split_mutation_checkpoint', $manual_callback, 10);
+remove_action('woocommerce_order_note_added', $manual_callback, 10);
 
 wcos_p2_adapter_assert($manual_injected && $manual_exception, 'After-write fallback did not surface a manual-reconciliation exception.');
+wcos_p2_adapter_assert($lease_owned_during_injection, 'After-write evidence was injected after the Split service had already released its source lease.');
 
-$manual_source = wc_get_order($manual_source->get_id());
+$manual_source = wc_get_order($manual_source_id);
 $manual_record = WCOS_Operation_Journal::get($manual_source, $manual_operation);
 wcos_p2_adapter_assert(is_array($manual_record), 'Manual-reconciliation journal disappeared.');
 wcos_p2_adapter_assert('manual_reconciliation' === $manual_record['status'], 'Completed Split was not converted to manual_reconciliation.');
