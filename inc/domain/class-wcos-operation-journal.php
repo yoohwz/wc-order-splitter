@@ -24,6 +24,13 @@ final class WCOS_Operation_Journal {
 			return false;
 		}
 
+		if ('split' === $type && class_exists('WCOS_Order_Mutation_Snapshot')) {
+			$snapshot = WCOS_Order_Mutation_Snapshot::capture_split_source($order);
+			$context['source_snapshot'] = $snapshot;
+			$context['source_snapshot_fingerprint'] = $snapshot['recovery_fingerprint'];
+			$context['source_copy_context_signature'] = $snapshot['copy_context_signature'];
+		}
+
 		$now = gmdate('c');
 		$record = array(
 			'schema_version' => self::SCHEMA_VERSION,
@@ -79,6 +86,7 @@ final class WCOS_Operation_Journal {
 		if ('' === $stage) {
 			return false;
 		}
+		$context = self::enrich_recovery_context($order, $stage, $context);
 
 		return self::mutate(
 			$order,
@@ -94,6 +102,7 @@ final class WCOS_Operation_Journal {
 	}
 
 	public static function mark_committed(WC_Order $order, $operation_id, array $context = array()) {
+		$context = self::enrich_recovery_context($order, 'source_committed', $context);
 		return self::set_status(
 			$order,
 			$operation_id,
@@ -106,6 +115,7 @@ final class WCOS_Operation_Journal {
 	}
 
 	public static function complete(WC_Order $order, $operation_id, array $context = array()) {
+		$context = self::enrich_recovery_context($order, 'completed', $context);
 		return self::set_status(
 			$order,
 			$operation_id,
@@ -123,7 +133,11 @@ final class WCOS_Operation_Journal {
 			return false;
 		}
 		$status = isset($current['status']) ? sanitize_key($current['status']) : '';
-		if (in_array($status, array('failed', 'recovery_required', 'committed', 'completed', 'compensating', 'compensated'), true)) {
+		if (in_array($status, array('recovery_required', 'compensating'), true)) {
+			self::dispatch_recovery($order, $operation_id, $current);
+			return true;
+		}
+		if (in_array($status, array('failed', 'committed', 'completed', 'compensated'), true)) {
 			return true;
 		}
 		return self::set_status(
@@ -146,7 +160,7 @@ final class WCOS_Operation_Journal {
 		if (in_array($status, array('completed', 'compensated'), true)) {
 			return true;
 		}
-		return self::set_status(
+		$updated = self::set_status(
 			$order,
 			$operation_id,
 			'recovery_required',
@@ -155,6 +169,13 @@ final class WCOS_Operation_Journal {
 			false,
 			array('started', 'failed', 'recovery_required', 'committed')
 		);
+		if ($updated) {
+			$fresh = self::get(wc_get_order($order->get_id()), $operation_id);
+			if (is_array($fresh)) {
+				self::dispatch_recovery(wc_get_order($order->get_id()), $operation_id, $fresh);
+			}
+		}
+		return $updated;
 	}
 
 	public static function resume(WC_Order $order, $operation_id, array $context = array()) {
@@ -217,6 +238,35 @@ final class WCOS_Operation_Journal {
 				return self::append_checkpoint($record, $stage, $context);
 			}
 		);
+	}
+
+	private static function enrich_recovery_context(WC_Order $order, $stage, array $context) {
+		$stage = sanitize_key($stage);
+		$target_ids = isset($context['target_order_ids'])
+			? array_values(array_unique(array_filter(array_map('absint', (array) $context['target_order_ids']))))
+			: array();
+		if (!empty($target_ids) && class_exists('WCOS_Order_Contract_Snapshot')) {
+			$signatures = array();
+			foreach ($target_ids as $target_id) {
+				$target = wc_get_order($target_id);
+				if ($target instanceof WC_Order) {
+					$signatures[$target_id] = WCOS_Order_Contract_Snapshot::source_signature($target);
+				}
+			}
+			ksort($signatures, SORT_NUMERIC);
+			$context['target_order_ids'] = $target_ids;
+			$context['child_signatures'] = $signatures;
+		}
+
+		if (in_array($stage, array('source_persisted', 'stock_flags_synchronized', 'source_committed', 'completed'), true)
+			&& class_exists('WCOS_Order_Mutation_Snapshot')) {
+			$fresh = wc_get_order($order->get_id());
+			if ($fresh instanceof WC_Order) {
+				$context['source_signature_after'] = WCOS_Order_Contract_Snapshot::source_signature($fresh);
+				$context['source_recovery_signature_after'] = WCOS_Order_Mutation_Snapshot::split_owned_signature($fresh);
+			}
+		}
+		return $context;
 	}
 
 	private static function append_checkpoint(array $record, $stage, array $context) {
@@ -295,6 +345,10 @@ final class WCOS_Operation_Journal {
 
 		wp_cache_delete($key, 'options');
 		return 1 === $updated;
+	}
+
+	private static function dispatch_recovery(WC_Order $order, $operation_id, array $record) {
+		do_action('wcos_mutation_recovery_required', $order, sanitize_key($operation_id), $record);
 	}
 
 	private static function write_summary(WC_Order $order, array $record) {
