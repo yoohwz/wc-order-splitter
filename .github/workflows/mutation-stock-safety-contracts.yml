@@ -1,0 +1,41 @@
+name: Mutation stock safety contracts
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  stock-safety-contracts:
+    name: Stock safety (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.1', '8.3']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Lint stock safety files
+        shell: bash
+        run: |
+          set -euo pipefail
+          php -l inc/mutation-v2/class-wcos-v2-stock-safety-scope.php
+          php -l inc/mutation-v2/class-wcos-v2-safe-quantity-split-service.php
+          php -l tests/v2/stock-safety-contract-test.php
+
+      - name: Run stock safety contracts
+        run: php tests/v2/stock-safety-contract-test.php
