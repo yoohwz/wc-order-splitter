@@ -1,0 +1,40 @@
+name: Hotfix bootstrap contracts
+
+on:
+  push:
+    branches:
+      - hotfix/order-splitter-1.4.12-safety
+  pull_request:
+    paths:
+      - 'wc-order-splitter.php'
+      - 'inc/cores/**'
+      - 'inc/backend/settings.php'
+      - 'inc/backend/orders.php'
+      - 'tests/bootstrap-contract.php'
+      - '.github/workflows/hotfix-bootstrap-contracts.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    name: PHP ${{ matrix.php }} / WooCommerce ${{ matrix.woocommerce }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.1', '8.3']
+        woocommerce: [missing, active]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Run bootstrap contract
+        run: php tests/bootstrap-contract.php ${{ matrix.woocommerce }}
