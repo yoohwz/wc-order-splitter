@@ -1,0 +1,98 @@
+name: Canonical release package
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Emergency package contract
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '7.4'
+          coverage: none
+
+      - name: Build allowlisted release ZIP
+        run: bash bin/build-plugin.sh
+
+      - name: Inspect release boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -l build/wc-order-splitter.zip
+
+          required=(
+            'wc-order-splitter/wc-order-splitter.php'
+            'wc-order-splitter/readme.txt'
+            'wc-order-splitter/inc/cores/script.php'
+            'wc-order-splitter/inc/mutation-v2/engine-loader.php'
+          )
+
+          for path in "${required[@]}"; do
+            unzip -Z1 build/wc-order-splitter.zip | grep -Fxq "$path"
+          done
+
+          forbidden=(
+            'wc-order-splitter/inc/backend/actions/duplicate-order.php'
+            'wc-order-splitter/inc/backend/actions/merge-order.php'
+            'wc-order-splitter/inc/backend/actions/return-order.php'
+            'wc-order-splitter/inc/backend/actions/split-order-by-default.php'
+            'wc-order-splitter/inc/backend/order-duplicate-option.php'
+            'wc-order-splitter/inc/backend/order-merge-option.php'
+            'wc-order-splitter/inc/backend/order-return-option.php'
+            'wc-order-splitter/inc/backend/order-split-button.php'
+            'wc-order-splitter/inc/backend/orders-bulk-return.php'
+            'wc-order-splitter/inc/cores/api/push-subscription.php'
+            'wc-order-splitter/AGENTS.md'
+            'wc-order-splitter/.wp-env.json'
+            'wc-order-splitter/package.json'
+            'wc-order-splitter/package-lock.json'
+          )
+
+          for path in "${forbidden[@]}"; do
+            if unzip -Z1 build/wc-order-splitter.zip | grep -Fxq "$path"; then
+              echo "Forbidden release path found: $path" >&2
+              exit 1
+            fi
+          done
+
+          unzip -p build/wc-order-splitter.zip wc-order-splitter/wc-order-splitter.php \
+            | grep -Fq "define('WC_ORDER_SPLITTER_MUTATIONS_ENABLED', false);"
+
+          if unzip -p build/wc-order-splitter.zip | grep -Fq 'yoexpress.top'; then
+            echo 'Removed telemetry endpoint is present in the ZIP.' >&2
+            exit 1
+          fi
+
+      - name: Prove reproducible output
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp build/wc-order-splitter.zip /tmp/first.zip
+          cp build/wc-order-splitter.zip.sha256 /tmp/first.zip.sha256
+          bash bin/build-plugin.sh
+          cmp -s /tmp/first.zip build/wc-order-splitter.zip
+          cmp -s /tmp/first.zip.sha256 build/wc-order-splitter.zip.sha256
+
+      - name: Upload release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: wc-order-splitter-1.4.12-${{ github.sha }}
+          path: |
+            build/wc-order-splitter.zip
+            build/wc-order-splitter.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
