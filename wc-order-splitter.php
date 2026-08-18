@@ -34,13 +34,28 @@ class WooCommerce_Order_Splitter {
 			define('WC_ORDER_SPLITTER_VERSION', $wcos_plugin_version);
 		}
 
-		if (!defined('WC_ORDER_SPLITTER_MUTATIONS_ENABLED')) {
-			define('WC_ORDER_SPLITTER_MUTATIONS_ENABLED', false);
-		}
+		$this->define_fail_closed_feature_gates();
 
 		add_filter('plugin_action_links_' . plugin_basename(__FILE__), array($this, 'add_action_links'));
 
 		$this->includes();
+	}
+
+	private function define_fail_closed_feature_gates() {
+		$gates = array(
+			'WC_ORDER_SPLITTER_MUTATIONS_ENABLED',
+			'WC_ORDER_SPLITTER_SPLIT_ENABLED',
+			'WC_ORDER_SPLITTER_DUPLICATE_ENABLED',
+			'WC_ORDER_SPLITTER_MERGE_ENABLED',
+			'WC_ORDER_SPLITTER_RETURN_ENABLED',
+			'WC_ORDER_SPLITTER_BULK_RETURN_ENABLED',
+		);
+
+		foreach ($gates as $gate) {
+			if (!defined($gate)) {
+				define($gate, false);
+			}
+		}
 	}
 
 	public function includes() {
