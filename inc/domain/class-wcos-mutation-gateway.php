@@ -11,15 +11,15 @@ defined('ABSPATH') || exit;
  */
 final class WCOS_Mutation_Gateway {
 
-	public function split(WC_Order $source, array $plan, $operation_id) {
+	public function split(WC_Order $source, array $plan, $operation_id, $confirmed_precision = null) {
 		WCOS_Feature_Gates::assert_enabled(WCOS_Feature_Gates::SPLIT);
 		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::SPLIT, $source);
-		return (new WCOS_Split_WooCommerce_Adapter())->split($source, $plan, $operation_id);
+		return (new WCOS_Split_WooCommerce_Adapter())->split($source, $plan, $operation_id, $confirmed_precision);
 	}
 
-	public function split_preflight(WC_Order $source, $operation_id = '') {
+	public function split_preflight(WC_Order $source, $operation_id = '', $confirmed_precision = null) {
 		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::SPLIT, $source);
-		return (new WCOS_Split_WooCommerce_Adapter())->preflight($source, $operation_id);
+		return (new WCOS_Split_WooCommerce_Adapter())->preflight($source, $operation_id, $confirmed_precision);
 	}
 
 	public function duplicate(WC_Order $source, $operation_id) {
