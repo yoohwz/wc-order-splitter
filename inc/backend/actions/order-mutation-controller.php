@@ -239,6 +239,7 @@ final class WC_Order_Splitter_Mutation_Controller {
 			if ($idempotency_key) {
 				$replay = $this->get_split_replay($order, $idempotency_key);
 				if ($replay) {
+					WC_Order_Splitter_Charge_Integrity::normalize_after_split($order, $replay['new_order_ids']);
 					wp_send_json_success($replay);
 				}
 			}
