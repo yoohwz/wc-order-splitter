@@ -51,6 +51,20 @@ final class WCOS_Mutation_Contract {
 			}
 		}
 
+		if (isset($before['tax_by_rate']) || isset($after['tax_by_rate'])) {
+			$before_tax = self::normalize_tax_by_rate(
+				isset($before['tax_by_rate']) ? (array) $before['tax_by_rate'] : array(),
+				$precision
+			);
+			$after_tax = self::normalize_tax_by_rate(
+				isset($after['tax_by_rate']) ? (array) $after['tax_by_rate'] : array(),
+				$precision
+			);
+			if ($before_tax !== $after_tax) {
+				throw new RuntimeException('Per-rate historical tax conservation failed.');
+			}
+		}
+
 		if (isset($before['currencies']) || isset($after['currencies'])) {
 			$before_currencies = self::normalize_strings(isset($before['currencies']) ? (array) $before['currencies'] : array());
 			$after_currencies = self::normalize_strings(isset($after['currencies']) ? (array) $after['currencies'] : array());
@@ -64,6 +78,20 @@ final class WCOS_Mutation_Contract {
 		$normalized = array();
 		foreach ($lines as $identity => $quantity) {
 			$normalized[(string) $identity] = WCOS_Decimal::to_units($quantity, 6);
+		}
+		ksort($normalized, SORT_STRING);
+		return $normalized;
+	}
+
+	private static function normalize_tax_by_rate(array $taxes, $precision) {
+		$normalized = array();
+		foreach ($taxes as $rate_id => $totals) {
+			$totals = is_array($totals) ? $totals : array();
+			$key = (string) $rate_id;
+			$normalized[$key] = array(
+				'cart' => WCOS_Decimal::to_units(isset($totals['cart']) ? $totals['cart'] : 0, $precision),
+				'shipping' => WCOS_Decimal::to_units(isset($totals['shipping']) ? $totals['shipping'] : 0, $precision),
+			);
 		}
 		ksort($normalized, SORT_STRING);
 		return $normalized;
