@@ -175,6 +175,16 @@ final class WCOS_Order_Contract_Snapshot {
 	}
 
 	public static function assert_product_stock_equal(array $before, array $after) {
+		/*
+		 * A P2 adapter provides request-local evidence. Ambient stock changes from
+		 * concurrent checkouts occur in another request and must not make an
+		 * order-only mutation fail. Any stock write performed inside this request
+		 * is still rejected by the active guard.
+		 */
+		if (class_exists('WCOS_Stock_Side_Effect_Guard') && WCOS_Stock_Side_Effect_Guard::has_active_scope()) {
+			WCOS_Stock_Side_Effect_Guard::assert_current_clean();
+			return;
+		}
 		if ($before !== $after) {
 			throw new RuntimeException(__('Physical product stock changed during an order-only mutation.', 'wc-order-splitter'));
 		}

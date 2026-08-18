@@ -28,6 +28,7 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-amount-allocator.php';
 		include_once $root . 'domain/class-wcos-line-identity.php';
 		include_once $root . 'domain/class-wcos-mutation-fingerprint.php';
+		include_once $root . 'domain/class-wcos-stock-side-effect-guard.php';
 		include_once $root . 'domain/class-wcos-mutation-contract.php';
 		include_once $root . 'domain/class-wcos-operation-lock.php';
 		include_once $root . 'domain/class-wcos-feature-gates.php';
@@ -41,6 +42,8 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-order-copy-context.php';
 		include_once $root . 'domain/class-wcos-order-mutation-snapshot.php';
 		include_once $root . 'domain/class-wcos-operation-journal.php';
+		include_once $root . 'domain/class-wcos-operation-journal-retention.php';
+		WCOS_Operation_Journal_Retention::bootstrap();
 		include_once $root . 'domain/class-wcos-order-relation-repository.php';
 		WCOS_Order_Relation_Repository::bootstrap();
 		include_once $root . 'domain/class-wcos-mutation-commit-guard.php';
@@ -50,6 +53,8 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-split-compensator.php';
 		include_once $root . 'domain/class-wcos-mutation-recovery-coordinator.php';
 		WCOS_Mutation_Recovery_Coordinator::bootstrap();
+		include_once $root . 'domain/class-wcos-split-preflight.php';
+		include_once $root . 'domain/class-wcos-split-woocommerce-adapter.php';
 		include_once $root . 'domain/class-wcos-mutation-gateway.php';
 
 		include_once $root . 'backend/settings.php';

@@ -121,4 +121,7 @@ wcos_control_assert(!empty($summary_entry['completed_at']), 'Audit summary is mi
 wcos_control_assert(WCOS_Operation_Journal::delete($order, $journal_operation), 'Durable journal cleanup failed.');
 $order->delete(true);
 
+/* P2 quantity-split adapter contracts run in every WooCommerce storage mode. */
+require __DIR__ . '/p2-quantity-split-adapter-smoke.php';
+
 echo "operation-lock-and-journal-ok\n";

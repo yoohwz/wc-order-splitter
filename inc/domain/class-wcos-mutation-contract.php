@@ -10,6 +10,15 @@ if (!defined('ABSPATH') && 'cli' !== PHP_SAPI) {
 final class WCOS_Mutation_Contract {
 
 	public static function assert_conserved(array $before, array $after, $precision = 2) {
+		/*
+		 * P2 production adapters use request-local stock evidence. If a WooCommerce
+		 * stock write occurred in this mutation request, no conserved order-only
+		 * state may be accepted or auto-finalized even when order math still balances.
+		 */
+		if (class_exists('WCOS_Stock_Side_Effect_Guard') && WCOS_Stock_Side_Effect_Guard::has_active_scope()) {
+			WCOS_Stock_Side_Effect_Guard::assert_current_clean();
+		}
+
 		$precision = (int) $precision;
 		$money_keys = array(
 			'line_subtotal',
