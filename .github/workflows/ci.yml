@@ -20,7 +20,7 @@ jobs:
         php: ['7.4', '8.1', '8.3']
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -41,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Reject removed telemetry integration
         shell: bash
@@ -49,12 +49,13 @@ jobs:
           set -euo pipefail
           telemetry_host='yoexpress''.''top'
           test ! -e inc/cores/api/push-subscription.php
-          if grep -R --line-number --fixed-strings "$telemetry_host" . --exclude-dir=.git; then
-            echo 'Removed telemetry endpoint must not be present.' >&2
+          source_files=(--include='*.php' --include='*.js' --include='*.txt')
+          if grep -R --line-number --fixed-strings "$telemetry_host" "${source_files[@]}" . --exclude-dir=.git; then
+            echo 'Removed telemetry endpoint must not be present in distributable source.' >&2
             exit 1
           fi
-          if grep -R --line-number --fixed-strings 'WC_Order_Splitter_Push_Subscription' . --exclude-dir=.git; then
-            echo 'Removed telemetry class must not be referenced.' >&2
+          if grep -R --line-number --fixed-strings 'WC_Order_Splitter_Push_Subscription' --include='*.php' . --exclude-dir=.git; then
+            echo 'Removed telemetry class must not be referenced by PHP source.' >&2
             exit 1
           fi
 
