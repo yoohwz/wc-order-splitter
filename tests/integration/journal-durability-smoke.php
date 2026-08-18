@@ -38,9 +38,8 @@ $deep_record = WCOS_Operation_Journal::get(wc_get_order($order_id), $deep_operat
 wcos_journal_assert(is_array($deep_record), 'Deep authoritative journal could not be reloaded.');
 wcos_journal_assert(61 === count($deep_record['checkpoints']), 'Authoritative journal checkpoints were silently truncated.');
 wcos_journal_assert(61 === (int) $deep_record['revision'], 'Journal revision did not advance with every authoritative checkpoint.');
-wcos_journal_assert(60 === (int) $deep_record['checkpoints'][60]['sequence'], 'Unexpected checkpoint sequence before normalization check.');
-/* Sequence starts at 1, therefore the 61st record must be sequence 61. */
-wcos_journal_assert(61 === (int) end($deep_record['checkpoints'])['sequence'], 'Authoritative checkpoint sequence is not monotonic.');
+$last_checkpoint = end($deep_record['checkpoints']);
+wcos_journal_assert(61 === (int) $last_checkpoint['sequence'], 'Authoritative checkpoint sequence is not monotonic.');
 
 $operation_ids = array($deep_operation);
 for ($index = 0; $index < 25; $index++) {
