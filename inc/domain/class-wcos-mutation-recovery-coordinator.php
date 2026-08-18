@@ -26,6 +26,13 @@ final class WCOS_Mutation_Recovery_Coordinator {
 		}
 
 		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
+		if (array_key_exists('automatic_compensation_allowed', $context) && false === $context['automatic_compensation_allowed']) {
+			return;
+		}
+		/* A confirmed after-write stock event is outside the order snapshot. */
+		if (class_exists('WCOS_Stock_Side_Effect_Guard') && WCOS_Stock_Side_Effect_Guard::has_physical_write_active_scope()) {
+			return;
+		}
 		if (empty($context['source_snapshot']) || empty($context['source_recovery_signature_after'])) {
 			return;
 		}
