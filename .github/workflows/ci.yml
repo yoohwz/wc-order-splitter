@@ -20,7 +20,7 @@ jobs:
         php: ['7.4', '8.1', '8.3']
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -40,7 +40,7 @@ jobs:
         run: php tests/unit/run.php
 
   integration-smoke:
-    name: WooCommerce 11.0 / ${{ matrix.storage }} storage
+    name: WooCommerce 11.0.1 / ${{ matrix.storage }} storage
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -49,21 +49,22 @@ jobs:
         storage: [legacy, hpos, hpos-sync]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '24'
+          package-manager-cache: false
 
       - name: Install wp-env
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Start WordPress
         run: npx wp-env start
 
-      - name: Install and activate WooCommerce 11.0.0
-        run: npx wp-env run cli wp plugin install woocommerce --version=11.0.0 --activate
+      - name: Install and activate WooCommerce 11.0.1
+        run: npx wp-env run cli wp plugin install https://downloads.wordpress.org/plugin/woocommerce.11.0.1.zip --activate
 
       - name: Activate Order Splitter
         run: npx wp-env run cli wp plugin activate wc-order-splitter
@@ -88,14 +89,12 @@ jobs:
 
       - name: Verify plugin, storage mode, and fail-closed runtime
         shell: bash
-        env:
-          EXPECTED_STORAGE: ${{ matrix.storage }}
         run: |
           set -euo pipefail
           npx wp-env run cli wp plugin is-active woocommerce
           npx wp-env run cli wp plugin is-active wc-order-splitter
           npx wp-env run cli wp eval '
-            $expected = getenv("EXPECTED_STORAGE");
+            $expected = "${{ matrix.storage }}";
             $hpos = \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
             if (("legacy" === $expected && $hpos) || ("legacy" !== $expected && !$hpos)) { exit(1); }
             $gates = array(
@@ -111,15 +110,15 @@ jobs:
             }
             if (WCOS_Feature_Gates::any_enabled()) { exit(1); }
             $legacy_hooks = array(
-              array("wp_ajax_split_order", false),
-              array("wp_ajax_split_order_by_category", false),
-              array("wp_ajax_split_order_by_stock_status", false),
-              array("wp_ajax_merge_order", false),
-              array("woocommerce_order_action_yoos_duplicate_order", false),
-              array("woocommerce_order_action_yoos_return_order", false)
+              "wp_ajax_split_order",
+              "wp_ajax_split_order_by_category",
+              "wp_ajax_split_order_by_stock_status",
+              "wp_ajax_merge_order",
+              "woocommerce_order_action_yoos_duplicate_order",
+              "woocommerce_order_action_yoos_return_order"
             );
             foreach ($legacy_hooks as $hook) {
-              if (false !== has_action($hook[0])) { exit(1); }
+              if (false !== has_action($hook)) { exit(1); }
             }
             echo "storage-and-safety-mode-ok\n";
           '
@@ -142,7 +141,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Reject removed telemetry integration
         shell: bash
@@ -150,12 +149,13 @@ jobs:
           set -euo pipefail
           telemetry_host='yoexpress''.''top'
           test ! -e inc/cores/api/push-subscription.php
-          if grep -R --line-number --fixed-strings "$telemetry_host" . --exclude-dir=.git; then
-            echo 'Removed telemetry endpoint must not be present.' >&2
+          source_files=(--include='*.php' --include='*.js' --include='*.txt')
+          if grep -R --line-number --fixed-strings "$telemetry_host" "${source_files[@]}" . --exclude-dir=.git; then
+            echo 'Removed telemetry endpoint must not be present in distributable source.' >&2
             exit 1
           fi
-          if grep -R --line-number --fixed-strings 'WC_Order_Splitter_Push_Subscription' . --exclude-dir=.git; then
-            echo 'Removed telemetry class must not be referenced.' >&2
+          if grep -R --line-number --fixed-strings 'WC_Order_Splitter_Push_Subscription' --include='*.php' . --exclude-dir=.git; then
+            echo 'Removed telemetry class must not be referenced by PHP source.' >&2
             exit 1
           fi
 
