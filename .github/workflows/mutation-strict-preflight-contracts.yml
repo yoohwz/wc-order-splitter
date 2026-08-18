@@ -1,0 +1,40 @@
+name: Mutation strict preflight contracts
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  strict-preflight-contracts:
+    name: Strict preflight (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.1', '8.3']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Lint strict preflight files
+        shell: bash
+        run: |
+          set -euo pipefail
+          php -l inc/mutation-v2/class-wcos-v2-strict-preflight.php
+          php -l tests/v2/strict-preflight-contract-test.php
+
+      - name: Run strict preflight contract tests
+        run: php tests/v2/strict-preflight-contract-test.php
