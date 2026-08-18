@@ -47,7 +47,7 @@
 
 = 1.4.4 (Jun 14, 2025) =
 * Improve: Remove settings access requirement for shop manager, since newest update of WooCommerce only allow shop manager access the basic settings.
-* Improve: WooCommerce compatibility.
+* Improve: WooCommerce version 9.9 compatibility.
 
 = 1.4.3 (May 25, 2025) =
 * Update: Reorder the `Orders` settings tab.
