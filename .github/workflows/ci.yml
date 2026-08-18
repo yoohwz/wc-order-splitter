@@ -1,0 +1,224 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  php-syntax:
+    name: PHP syntax (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.1', '8.3']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Lint PHP files
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            php -l "$file"
+          done < <(find . -type f -name '*.php' -print0)
+
+  release-contract:
+    name: Release safety contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Reject removed telemetry integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          telemetry_host='yoexpress''.''top'
+          test ! -e inc/cores/api/push-subscription.php
+          source_files=(--include='*.php' --include='*.js' --include='*.txt')
+          if grep -R --line-number --fixed-strings "$telemetry_host" "${source_files[@]}" . --exclude-dir=.git; then
+            echo 'Removed telemetry endpoint must not be present in distributable source.' >&2
+            exit 1
+          fi
+          if grep -R --line-number --fixed-strings 'WC_Order_Splitter_Push_Subscription' --include='*.php' . --exclude-dir=.git; then
+            echo 'Removed telemetry class must not be referenced by PHP source.' >&2
+            exit 1
+          fi
+
+      - name: Verify 1.4.12 is unconditionally fail closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'Stable tag: 1.4.12' readme.txt
+          grep -Fq 'Version: 1.4.12' wc-order-splitter.php
+          grep -Fq 'Requires at least: 6.5' readme.txt
+          grep -Fq 'Requires at least: 6.5' wc-order-splitter.php
+          grep -Fq 'Legacy mutation handlers are deliberately never loaded in 1.4.12.' inc/cores/script.php
+          grep -Fq 'public static function mutations_enabled()' inc/cores/safety.php
+          grep -A2 -F 'public static function mutations_enabled()' inc/cores/safety.php | grep -Fq 'return false;'
+
+          if grep -Fq 'WC_ORDER_SPLITTER_MUTATIONS_ENABLED' wc-order-splitter.php inc/cores/script.php; then
+            echo 'The 1.4.12 safety mode must not be externally overrideable.' >&2
+            exit 1
+          fi
+
+          for legacy_handler in \
+            'orders-bulk-return.php' \
+            'order-split-button.php' \
+            'order-return-option.php' \
+            'order-duplicate-option.php' \
+            'order-merge-option.php'; do
+            if grep -F "$legacy_handler" inc/cores/script.php; then
+              echo "Legacy mutation handler must not be loaded: $legacy_handler" >&2
+              exit 1
+            fi
+          done
+
+  plugin-check:
+    name: WordPress Plugin Check
+    needs: [php-syntax, release-contract]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Prepare distributable tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_root="plugin-check-build/wc-order-splitter"
+          rm -rf plugin-check-build
+          mkdir -p "$package_root"
+          rsync -a ./ "$package_root/" \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude '.gitignore' \
+            --exclude '.wp-env.json' \
+            --exclude 'build' \
+            --exclude 'plugin-check-build' \
+            --exclude 'node_modules' \
+            --exclude 'package.json' \
+            --exclude 'package-lock.json' \
+            --exclude 'tests' \
+            --exclude 'inc/backend/actions' \
+            --exclude 'inc/backend/orders-bulk-return.php' \
+            --exclude 'inc/backend/order-split-button.php' \
+            --exclude 'inc/backend/order-return-option.php' \
+            --exclude 'inc/backend/order-duplicate-option.php' \
+            --exclude 'inc/backend/order-merge-option.php' \
+            --exclude 'js/bulk-return-action.js' \
+            --exclude 'js/merge-action.js' \
+            --exclude 'js/post-action-tip.js' \
+            --exclude 'js/split-table.js'
+
+      - name: Run official WordPress Plugin Check
+        uses: wordpress/plugin-check-action@v1
+        with:
+          build-dir: './plugin-check-build/wc-order-splitter'
+          wp-version: latest
+
+  release-package:
+    name: Reproducible 1.4.12 package
+    needs: [php-syntax, release-contract, plugin-check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build WordPress.org ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_root="build/wc-order-splitter"
+          archive="build/order-splitter-for-woocommerce-1.4.12.zip"
+
+          rm -rf build
+          mkdir -p "$package_root"
+          rsync -a ./ "$package_root/" \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude '.gitignore' \
+            --exclude '.wp-env.json' \
+            --exclude 'build' \
+            --exclude 'plugin-check-build' \
+            --exclude 'node_modules' \
+            --exclude 'package.json' \
+            --exclude 'package-lock.json' \
+            --exclude 'tests' \
+            --exclude 'inc/backend/actions' \
+            --exclude 'inc/backend/orders-bulk-return.php' \
+            --exclude 'inc/backend/order-split-button.php' \
+            --exclude 'inc/backend/order-return-option.php' \
+            --exclude 'inc/backend/order-duplicate-option.php' \
+            --exclude 'inc/backend/order-merge-option.php' \
+            --exclude 'js/bulk-return-action.js' \
+            --exclude 'js/merge-action.js' \
+            --exclude 'js/post-action-tip.js' \
+            --exclude 'js/split-table.js'
+
+          test -f "$package_root/wc-order-splitter.php"
+          test -f "$package_root/readme.txt"
+          test ! -e "$package_root/inc/cores/api/push-subscription.php"
+          grep -Fq 'Version: 1.4.12' "$package_root/wc-order-splitter.php"
+          grep -Fq 'Stable tag: 1.4.12' "$package_root/readme.txt"
+          grep -Fq 'Requires at least: 6.5' "$package_root/wc-order-splitter.php"
+          grep -Fq 'Requires at least: 6.5' "$package_root/readme.txt"
+
+          for forbidden_path in \
+            'inc/backend/actions' \
+            'inc/backend/orders-bulk-return.php' \
+            'inc/backend/order-split-button.php' \
+            'inc/backend/order-return-option.php' \
+            'inc/backend/order-duplicate-option.php' \
+            'inc/backend/order-merge-option.php' \
+            'js/bulk-return-action.js' \
+            'js/merge-action.js' \
+            'js/post-action-tip.js' \
+            'js/split-table.js'; do
+            if test -e "$package_root/$forbidden_path"; then
+              echo "Unsafe or unused mutation code entered the release package: $forbidden_path" >&2
+              exit 1
+            fi
+          done
+
+          if grep -R --line-number -E 'yoexpress\.top|WC_Order_Splitter_Push_Subscription|WC_ORDER_SPLITTER_MUTATIONS_ENABLED' "$package_root"; then
+            echo 'Forbidden telemetry or mutation-gate marker entered the release package.' >&2
+            exit 1
+          fi
+
+          (
+            cd build
+            find wc-order-splitter -exec touch -h -d '@0' {} +
+            LC_ALL=C find wc-order-splitter -type f -print | sort | zip -X -q "$PWD/$(basename "$archive")" -@
+          )
+
+          unzip -t "$archive"
+          if unzip -Z1 "$archive" | grep -E '(^|/)(\.git|\.github|tests|node_modules|build|plugin-check-build)(/|$)'; then
+            echo 'Development-only files entered the release ZIP.' >&2
+            exit 1
+          fi
+          sha256sum "$archive" > "$archive.sha256"
+
+      - name: Upload release package
+        uses: actions/upload-artifact@v7
+        with:
+          name: order-splitter-for-woocommerce-1.4.12
+          path: |
+            build/order-splitter-for-woocommerce-1.4.12.zip
+            build/order-splitter-for-woocommerce-1.4.12.zip.sha256
+          if-no-files-found: error
+          retention-days: 30

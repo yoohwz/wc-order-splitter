@@ -1,12 +1,12 @@
 <?php
 /**
  * Plugin Name: Order Splitter for WooCommerce
- * Plugin URI: https://wordpress.org/plugins/wc-order-splitter/
- * Description: Split WooCommerce orders by quantity, category, or stock status from the admin.
- * Version: 1.4.11
+ * Plugin URI: https://github.com/yoohwz/wc-order-splitter
+ * Description: WooCommerce order-management tooling with existing split-order labels and settings preserved during safety hardening.
+ * Version: 1.4.12
  * Author: YoOhw.com
  * Author URI: https://yoohw.com
- * Requires at least: 6.3
+ * Requires at least: 6.5
  * Requires PHP: 7.4
  * Text Domain: wc-order-splitter
  * License: GPLv3 or later
@@ -25,13 +25,16 @@ add_action('before_woocommerce_init', function() {
 });
 
 class WooCommerce_Order_Splitter {
-	
-	public function __construct() {
-		$wcos_plugin_data = get_file_data(__FILE__, ['Version' => 'Version'], false);
-		$wcos_plugin_version = isset($wcos_plugin_data['Version']) ? $wcos_plugin_data['Version'] : '';
-		define('WC_ORDER_SPLITTER_VERSION', $wcos_plugin_version);
 
-		add_filter('plugin_action_links_' . plugin_basename(__FILE__), [$this, 'add_action_links']);
+	public function __construct() {
+		$wcos_plugin_data = get_file_data(__FILE__, array('Version' => 'Version'), false);
+		$wcos_plugin_version = isset($wcos_plugin_data['Version']) ? $wcos_plugin_data['Version'] : '';
+
+		if (!defined('WC_ORDER_SPLITTER_VERSION')) {
+			define('WC_ORDER_SPLITTER_VERSION', $wcos_plugin_version);
+		}
+
+		add_filter('plugin_action_links_' . plugin_basename(__FILE__), array($this, 'add_action_links'));
 
 		$this->includes();
 	}
@@ -51,7 +54,6 @@ class WooCommerce_Order_Splitter {
 	}
 }
 
-// Initialize the plugin
 new WooCommerce_Order_Splitter();
 
 register_activation_hook(__FILE__, array('WooCommerce_Order_Splitter_Settings', 'set_default_settings'));
