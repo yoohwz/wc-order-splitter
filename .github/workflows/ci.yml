@@ -55,9 +55,9 @@ jobs:
         run: npm install --global @wordpress/env
       - name: Start WordPress environment
         run: wp-env start
-      - name: Activate WooCommerce and Order Splitter
+      - name: Install WooCommerce and activate Order Splitter
         run: |
-          wp-env run cli wp plugin activate woocommerce
+          wp-env run cli wp plugin install woocommerce --activate
           wp-env run cli wp plugin activate wc-order-splitter
       - name: Configure HPOS
         run: wp-env run cli wp option update woocommerce_custom_orders_table_enabled ${{ matrix.hpos }}
@@ -65,7 +65,7 @@ jobs:
         run: wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/order-mutation-smoke.php
       - name: Stop WordPress environment
         if: always()
-        run: wp-env stop
+        run: wp-env stop || true
 
   plugin-check:
     name: WordPress Plugin Check
@@ -81,14 +81,14 @@ jobs:
         run: wp-env start
       - name: Activate runtime dependencies
         run: |
-          wp-env run cli wp plugin activate woocommerce
+          wp-env run cli wp plugin install woocommerce --activate
           wp-env run cli wp plugin activate wc-order-splitter
           wp-env run cli wp plugin install plugin-check --activate
       - name: Run static and runtime Plugin Check
         run: wp-env run cli wp plugin check wc-order-splitter --require=wp-content/plugins/plugin-check/cli.php
       - name: Stop WordPress environment
         if: always()
-        run: wp-env stop
+        run: wp-env stop || true
 
   production-archive:
     name: Production ZIP
