@@ -17,9 +17,9 @@ final class WCOS_Mutation_Gateway {
 		return (new WCOS_Split_WooCommerce_Adapter())->split($source, $plan, $operation_id);
 	}
 
-	public function split_preflight(WC_Order $source) {
+	public function split_preflight(WC_Order $source, $operation_id = '') {
 		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::SPLIT, $source);
-		return (new WCOS_Split_WooCommerce_Adapter())->preflight($source);
+		return (new WCOS_Split_WooCommerce_Adapter())->preflight($source, $operation_id);
 	}
 
 	public function duplicate(WC_Order $source, $operation_id) {
