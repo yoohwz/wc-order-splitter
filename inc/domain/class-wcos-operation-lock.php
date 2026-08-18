@@ -7,8 +7,8 @@ defined('ABSPATH') || exit;
  *
  * Every acquisition receives a unique lease token. Stale takeover, refresh,
  * and release use compare-and-swap SQL so an expired worker cannot delete or
- * overwrite a newer worker's lease. Request-local ownership is also tracked so
- * commit-boundary guards can refresh long operations without exposing tokens.
+ * overwrite a newer worker's lease. Request-local ownership is tracked together
+ * with the operation ID so one mutation cannot reuse another operation's lease.
  */
 final class WCOS_Operation_Lock {
 
@@ -56,9 +56,10 @@ final class WCOS_Operation_Lock {
 		return $value['lease_token'];
 	}
 
-	public static function refresh($order_id, $lease_token, $ttl = self::DEFAULT_TTL) {
+	public static function refresh($order_id, $lease_token, $ttl = self::DEFAULT_TTL, $operation_id = '') {
 		$order_id = absint($order_id);
 		$lease_token = sanitize_key($lease_token);
+		$operation_id = sanitize_key($operation_id);
 		$ttl = max(30, absint($ttl));
 		if (!$order_id || '' === $lease_token) {
 			return false;
@@ -66,7 +67,8 @@ final class WCOS_Operation_Lock {
 
 		$key = self::key($order_id);
 		$current = get_option($key, null);
-		if (!self::matches_lease($current, $lease_token)) {
+		if (!self::matches_lease($current, $lease_token)
+			|| ('' !== $operation_id && !self::matches_operation($current, $operation_id))) {
 			self::forget_if_token($order_id, $lease_token);
 			return false;
 		}
@@ -89,15 +91,31 @@ final class WCOS_Operation_Lock {
 		return self::refresh($order_id, self::$local_leases[$order_id]['lease_token'], $ttl);
 	}
 
-	public static function is_owned($order_id, $lease_token) {
+	public static function refresh_current_for($order_id, $operation_id, $ttl = self::DEFAULT_TTL) {
+		$order_id = absint($order_id);
+		$operation_id = sanitize_key($operation_id);
+		if (!$order_id || '' === $operation_id || !self::local_matches_operation($order_id, $operation_id)) {
+			return false;
+		}
+		return self::refresh(
+			$order_id,
+			self::$local_leases[$order_id]['lease_token'],
+			$ttl,
+			$operation_id
+		);
+	}
+
+	public static function is_owned($order_id, $lease_token, $operation_id = '') {
 		$order_id = absint($order_id);
 		$lease_token = sanitize_key($lease_token);
+		$operation_id = sanitize_key($operation_id);
 		if (!$order_id || '' === $lease_token) {
 			return false;
 		}
 
 		$current = get_option(self::key($order_id), null);
 		return self::matches_lease($current, $lease_token)
+			&& ('' === $operation_id || self::matches_operation($current, $operation_id))
 			&& isset($current['expires_at'])
 			&& (int) $current['expires_at'] > time();
 	}
@@ -109,9 +127,28 @@ final class WCOS_Operation_Lock {
 			&& self::is_owned($order_id, self::$local_leases[$order_id]['lease_token']);
 	}
 
+	public static function is_current_owned_for($order_id, $operation_id) {
+		$order_id = absint($order_id);
+		$operation_id = sanitize_key($operation_id);
+		return $order_id
+			&& '' !== $operation_id
+			&& self::local_matches_operation($order_id, $operation_id)
+			&& self::is_owned(
+				$order_id,
+				self::$local_leases[$order_id]['lease_token'],
+				$operation_id
+			);
+	}
+
 	public static function assert_current_owned($order_id) {
 		if (!self::is_current_owned($order_id)) {
 			throw new RuntimeException(__('The order mutation lease is no longer owned by this worker.', 'wc-order-splitter'));
+		}
+	}
+
+	public static function assert_current_owned_for($order_id, $operation_id) {
+		if (!self::is_current_owned_for($order_id, $operation_id)) {
+			throw new RuntimeException(__('The order mutation lease is not owned by this operation.', 'wc-order-splitter'));
 		}
 	}
 
@@ -161,10 +198,21 @@ final class WCOS_Operation_Lock {
 		}
 	}
 
+	private static function local_matches_operation($order_id, $operation_id) {
+		return isset(self::$local_leases[$order_id]['operation_id'])
+			&& hash_equals((string) self::$local_leases[$order_id]['operation_id'], (string) $operation_id);
+	}
+
 	private static function matches_lease($value, $lease_token) {
 		return is_array($value)
 			&& isset($value['lease_token'])
 			&& hash_equals((string) $value['lease_token'], (string) $lease_token);
+	}
+
+	private static function matches_operation($value, $operation_id) {
+		return is_array($value)
+			&& isset($value['operation_id'])
+			&& hash_equals((string) $value['operation_id'], (string) $operation_id);
 	}
 
 	private static function compare_and_swap($key, $current, array $replacement) {
