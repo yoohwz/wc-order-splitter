@@ -5,22 +5,17 @@ defined('ABSPATH') || exit;
 /**
  * Shared split mutation engine.
  *
- * Shipping and fee lines remain on the original order. Product quantities,
- * historical line amounts/taxes, and reduced-stock markers are allocated
- * across the original and child orders without recalculating current prices
- * or current tax rates.
+ * Initial safety policy:
+ * - shipping and fee lines remain on the original order;
+ * - coupon/refunded orders fail closed until an explicit allocation policy exists;
+ * - historical line amounts/taxes are allocated without recalculating current rates;
+ * - reduced-stock markers move with quantities without changing physical stock.
  */
 final class WCOS_Split_Order_Service {
 
 	const RELATION_PARENT_META = '_wcos_parent_order_id';
 	const RELATION_CHILDREN_META = '_wcos_child_order_ids';
 
-	/**
-	 * @param WC_Order $source Source order.
-	 * @param array    $plan   child-key => array(item-id => quantity).
-	 * @param string   $operation_id Client-generated idempotency key.
-	 * @return WC_Order[]
-	 */
 	public function split(WC_Order $source, array $plan, $operation_id) {
 		$source_id = $source->get_id();
 		$operation_id = sanitize_key($operation_id);
@@ -28,23 +23,30 @@ final class WCOS_Split_Order_Service {
 			throw new InvalidArgumentException(__('A split operation ID is required.', 'wc-order-splitter'));
 		}
 
-		$completed = WCOS_Operation_Journal::get($source, $operation_id);
-		if (is_array($completed) && isset($completed['status']) && 'completed' === $completed['status']) {
-			return $this->load_orders(isset($completed['context']['target_order_ids']) ? $completed['context']['target_order_ids'] : array());
+		$existing = WCOS_Operation_Journal::get($source, $operation_id);
+		if (is_array($existing)) {
+			if (isset($existing['status']) && 'completed' === $existing['status']) {
+				return $this->load_orders(isset($existing['context']['target_order_ids']) ? $existing['context']['target_order_ids'] : array());
+			}
+			throw new RuntimeException(__('This split operation ID has already been used and did not complete successfully.', 'wc-order-splitter'));
 		}
+
+		$this->assert_supported_source($source);
+		$normalized_plan = $this->validate_and_normalize_plan($source, $plan);
 
 		if (!WCOS_Operation_Lock::acquire($source_id, $operation_id)) {
 			throw new RuntimeException(__('Another order mutation is already in progress for this order.', 'wc-order-splitter'));
 		}
 
 		$children = array();
-		WCOS_Operation_Journal::start($source, $operation_id, 'split', array('plan' => $plan));
+		$source_persisted = false;
+		WCOS_Operation_Journal::start($source, $operation_id, 'split', array('plan' => $normalized_plan));
 
 		try {
-			$normalized_plan = $this->validate_and_normalize_plan($source, $plan);
 			$before = $this->snapshot(array($source));
 			$source_stock_reduced = (bool) $source->get_data_store()->get_stock_reduced($source_id);
 			$precision = wc_get_price_decimals();
+			$tax_templates = $this->capture_tax_templates($source);
 
 			foreach (array_keys($normalized_plan) as $child_key) {
 				$child = wc_create_order();
@@ -61,28 +63,20 @@ final class WCOS_Split_Order_Service {
 				$this->allocate_source_line($source, $source_item, $item_id, $normalized_plan, $children, $precision);
 			}
 
-			$this->rebuild_tax_items($source);
+			$this->rebuild_tax_items($source, $tax_templates);
 			$this->recompute_order_totals($source, $precision);
-
 			foreach ($children as $child) {
-				$this->rebuild_tax_items($child, $source);
+				$this->rebuild_tax_items($child, $tax_templates);
 				$this->recompute_order_totals($child, $precision);
 			}
 
-			$after_orders = array_merge(array($source), array_values($children));
-			$after = $this->snapshot($after_orders);
-			WCOS_Mutation_Contract::assert_conserved($before, $after, $precision);
+			WCOS_Mutation_Contract::assert_conserved(
+				$before,
+				$this->snapshot(array_merge(array($source), array_values($children))),
+				$precision
+			);
 
-			$source->update_meta_data(self::RELATION_CHILDREN_META, array_values(array_unique(array_merge(
-				(array) $source->get_meta(self::RELATION_CHILDREN_META, true),
-				array_map(static function($child) { return $child->get_id(); }, $children)
-			))));
-			$legacy_children = array_filter(array_map('absint', explode(',', (string) $source->get_meta('yoos_splitted_order', true))));
-			$legacy_children = array_values(array_unique(array_merge($legacy_children, array_map(static function($child) { return $child->get_id(); }, $children))));
-			$source->update_meta_data('yoos_splitted_order', implode(',', $legacy_children));
-
-			$source->save();
-
+			/* Persist children first. Until source is saved, failure can be compensated safely. */
 			foreach ($children as $child) {
 				$child->save();
 				if ($source_stock_reduced) {
@@ -91,19 +85,54 @@ final class WCOS_Split_Order_Service {
 				$this->apply_source_status_without_stock_side_effect($source, $child);
 			}
 
-			$child_ids = array_map(static function($child) { return $child->get_id(); }, $children);
-			WCOS_Operation_Journal::complete($source, $operation_id, array('target_order_ids' => array_values($child_ids)));
+			$child_ids = array_values(array_map(static function($child) {
+				return $child->get_id();
+			}, $children));
+
+			$current_children = (array) $source->get_meta(self::RELATION_CHILDREN_META, true);
+			$source->update_meta_data(
+				self::RELATION_CHILDREN_META,
+				array_values(array_unique(array_merge(array_map('absint', $current_children), $child_ids)))
+			);
+
+			$legacy_children = array_filter(array_map('absint', explode(',', (string) $source->get_meta('yoos_splitted_order', true))));
+			$source->update_meta_data('yoos_splitted_order', implode(',', array_values(array_unique(array_merge($legacy_children, $child_ids)))));
+			$source->save();
+			$source_persisted = true;
+
+			if (!WCOS_Operation_Journal::complete($source, $operation_id, array('target_order_ids' => $child_ids))) {
+				throw new RuntimeException(__('The split completed but its operation journal could not be finalized.', 'wc-order-splitter'));
+			}
+
 			return array_values($children);
 		} catch (Throwable $throwable) {
-			foreach ($children as $child) {
-				if ($child instanceof WC_Order && $child->get_id()) {
-					$child->delete(true);
+			if (!$source_persisted) {
+				foreach ($children as $child) {
+					if ($child instanceof WC_Order && $child->get_id()) {
+						$child->delete(true);
+					}
 				}
 			}
-			WCOS_Operation_Journal::fail($source, $operation_id, array('error' => $throwable->getMessage()));
+			WCOS_Operation_Journal::fail($source, $operation_id, array(
+				'error' => $throwable->getMessage(),
+				'source_persisted' => $source_persisted,
+			));
 			throw $throwable;
 		} finally {
 			WCOS_Operation_Lock::release($source_id, $operation_id);
+		}
+	}
+
+	private function assert_supported_source(WC_Order $source) {
+		$supported_statuses = array('pending', 'on-hold', 'processing', 'completed');
+		if (!in_array($source->get_status(), $supported_statuses, true)) {
+			throw new RuntimeException(__('This order status is not yet supported by the hardened split engine.', 'wc-order-splitter'));
+		}
+		if (!empty($source->get_items('coupon'))) {
+			throw new RuntimeException(__('Orders containing coupon lines are not yet supported by the hardened split engine.', 'wc-order-splitter'));
+		}
+		if ($source->get_total_refunded() != 0 || !empty($source->get_refunds())) {
+			throw new RuntimeException(__('Refunded orders are not supported by the hardened split engine.', 'wc-order-splitter'));
 		}
 	}
 
@@ -141,17 +170,14 @@ final class WCOS_Split_Order_Service {
 		if (empty($normalized)) {
 			throw new InvalidArgumentException(__('The split plan is empty.', 'wc-order-splitter'));
 		}
-
 		foreach ($totals_by_item as $item_id => $quantity) {
 			if ($quantity > $source_quantities[$item_id]) {
 				throw new InvalidArgumentException(__('A split quantity exceeds its source line quantity.', 'wc-order-splitter'));
 			}
 		}
-
 		if ($total_split >= $total_source) {
 			throw new InvalidArgumentException(__('The original order must retain at least one item quantity.', 'wc-order-splitter'));
 		}
-
 		return $normalized;
 	}
 
@@ -185,7 +211,7 @@ final class WCOS_Split_Order_Service {
 			$allocations[$field] = WCOS_Amount_Allocator::allocate($source_item->{$getter}(), $weights, $precision);
 		}
 
-		$taxes = $source_item->get_taxes();
+		$taxes = (array) $source_item->get_taxes();
 		$tax_allocations = array('subtotal' => array(), 'total' => array());
 		foreach (array('subtotal', 'total') as $bucket) {
 			foreach ((array) (isset($taxes[$bucket]) ? $taxes[$bucket] : array()) as $rate_id => $amount) {
@@ -204,14 +230,12 @@ final class WCOS_Split_Order_Service {
 			if ($quantity <= 0) {
 				continue;
 			}
-
 			$child_taxes = array('subtotal' => array(), 'total' => array());
 			foreach (array('subtotal', 'total') as $bucket) {
 				foreach ($tax_allocations[$bucket] as $rate_id => $by_destination) {
 					$child_taxes[$bucket][$rate_id] = $by_destination[$child_key];
 				}
 			}
-
 			$new_item = WCOS_Order_Item_Cloner::product($source_item, array(
 				'quantity' => $quantity,
 				'subtotal' => $allocations['subtotal'][$child_key],
@@ -231,7 +255,6 @@ final class WCOS_Split_Order_Service {
 			$source->remove_item($item_id);
 			return;
 		}
-
 		$source_taxes = array('subtotal' => array(), 'total' => array());
 		foreach (array('subtotal', 'total') as $bucket) {
 			foreach ($tax_allocations[$bucket] as $rate_id => $by_destination) {
@@ -252,44 +275,46 @@ final class WCOS_Split_Order_Service {
 		}
 	}
 
-	private function rebuild_tax_items(WC_Order $order, WC_Order $template_order = null) {
-		$template_order = $template_order ? $template_order : $order;
+	private function capture_tax_templates(WC_Order $order) {
 		$templates = array();
-		foreach ($template_order->get_items('tax') as $tax_item) {
-			$templates[(int) $tax_item->get_rate_id()] = $tax_item;
+		foreach ($order->get_items('tax') as $tax_item) {
+			$templates[(int) $tax_item->get_rate_id()] = array(
+				'rate_id' => $tax_item->get_rate_id(),
+				'label' => $tax_item->get_label(),
+				'compound' => $tax_item->get_compound(),
+				'rate_percent' => $tax_item->get_rate_percent(),
+			);
 		}
+		return $templates;
+	}
 
+	private function rebuild_tax_items(WC_Order $order, array $templates) {
 		foreach (array_keys($order->get_items('tax')) as $tax_item_id) {
 			$order->remove_item($tax_item_id);
 		}
 
 		$rates = array();
-		foreach ($order->get_items('line_item') as $item) {
-			foreach ((array) $item->get_taxes()['total'] as $rate_id => $amount) {
-				$rates[(int) $rate_id]['tax_total'] = (isset($rates[(int) $rate_id]['tax_total']) ? $rates[(int) $rate_id]['tax_total'] : 0.0) + (float) $amount;
-			}
-		}
-		foreach ($order->get_items('fee') as $item) {
-			foreach ((array) $item->get_taxes()['total'] as $rate_id => $amount) {
-				$rates[(int) $rate_id]['tax_total'] = (isset($rates[(int) $rate_id]['tax_total']) ? $rates[(int) $rate_id]['tax_total'] : 0.0) + (float) $amount;
+		foreach (array('line_item', 'fee') as $item_type) {
+			foreach ($order->get_items($item_type) as $item) {
+				$taxes = (array) $item->get_taxes();
+				foreach ((array) (isset($taxes['total']) ? $taxes['total'] : array()) as $rate_id => $amount) {
+					$rate_id = (int) $rate_id;
+					$rates[$rate_id]['tax_total'] = (isset($rates[$rate_id]['tax_total']) ? $rates[$rate_id]['tax_total'] : 0.0) + (float) $amount;
+				}
 			}
 		}
 		foreach ($order->get_items('shipping') as $item) {
-			foreach ((array) $item->get_taxes()['total'] as $rate_id => $amount) {
-				$rates[(int) $rate_id]['shipping_tax_total'] = (isset($rates[(int) $rate_id]['shipping_tax_total']) ? $rates[(int) $rate_id]['shipping_tax_total'] : 0.0) + (float) $amount;
+			$taxes = (array) $item->get_taxes();
+			foreach ((array) (isset($taxes['total']) ? $taxes['total'] : array()) as $rate_id => $amount) {
+				$rate_id = (int) $rate_id;
+				$rates[$rate_id]['shipping_tax_total'] = (isset($rates[$rate_id]['shipping_tax_total']) ? $rates[$rate_id]['shipping_tax_total'] : 0.0) + (float) $amount;
 			}
 		}
 
 		foreach ($rates as $rate_id => $amounts) {
 			$tax_item = new WC_Order_Item_Tax();
 			if (isset($templates[$rate_id])) {
-				$template = $templates[$rate_id];
-				$tax_item->set_props(array(
-					'rate_id' => $template->get_rate_id(),
-					'label' => $template->get_label(),
-					'compound' => $template->get_compound(),
-					'rate_percent' => $template->get_rate_percent(),
-				));
+				$tax_item->set_props($templates[$rate_id]);
 			} else {
 				$tax_item->set_rate_id($rate_id);
 			}
@@ -302,6 +327,8 @@ final class WCOS_Split_Order_Service {
 	private function recompute_order_totals(WC_Order $order, $precision) {
 		$line_subtotal = 0.0;
 		$line_total = 0.0;
+		$line_subtotal_tax = 0.0;
+		$line_total_tax = 0.0;
 		$cart_tax = 0.0;
 		$shipping_total = 0.0;
 		$shipping_tax = 0.0;
@@ -310,6 +337,8 @@ final class WCOS_Split_Order_Service {
 		foreach ($order->get_items('line_item') as $item) {
 			$line_subtotal += (float) $item->get_subtotal();
 			$line_total += (float) $item->get_total();
+			$line_subtotal_tax += (float) $item->get_subtotal_tax();
+			$line_total_tax += (float) $item->get_total_tax();
 			$cart_tax += (float) $item->get_total_tax();
 		}
 		foreach ($order->get_items('fee') as $item) {
@@ -322,11 +351,12 @@ final class WCOS_Split_Order_Service {
 		}
 
 		$discount_total = max(0, $line_subtotal - $line_total);
+		$discount_tax = max(0, $line_subtotal_tax - $line_total_tax);
 		$total_tax = $cart_tax + $shipping_tax;
 		$grand_total = $line_total + $fee_total + $shipping_total + $total_tax;
-
 		$order->set_props(array(
 			'discount_total' => wc_format_decimal($discount_total, $precision),
+			'discount_tax' => wc_format_decimal($discount_tax, $precision),
 			'shipping_total' => wc_format_decimal($shipping_total, $precision),
 			'shipping_tax' => wc_format_decimal($shipping_tax, $precision),
 			'cart_tax' => wc_format_decimal($cart_tax, $precision),
@@ -340,6 +370,7 @@ final class WCOS_Split_Order_Service {
 			'line_subtotal' => 0.0,
 			'line_total' => 0.0,
 			'discount_total' => 0.0,
+			'discount_tax' => 0.0,
 			'fees_total' => 0.0,
 			'shipping_total' => 0.0,
 			'tax_total' => 0.0,
@@ -350,7 +381,7 @@ final class WCOS_Split_Order_Service {
 		foreach ($orders as $order) {
 			foreach ($order->get_items('line_item') as $item) {
 				$identity = $this->line_identity($item);
-				$snapshot['line_quantities'][$identity] = (isset($snapshot['line_quantities'][$identity]) ? $snapshot['line_quantities'][$identity] : 0) + $item->get_quantity();
+				$snapshot['line_quantities'][$identity] = (isset($snapshot['line_quantities'][$identity]) ? $snapshot['line_quantities'][$identity] : 0) + (float) $item->get_quantity();
 				$snapshot['line_subtotal'] += (float) $item->get_subtotal();
 				$snapshot['line_total'] += (float) $item->get_total();
 				$reduced = $item->get_meta('_reduced_stock', true);
@@ -362,6 +393,7 @@ final class WCOS_Split_Order_Service {
 				$snapshot['fees_total'] += (float) $item->get_total();
 			}
 			$snapshot['discount_total'] += (float) $order->get_discount_total();
+			$snapshot['discount_tax'] += (float) $order->get_discount_tax();
 			$snapshot['shipping_total'] += (float) $order->get_shipping_total();
 			$snapshot['tax_total'] += (float) $order->get_total_tax();
 			$snapshot['grand_total'] += (float) $order->get_total();
@@ -387,7 +419,6 @@ final class WCOS_Split_Order_Service {
 		if ('pending' === $target_status) {
 			return;
 		}
-
 		$child_id = $child->get_id();
 		$suppress_stock = static function($can_reduce, $order) use ($child_id) {
 			return $order instanceof WC_Order && $order->get_id() === $child_id ? false : $can_reduce;
