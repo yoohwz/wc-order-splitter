@@ -3,10 +3,11 @@
 defined('ABSPATH') || exit;
 
 /**
- * Central fail-closed workflow gates.
+ * Central fail-closed workflow gates for the foundation release.
  *
- * The global switch is a kill switch. Enabling it alone never enables a
- * workflow; the workflow-specific constant must also be explicitly true.
+ * P1 is intentionally non-runnable from production controllers. Gate state is
+ * internal code, not constants/options/filters, so another plugin, mu-plugin,
+ * or wp-config.php cannot opt an unfinished workflow into production.
  */
 final class WCOS_Feature_Gates {
 
@@ -16,31 +17,28 @@ final class WCOS_Feature_Gates {
 	const RETURN_ORDER = 'return';
 	const BULK_RETURN = 'bulk_return';
 
+	private static $states = array(
+		self::SPLIT => false,
+		self::DUPLICATE => false,
+		self::MERGE => false,
+		self::RETURN_ORDER => false,
+		self::BULK_RETURN => false,
+	);
+
 	public static function enabled($workflow) {
-		if (!defined('WC_ORDER_SPLITTER_MUTATIONS_ENABLED') || true !== WC_ORDER_SPLITTER_MUTATIONS_ENABLED) {
-			return false;
-		}
-
-		$constants = array(
-			self::SPLIT => 'WC_ORDER_SPLITTER_SPLIT_ENABLED',
-			self::DUPLICATE => 'WC_ORDER_SPLITTER_DUPLICATE_ENABLED',
-			self::MERGE => 'WC_ORDER_SPLITTER_MERGE_ENABLED',
-			self::RETURN_ORDER => 'WC_ORDER_SPLITTER_RETURN_ENABLED',
-			self::BULK_RETURN => 'WC_ORDER_SPLITTER_BULK_RETURN_ENABLED',
-		);
-
 		$workflow = sanitize_key((string) $workflow);
-		if (!isset($constants[$workflow])) {
-			return false;
-		}
+		return isset(self::$states[$workflow]) && true === self::$states[$workflow];
+	}
 
-		$constant = $constants[$workflow];
-		return defined($constant) && true === constant($constant);
+	public static function assert_enabled($workflow) {
+		if (!self::enabled($workflow)) {
+			throw new RuntimeException(__('This order mutation workflow is not enabled for production use.', 'wc-order-splitter'));
+		}
 	}
 
 	public static function any_enabled() {
-		foreach (array(self::SPLIT, self::DUPLICATE, self::MERGE, self::RETURN_ORDER, self::BULK_RETURN) as $workflow) {
-			if (self::enabled($workflow)) {
+		foreach (self::$states as $enabled) {
+			if (true === $enabled) {
 				return true;
 			}
 		}
