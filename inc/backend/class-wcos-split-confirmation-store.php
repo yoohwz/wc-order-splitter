@@ -84,22 +84,38 @@ final class WCOS_Split_Confirmation_Store {
             throw new WCOS_Split_Confirmation_Exception('policy_changed', __('The Split safety policy changed after this plan was reviewed. Review the plan again before executing it.', 'wc-order-splitter'));
         }
 
-        $journal = WCOS_Operation_Journal::get($source, $operation_id);
-        if (!is_array($journal)) {
-            $expected = isset($record['source_signature']) ? (string) $record['source_signature'] : '';
-            $actual = WCOS_Order_Contract_Snapshot::source_signature($source);
-            if ('' === $expected || !hash_equals($expected, $actual)) {
-                throw new WCOS_Split_Confirmation_Exception('source_changed', __('The order changed after the Split plan was reviewed. Review the plan again before executing it.', 'wc-order-splitter'));
+        $precision = WCOS_Price_Precision_Scope::validate(isset($record['price_precision']) ? $record['price_precision'] : null);
+        $precision_token = WCOS_Price_Precision_Scope::begin($precision);
+        try {
+            /*
+             * The caller may have loaded this order under a different ambient
+             * precision. Rehydrate inside the reviewed precision before source
+             * signature validation for the same reason the Split adapter does.
+             */
+            $scoped_source = wc_get_order($source->get_id());
+            if (!$scoped_source instanceof WC_Order) {
+                throw new WCOS_Split_Confirmation_Exception('source_missing', __('The source order is no longer available.', 'wc-order-splitter'));
             }
-        } elseif (isset($journal['context']['price_precision'])
-            && (int) $journal['context']['price_precision'] !== (int) $record['price_precision']) {
-            throw new WCOS_Split_Confirmation_Exception('precision_mismatch', __('The Split confirmation precision no longer matches the durable operation journal.', 'wc-order-splitter'));
-        }
 
-        $record['operation_id'] = $operation_id;
-        $record['plan'] = WCOS_Split_Plan::canonicalize_request(isset($record['plan']) && is_array($record['plan']) ? $record['plan'] : array());
-        $record['price_precision'] = WCOS_Price_Precision_Scope::validate($record['price_precision']);
-        return $record;
+            $journal = WCOS_Operation_Journal::get($scoped_source, $operation_id);
+            if (!is_array($journal)) {
+                $expected = isset($record['source_signature']) ? (string) $record['source_signature'] : '';
+                $actual = WCOS_Order_Contract_Snapshot::source_signature($scoped_source);
+                if ('' === $expected || !hash_equals($expected, $actual)) {
+                    throw new WCOS_Split_Confirmation_Exception('source_changed', __('The order changed after the Split plan was reviewed. Review the plan again before executing it.', 'wc-order-splitter'));
+                }
+            } elseif (isset($journal['context']['price_precision'])
+                && (int) $journal['context']['price_precision'] !== $precision) {
+                throw new WCOS_Split_Confirmation_Exception('precision_mismatch', __('The Split confirmation precision no longer matches the durable operation journal.', 'wc-order-splitter'));
+            }
+
+            $record['operation_id'] = $operation_id;
+            $record['plan'] = WCOS_Split_Plan::canonicalize_request(isset($record['plan']) && is_array($record['plan']) ? $record['plan'] : array());
+            $record['price_precision'] = $precision;
+            return $record;
+        } finally {
+            WCOS_Price_Precision_Scope::end($precision_token);
+        }
     }
 
     public static function delete($operation_id) {
