@@ -42,6 +42,8 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-order-copy-context.php';
 		include_once $root . 'domain/class-wcos-order-relation-repository.php';
 		WCOS_Order_Relation_Repository::bootstrap();
+		include_once $root . 'domain/class-wcos-mutation-commit-guard.php';
+		WCOS_Mutation_Commit_Guard::bootstrap();
 		include_once $root . 'domain/class-wcos-duplicate-order-service.php';
 		include_once $root . 'domain/class-wcos-split-order-service.php';
 
