@@ -57,11 +57,35 @@ final class WCOS_Mutation_Commit_Guard {
 		}
 
 		WCOS_Order_Copy_Context::assert_matches($copy_context_signature, $fresh_source);
+		$child_ids = array();
 		foreach ($children as $child) {
 			if (!$child instanceof WC_Order) {
 				throw new RuntimeException(__('The split commit boundary received an invalid child order.', 'wc-order-splitter'));
 			}
 			WCOS_Order_Copy_Context::assert_matches($copy_context_signature, $child);
+			if ($child->get_id()) {
+				$child_ids[] = absint($child->get_id());
+			}
+		}
+
+		if ('before_source_save' === $stage) {
+			$child_ids = array_values(array_unique(array_filter($child_ids)));
+			sort($child_ids, SORT_NUMERIC);
+			$planned_source_signature = WCOS_Order_Contract_Snapshot::source_signature($source);
+			$planned_recovery_signature = WCOS_Order_Mutation_Snapshot::split_owned_signature($source);
+
+			if (!WCOS_Operation_Journal::checkpoint(
+				$fresh_source,
+				$operation_id,
+				'source_commit_planned',
+				array(
+					'target_order_ids' => $child_ids,
+					'source_signature_after' => $planned_source_signature,
+					'source_recovery_signature_after' => $planned_recovery_signature,
+				)
+			)) {
+				throw new RuntimeException(__('The planned Split source commit could not be checkpointed before persistence.', 'wc-order-splitter'));
+			}
 		}
 	}
 }
