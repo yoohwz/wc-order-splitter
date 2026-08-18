@@ -67,14 +67,18 @@ final class WCOS_Operation_Lock {
 
 		$key = self::key($order_id);
 		$current = get_option($key, null);
+		$now = time();
 		if (!self::matches_lease($current, $lease_token)
-			|| ('' !== $operation_id && !self::matches_operation($current, $operation_id))) {
+			|| ('' !== $operation_id && !self::matches_operation($current, $operation_id))
+			|| !isset($current['expires_at'])
+			|| (int) $current['expires_at'] <= $now) {
 			self::forget_if_token($order_id, $lease_token);
 			return false;
 		}
 
 		$replacement = $current;
-		$replacement['expires_at'] = time() + $ttl;
+		$replacement['revision'] = isset($current['revision']) ? ((int) $current['revision'] + 1) : 2;
+		$replacement['expires_at'] = $now + $ttl;
 		$replacement['refreshed_at'] = gmdate('c');
 		if (!self::compare_and_swap($key, $current, $replacement)) {
 			return false;
@@ -177,6 +181,7 @@ final class WCOS_Operation_Lock {
 		return array(
 			'operation_id' => $operation_id,
 			'lease_token' => sanitize_key(wp_generate_uuid4()),
+			'revision' => 1,
 			'acquired_at' => gmdate('c'),
 			'refreshed_at' => null,
 			'expires_at' => time() + $ttl,
