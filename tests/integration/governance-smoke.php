@@ -132,6 +132,26 @@ wcos_governance_assert(!isset($identity_metadata['_wcos_internal_state']), 'Muta
 remove_filter('wcos_order_item_meta_classification', $classification_filter, 10);
 remove_filter('wcos_order_item_meta_is_operational', $operational_filter, 10);
 
+/* Non-canonical object/resource business metadata must fail closed. */
+$complex_item = new WC_Order_Item_Product();
+$complex_item->add_meta_data('complex_configuration', (object) array('tier' => 'gold'), true);
+wcos_governance_expect_runtime(
+	static function() use ($complex_item) {
+		WCOS_Order_Item_Meta_Policy::business_metadata($complex_item);
+	},
+	'Object-valued business metadata was accepted into line identity.'
+);
+
+$complex_operational = static function($classification, $key) {
+	return 'complex_configuration' === $key
+		? WCOS_Order_Item_Meta_Policy::CLASS_OPERATIONAL
+		: $classification;
+};
+add_filter('wcos_order_item_meta_classification', $complex_operational, 10, 2);
+$complex_identity = WCOS_Order_Item_Meta_Policy::business_metadata($complex_item);
+wcos_governance_assert(!isset($complex_identity['complex_configuration']), 'Explicit operational classification did not exclude non-canonical metadata.');
+remove_filter('wcos_order_item_meta_classification', $complex_operational, 10);
+
 $order->delete(true);
 if (!function_exists('wp_delete_user')) {
 	require_once ABSPATH . 'wp-admin/includes/user.php';
