@@ -28,6 +28,7 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-amount-allocator.php';
 		include_once $root . 'domain/class-wcos-line-identity.php';
 		include_once $root . 'domain/class-wcos-mutation-fingerprint.php';
+		include_once $root . 'domain/class-wcos-price-precision-scope.php';
 		include_once $root . 'domain/class-wcos-stock-side-effect-guard.php';
 		include_once $root . 'domain/class-wcos-mutation-contract.php';
 		include_once $root . 'domain/class-wcos-operation-lock.php';
