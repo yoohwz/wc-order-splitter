@@ -205,6 +205,7 @@ final class WCOS_Order_Item_Meta_Policy {
 			if ($key !== $expected++) {
 				return true;
 			}
+		}
 		return false;
 	}
 }
