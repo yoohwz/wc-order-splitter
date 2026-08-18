@@ -66,3 +66,61 @@ jobs:
           grep -Fq "define('WC_ORDER_SPLITTER_MUTATIONS_ENABLED', false);" wc-order-splitter.php
           grep -Fq 'Stable tag: 1.4.12' readme.txt
           grep -Fq 'Version: 1.4.12' wc-order-splitter.php
+
+  release-package:
+    name: Reproducible 1.4.12 package
+    needs: [php-syntax, release-contract]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build WordPress.org ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_root="build/wc-order-splitter"
+          archive="build/order-splitter-for-woocommerce-1.4.12.zip"
+
+          rm -rf build
+          mkdir -p "$package_root"
+          rsync -a ./ "$package_root/" \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude '.gitignore' \
+            --exclude '.wp-env.json' \
+            --exclude 'build' \
+            --exclude 'node_modules' \
+            --exclude 'package.json' \
+            --exclude 'package-lock.json' \
+            --exclude 'tests'
+
+          test -f "$package_root/wc-order-splitter.php"
+          test -f "$package_root/readme.txt"
+          test ! -e "$package_root/inc/cores/api/push-subscription.php"
+          grep -Fq 'Version: 1.4.12' "$package_root/wc-order-splitter.php"
+          grep -Fq 'Stable tag: 1.4.12' "$package_root/readme.txt"
+          grep -Fq "define('WC_ORDER_SPLITTER_MUTATIONS_ENABLED', false);" "$package_root/wc-order-splitter.php"
+
+          (
+            cd build
+            find wc-order-splitter -exec touch -h -d '@0' {} +
+            LC_ALL=C find wc-order-splitter -type f -print | sort | zip -X -q "$PWD/$(basename "$archive")" -@
+          )
+
+          unzip -t "$archive"
+          if unzip -Z1 "$archive" | grep -E '(^|/)(\.git|\.github|tests|node_modules|build)(/|$)'; then
+            echo 'Development-only files entered the release ZIP.' >&2
+            exit 1
+          fi
+          sha256sum "$archive" > "$archive.sha256"
+
+      - name: Upload release package
+        uses: actions/upload-artifact@v7
+        with:
+          name: order-splitter-for-woocommerce-1.4.12
+          path: |
+            build/order-splitter-for-woocommerce-1.4.12.zip
+            build/order-splitter-for-woocommerce-1.4.12.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
