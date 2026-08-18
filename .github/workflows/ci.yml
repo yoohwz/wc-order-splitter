@@ -66,8 +66,29 @@ jobs:
       - name: Install and activate WooCommerce 11.0.1
         run: npx wp-env run cli wp plugin install https://downloads.wordpress.org/plugin/woocommerce.11.0.1.zip --activate
 
+      - name: Install early-translation monitor
+        run: |
+          npx wp-env run cli wp eval '
+            wp_mkdir_p(WPMU_PLUGIN_DIR);
+            @unlink(WP_CONTENT_DIR . "/wcos-early-translation.jsonl");
+            $source = WP_PLUGIN_DIR . "/wc-order-splitter/tests/integration/early-translation-monitor.php";
+            $target = WPMU_PLUGIN_DIR . "/wcos-early-translation-monitor.php";
+            if (!copy($source, $target)) { exit(1); }
+          '
+
       - name: Activate Order Splitter
         run: npx wp-env run cli wp plugin activate wc-order-splitter
+
+      - name: Reject early WooCommerce translation loading
+        run: |
+          npx wp-env run cli wp eval '
+            $log = WP_CONTENT_DIR . "/wcos-early-translation.jsonl";
+            if (file_exists($log) && filesize($log) > 0) {
+              fwrite(STDERR, file_get_contents($log));
+              exit(1);
+            }
+            echo "early-translation-loading-ok\n";
+          '
 
       - name: Configure legacy order storage
         if: matrix.storage == 'legacy'
