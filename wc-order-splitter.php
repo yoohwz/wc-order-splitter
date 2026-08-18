@@ -1,9 +1,8 @@
 <?php
 /**
  * Plugin Name: Order Splitter for WooCommerce
- * Plugin URI: https://wordpress.org/plugins/wc-order-splitter/
  * Description: Split WooCommerce orders by quantity, category, or stock status from the admin.
- * Version: 1.4.11
+ * Version: 1.4.12
  * Author: YoOhw.com
  * Author URI: https://yoohw.com
  * Requires at least: 6.3
