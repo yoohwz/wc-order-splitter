@@ -109,6 +109,10 @@ final class WCOS_Operation_Journal {
 	}
 
 	public static function fail(WC_Order $order, $operation_id, array $context = array()) {
+		$current = self::get($order, $operation_id);
+		if (is_array($current) && isset($current['status']) && in_array($current['status'], array('recovery_required', 'committed', 'completed'), true)) {
+			return true;
+		}
 		return self::set_status($order, $operation_id, 'failed', 'failed', $context, true);
 	}
 
