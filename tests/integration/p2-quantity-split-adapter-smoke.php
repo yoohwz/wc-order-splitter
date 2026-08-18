@@ -62,14 +62,30 @@ wcos_p2_adapter_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT), 
 
 $adapter = new WCOS_Split_WooCommerce_Adapter();
 
-/* Read-only preflight: fractional quantities are supported and PII is not returned. */
+/* Core WooCommerce intentionally normalizes stock/order quantities to integers by default. */
+$integer_product = wcos_p2_adapter_product('WCOS P2 default integer quantity', '4.00');
+list($integer_source, $integer_item_id) = wcos_p2_adapter_order($integer_product, '3.500000');
+$integer_item = wc_get_order($integer_source->get_id())->get_item($integer_item_id);
+wcos_p2_adapter_assert(
+	WCOS_Decimal::to_units('3.000000', 6) === WCOS_Decimal::to_units($integer_item->get_quantity(), 6),
+	'WooCommerce default stock-amount policy unexpectedly preserved a fractional order quantity.'
+);
+$integer_report = $adapter->preflight(wc_get_order($integer_source->get_id()));
+wcos_p2_adapter_assert(0 === (int) $integer_report['fractional_quantity_lines'], 'P2 preflight reported a fraction after WooCommerce default integer normalization.');
+wcos_p2_adapter_cleanup($integer_source->get_id());
+wp_delete_post($integer_product->get_id(), true);
+
+/* Simulate the explicit integration contract used by fractional-quantity extensions. */
+remove_filter('woocommerce_stock_amount', 'intval');
+add_filter('woocommerce_stock_amount', 'floatval');
+
 $product = wcos_p2_adapter_product('WCOS P2 fractional product', '12.50', 50);
 list($source, $item_id) = wcos_p2_adapter_order($product, '3.500000');
 $source->set_billing_email('p2-private-preflight@example.test');
 $source->save();
 $report = $adapter->preflight(wc_get_order($source->get_id()));
 wcos_p2_adapter_assert(!empty($report['supported']), 'A valid fractional-quantity source failed P2 preflight.');
-wcos_p2_adapter_assert(1 === (int) $report['fractional_quantity_lines'], 'P2 preflight did not identify the fractional line.');
+wcos_p2_adapter_assert(1 === (int) $report['fractional_quantity_lines'], 'P2 preflight did not identify the fractional line when the integration allows decimals.');
 wcos_p2_adapter_assert('keep_on_source' === $report['policy']['shipping'], 'P2 preflight exposed the wrong shipping policy.');
 wcos_p2_adapter_assert('no_write' === $report['policy']['physical_stock'], 'P2 preflight exposed the wrong stock policy.');
 wcos_p2_adapter_assert(false === strpos(wp_json_encode($report), 'p2-private-preflight@example.test'), 'P2 preflight leaked customer PII.');
@@ -262,7 +278,7 @@ wcos_p2_adapter_assert('completed' === $dirty_record['status'], 'Blocked stock-a
 wcos_p2_adapter_cleanup($dirty_source->get_id(), $dirty_operation);
 wp_delete_post($dirty_product->get_id(), true);
 
-/* A confirmed after-write fallback event disables automatic order-only compensation. */
+/* A confirmed after-write fallback event is classified for manual reconciliation. */
 $fallback_product = wcos_p2_adapter_product('WCOS P2 fallback stock evidence', '6.00', 11);
 $fallback_token = WCOS_Stock_Side_Effect_Guard::begin('p2-after-write-fallback-' . wp_generate_uuid4());
 WCOS_Stock_Side_Effect_Guard::record_product_stock_write($fallback_product);
@@ -287,5 +303,8 @@ wcos_p2_adapter_assert(
 	!WCOS_Operation_Journal_Retention::is_expired_terminal_record(array('status' => 'recovery_required', 'completed_at' => gmdate('c', $now - (200 * DAY_IN_SECONDS))), $now),
 	'Recovery-required mutation journal was eligible for destructive cleanup.'
 );
+
+remove_filter('woocommerce_stock_amount', 'floatval');
+add_filter('woocommerce_stock_amount', 'intval');
 
 echo "p2-quantity-split-adapter-foundation-ok\n";
