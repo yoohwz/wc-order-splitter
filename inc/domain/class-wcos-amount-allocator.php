@@ -52,7 +52,6 @@ final class WCOS_Amount_Allocator {
 		$base_units = array();
 		$fractions = array();
 		$allocated_units = 0;
-		$position = 0;
 
 		foreach ($normalized as $key => $weight_units) {
 			$product = self::safe_multiply($absolute_units, $weight_units);
@@ -61,7 +60,7 @@ final class WCOS_Amount_Allocator {
 			$fractions[] = array(
 				'key' => $key,
 				'remainder' => $product % $total_weight,
-				'position' => $position++,
+				'canonical_key' => self::canonical_key($key),
 			);
 			$allocated_units += $base;
 		}
@@ -70,7 +69,7 @@ final class WCOS_Amount_Allocator {
 			$fractions,
 			static function($left, $right) {
 				if ($left['remainder'] === $right['remainder']) {
-					return $left['position'] <=> $right['position'];
+					return strcmp($left['canonical_key'], $right['canonical_key']);
 				}
 				return $left['remainder'] > $right['remainder'] ? -1 : 1;
 			}
@@ -86,6 +85,14 @@ final class WCOS_Amount_Allocator {
 			$base_units[$key]++;
 		}
 
+		/* Stable output ordering makes equivalent associative requests byte-stable. */
+		uksort(
+			$base_units,
+			static function($left, $right) {
+				return strcmp(self::canonical_key($left), self::canonical_key($right));
+			}
+		);
+
 		$result = array();
 		foreach ($base_units as $key => $value) {
 			$result[$key] = WCOS_Decimal::from_units($value * $sign, $precision);
@@ -95,11 +102,23 @@ final class WCOS_Amount_Allocator {
 	}
 
 	private static function format_zero_allocations(array $keys, $precision) {
+		usort(
+			$keys,
+			static function($left, $right) {
+				return strcmp(self::canonical_key($left), self::canonical_key($right));
+			}
+		);
 		$result = array();
 		foreach ($keys as $key) {
 			$result[$key] = WCOS_Decimal::from_units(0, $precision);
 		}
 		return $result;
+	}
+
+	private static function canonical_key($key) {
+		return is_int($key)
+			? 'i:' . str_pad((string) $key, 20, '0', STR_PAD_LEFT)
+			: 's:' . (string) $key;
 	}
 
 	private static function safe_multiply($left, $right) {
