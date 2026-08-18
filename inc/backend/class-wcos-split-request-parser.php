@@ -57,7 +57,11 @@ final class WCOS_Split_Request_Parser {
                 }
 
                 $item_id = absint($item_key);
-                $quantity_units = WCOS_Decimal::to_units($quantity, 6);
+                try {
+                    $quantity_units = WCOS_Decimal::to_units($quantity, 6);
+                } catch (OverflowException $exception) {
+                    throw new InvalidArgumentException(__('A Split quantity exceeds the supported numeric range.', 'wc-order-splitter'), 0, $exception);
+                }
                 if (!$item_id || $quantity_units <= 0) {
                     throw new InvalidArgumentException(__('Split item IDs and quantities must be positive.', 'wc-order-splitter'));
                 }
@@ -79,6 +83,10 @@ final class WCOS_Split_Request_Parser {
             }
         }
 
-        return WCOS_Split_Plan::normalize($source, $strict);
+        try {
+            return WCOS_Split_Plan::normalize($source, $strict);
+        } catch (OverflowException $exception) {
+            throw new InvalidArgumentException(__('The Split plan exceeds the supported numeric range.', 'wc-order-splitter'), 0, $exception);
+        }
     }
 }
