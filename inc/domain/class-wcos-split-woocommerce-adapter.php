@@ -38,6 +38,27 @@ final class WCOS_Split_WooCommerce_Adapter {
             WCOS_Split_Preflight::assert_supported($source, $precision);
             $stock_token = WCOS_Stock_Side_Effect_Guard::begin($operation_id);
 
+            /*
+             * Persist confirmed after-write evidence while the Split service's
+             * order lease is still held. This closes the narrow gap between a
+             * late third-party side effect and the adapter's outer postcondition
+             * check after the service returns/releases its lease.
+             */
+            $boundary_guard = function() use ($source_id, $operation_id, $stock_token) {
+                $events = WCOS_Stock_Side_Effect_Guard::events($stock_token);
+                if (!empty($events) && WCOS_Stock_Side_Effect_Guard::events_require_manual_reconciliation($events)) {
+                    $this->mark_manual_stock_reconciliation(
+                        $source_id,
+                        $operation_id,
+                        $events,
+                        new RuntimeException(__('Unexpected physical-stock evidence was observed before the Split request boundary completed.', 'wc-order-splitter'))
+                    );
+                }
+                WCOS_Stock_Side_Effect_Guard::assert_clean($stock_token);
+            };
+            add_action('wcos_split_mutation_checkpoint', $boundary_guard, PHP_INT_MAX, 4);
+            add_action('woocommerce_order_note_added', $boundary_guard, PHP_INT_MAX, 2);
+
             try {
                 $children = (new WCOS_Split_Order_Service())->split($source, $plan, $operation_id);
                 WCOS_Stock_Side_Effect_Guard::assert_clean($stock_token);
@@ -52,6 +73,8 @@ final class WCOS_Split_WooCommerce_Adapter {
                 }
                 throw $throwable;
             } finally {
+                remove_action('wcos_split_mutation_checkpoint', $boundary_guard, PHP_INT_MAX);
+                remove_action('woocommerce_order_note_added', $boundary_guard, PHP_INT_MAX);
                 WCOS_Stock_Side_Effect_Guard::end($stock_token);
             }
         } finally {
