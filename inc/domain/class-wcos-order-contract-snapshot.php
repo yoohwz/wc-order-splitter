@@ -12,6 +12,8 @@ final class WCOS_Order_Contract_Snapshot {
 		$money = array(
 			'line_subtotal' => 0,
 			'line_total' => 0,
+			'line_subtotal_tax' => 0,
+			'line_total_tax' => 0,
 			'discount_total' => 0,
 			'discount_tax' => 0,
 			'fees_total' => 0,
@@ -23,6 +25,7 @@ final class WCOS_Order_Contract_Snapshot {
 		$line_quantities = array();
 		$currencies = array();
 		$tax_by_rate = array();
+		$line_tax_by_rate = array();
 
 		foreach ($orders as $order) {
 			if (!$order instanceof WC_Order) {
@@ -41,6 +44,22 @@ final class WCOS_Order_Contract_Snapshot {
 				$line_quantities[$identity] = self::safe_add(isset($line_quantities[$identity]) ? $line_quantities[$identity] : 0, $quantity);
 				$money['line_subtotal'] = self::safe_add($money['line_subtotal'], WCOS_Decimal::to_units($item->get_subtotal(), $precision));
 				$money['line_total'] = self::safe_add($money['line_total'], WCOS_Decimal::to_units($item->get_total(), $precision));
+				$money['line_subtotal_tax'] = self::safe_add($money['line_subtotal_tax'], WCOS_Decimal::to_units($item->get_subtotal_tax(), $precision));
+				$money['line_total_tax'] = self::safe_add($money['line_total_tax'], WCOS_Decimal::to_units($item->get_total_tax(), $precision));
+
+				$taxes = $item->get_taxes();
+				foreach (array('subtotal', 'total') as $tax_kind) {
+					foreach (isset($taxes[$tax_kind]) && is_array($taxes[$tax_kind]) ? $taxes[$tax_kind] : array() as $rate_id => $tax_amount) {
+						$rate_key = (string) $rate_id;
+						if (!isset($line_tax_by_rate[$rate_key])) {
+							$line_tax_by_rate[$rate_key] = array('subtotal' => 0, 'total' => 0);
+						}
+						$line_tax_by_rate[$rate_key][$tax_kind] = self::safe_add(
+							$line_tax_by_rate[$rate_key][$tax_kind],
+							WCOS_Decimal::to_units($tax_amount, $precision)
+						);
+					}
+				}
 
 				$reduced = $item->get_meta('_reduced_stock', true);
 				if ('' !== $reduced && is_numeric($reduced)) {
@@ -88,8 +107,18 @@ final class WCOS_Order_Contract_Snapshot {
 			);
 		}
 
+		$formatted_line_tax_by_rate = array();
+		ksort($line_tax_by_rate, SORT_STRING);
+		foreach ($line_tax_by_rate as $rate_id => $totals) {
+			$formatted_line_tax_by_rate[$rate_id] = array(
+				'subtotal' => WCOS_Decimal::from_units($totals['subtotal'], $precision),
+				'total' => WCOS_Decimal::from_units($totals['total'], $precision),
+			);
+		}
+
 		$result['stock_reduced'] = WCOS_Decimal::from_units($stock_reduced, 6);
 		$result['line_quantities'] = $line_quantities;
+		$result['line_tax_by_rate'] = $formatted_line_tax_by_rate;
 		$result['tax_by_rate'] = $formatted_tax_by_rate;
 		$result['currencies'] = array_values(array_unique(array_map('strval', $currencies)));
 		return $result;
