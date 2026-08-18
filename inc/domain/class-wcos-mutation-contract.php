@@ -14,6 +14,8 @@ final class WCOS_Mutation_Contract {
 		$money_keys = array(
 			'line_subtotal',
 			'line_total',
+			'line_subtotal_tax',
+			'line_total_tax',
 			'discount_total',
 			'discount_tax',
 			'fees_total',
@@ -51,17 +53,35 @@ final class WCOS_Mutation_Contract {
 			}
 		}
 
-		if (isset($before['tax_by_rate']) || isset($after['tax_by_rate'])) {
-			$before_tax = self::normalize_tax_by_rate(
-				isset($before['tax_by_rate']) ? (array) $before['tax_by_rate'] : array(),
-				$precision
+		if (isset($before['line_tax_by_rate']) || isset($after['line_tax_by_rate'])) {
+			$before_line_tax = self::normalize_rate_map(
+				isset($before['line_tax_by_rate']) ? (array) $before['line_tax_by_rate'] : array(),
+				$precision,
+				array('subtotal', 'total')
 			);
-			$after_tax = self::normalize_tax_by_rate(
+			$after_line_tax = self::normalize_rate_map(
+				isset($after['line_tax_by_rate']) ? (array) $after['line_tax_by_rate'] : array(),
+				$precision,
+				array('subtotal', 'total')
+			);
+			if ($before_line_tax !== $after_line_tax) {
+				throw new RuntimeException('Per-rate line tax conservation failed.');
+			}
+		}
+
+		if (isset($before['tax_by_rate']) || isset($after['tax_by_rate'])) {
+			$before_tax = self::normalize_rate_map(
+				isset($before['tax_by_rate']) ? (array) $before['tax_by_rate'] : array(),
+				$precision,
+				array('cart', 'shipping')
+			);
+			$after_tax = self::normalize_rate_map(
 				isset($after['tax_by_rate']) ? (array) $after['tax_by_rate'] : array(),
-				$precision
+				$precision,
+				array('cart', 'shipping')
 			);
 			if ($before_tax !== $after_tax) {
-				throw new RuntimeException('Per-rate historical tax conservation failed.');
+				throw new RuntimeException('Per-rate historical tax-row conservation failed.');
 			}
 		}
 
@@ -83,15 +103,15 @@ final class WCOS_Mutation_Contract {
 		return $normalized;
 	}
 
-	private static function normalize_tax_by_rate(array $taxes, $precision) {
+	private static function normalize_rate_map(array $rates, $precision, array $fields) {
 		$normalized = array();
-		foreach ($taxes as $rate_id => $totals) {
+		foreach ($rates as $rate_id => $totals) {
 			$totals = is_array($totals) ? $totals : array();
 			$key = (string) $rate_id;
-			$normalized[$key] = array(
-				'cart' => WCOS_Decimal::to_units(isset($totals['cart']) ? $totals['cart'] : 0, $precision),
-				'shipping' => WCOS_Decimal::to_units(isset($totals['shipping']) ? $totals['shipping'] : 0, $precision),
-			);
+			$normalized[$key] = array();
+			foreach ($fields as $field) {
+				$normalized[$key][$field] = WCOS_Decimal::to_units(isset($totals[$field]) ? $totals[$field] : 0, $precision);
+			}
 		}
 		ksort($normalized, SORT_STRING);
 		return $normalized;
