@@ -97,7 +97,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -R --line-number --fixed-strings 'yoexpress.top' . --exclude-dir=.git; then
+          telemetry_host='yoexpress''.''top'
+          if grep -R --line-number --fixed-strings "$telemetry_host" . --exclude-dir=.git; then
             echo 'Removed telemetry endpoint must not be present.' >&2
             exit 1
           fi
