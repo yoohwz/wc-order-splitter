@@ -38,7 +38,21 @@ try {
 wcos_p2_adapter_assert($unknown_rejected, 'Unknown private metadata did not block Split before persistence.');
 wcos_p2_adapter_assert(null === WCOS_Operation_Journal::get(wc_get_order($business_source->get_id()), $unknown_operation), 'Unknown private metadata rejection created a journal.');
 
-/* A third-party adapter may explicitly classify immutable private configuration as business. */
+/* Context-sensitive adapters are invalid: copy and identity classification must agree. */
+$contextual_adapter = static function($classification, $key, $value, $context) {
+	if ('_third_party_bundle_config' === $key && WCOS_Order_Item_Meta_Policy::CONTEXT_SPLIT === $context) {
+		return WCOS_Order_Item_Meta_Policy::CLASS_BUSINESS;
+	}
+	return $classification;
+};
+add_filter('wcos_order_item_meta_classification', $contextual_adapter, 10, 6);
+$contextual_report = $adapter->preflight(wc_get_order($business_source->get_id()));
+wcos_p2_adapter_assert(empty($contextual_report['supported']), 'Context-sensitive private metadata adapter was accepted.');
+wcos_p2_adapter_assert('inconsistent_private_metadata_classification' === $contextual_report['reason'], 'Context-sensitive adapter used the wrong rejection reason.');
+wcos_p2_adapter_assert(array('_third_party_bundle_config') === $contextual_report['inconsistent_private_meta_keys'], 'Context-sensitive adapter key was not reported.');
+remove_filter('wcos_order_item_meta_classification', $contextual_adapter, 10);
+
+/* A third-party adapter may explicitly classify immutable private configuration as business in every relevant context. */
 $business_adapter = static function($classification, $key) {
 	return '_third_party_bundle_config' === $key ? WCOS_Order_Item_Meta_Policy::CLASS_BUSINESS : $classification;
 };
@@ -46,6 +60,7 @@ add_filter('wcos_order_item_meta_classification', $business_adapter, 10, 6);
 $adapted_report = $adapter->preflight(wc_get_order($business_source->get_id()));
 wcos_p2_adapter_assert(!empty($adapted_report['supported']), 'Explicit private-business metadata adapter did not satisfy preflight.');
 wcos_p2_adapter_assert(empty($adapted_report['unknown_private_meta_keys']), 'Explicit private-business key remained unclassified.');
+wcos_p2_adapter_assert(empty($adapted_report['inconsistent_private_meta_keys']), 'Explicit private-business key remained context-inconsistent.');
 $business_operation = 'p2-private-business-' . wp_generate_uuid4();
 $business_children = $adapter->split(
 	wc_get_order($business_source->get_id()),
@@ -89,6 +104,61 @@ wcos_p2_adapter_assert('' === $operational_child_line->get_meta('_third_party_re
 remove_filter('wcos_order_item_private_meta_is_known_operational', $operational_adapter, 10);
 wcos_p2_adapter_cleanup($operational_source->get_id(), $operational_operation);
 wp_delete_post($operational_product->get_id(), true);
+
+/* Two lines with the same product but different adapted business configuration must never collapse. */
+$configured_product = wcos_p2_adapter_product('WCOS P2 configured duplicate lines', '5.00');
+$configured_order = wc_create_order();
+$configured_order->set_status('pending');
+$configured_order->set_currency('USD');
+$configured_line_ids = array();
+foreach (array('A', 'B') as $slot) {
+	$line = new WC_Order_Item_Product();
+	$line->set_props(array(
+		'name' => 'Configured line ' . $slot,
+		'product_id' => $configured_product->get_id(),
+		'quantity' => 2,
+		'subtotal' => '10.00',
+		'total' => '10.00',
+	));
+	$line->add_meta_data('_third_party_bundle_config', array('bundle' => 42, 'slot' => $slot), true);
+	$configured_order->add_item($line);
+}
+$configured_order->calculate_totals(false);
+$configured_order->save();
+$configured_order = wc_get_order($configured_order->get_id());
+$configured_items = $configured_order->get_items('line_item');
+foreach ($configured_items as $configured_item_id => $configured_item) {
+	$configured_line_ids[$configured_item->get_meta('_third_party_bundle_config', true)['slot']] = (int) $configured_item_id;
+}
+ksort($configured_line_ids, SORT_STRING);
+add_filter('wcos_order_item_meta_classification', $business_adapter, 10, 6);
+$configured_report = $adapter->preflight($configured_order);
+wcos_p2_adapter_assert(!empty($configured_report['supported']), 'Configured duplicate-line order failed adapted preflight.');
+$configured_operation = 'p2-configured-lines-' . wp_generate_uuid4();
+$configured_children = $adapter->split(
+	$configured_order,
+	array('child-one' => array($configured_line_ids['A'] => 1, $configured_line_ids['B'] => 1)),
+	$configured_operation
+);
+wcos_p2_adapter_assert(1 === count($configured_children), 'Configured duplicate-line Split did not create one child.');
+$configured_child_items = array_values($configured_children[0]->get_items('line_item'));
+wcos_p2_adapter_assert(2 === count($configured_child_items), 'Configured lines with the same product collapsed in the child.');
+$configured_slots = array();
+$configured_identities = array();
+foreach ($configured_child_items as $configured_child_item) {
+	$config = $configured_child_item->get_meta('_third_party_bundle_config', true);
+	$configured_slots[] = $config['slot'];
+	$configured_identities[] = WCOS_Line_Identity::from_item($configured_child_item);
+}
+sort($configured_slots, SORT_STRING);
+$configured_unique_identities = array_values(array_unique($configured_identities));
+wcos_p2_adapter_assert(array('A', 'B') === $configured_slots, 'Configured business metadata was not preserved per child line.');
+wcos_p2_adapter_assert(2 === count($configured_unique_identities), 'Distinct configured lines produced the same canonical identity.');
+$reloaded_configured_source = wc_get_order($configured_order->get_id());
+wcos_p2_adapter_assert(2 === count($reloaded_configured_source->get_items('line_item')), 'Configured source lines collapsed after Split.');
+remove_filter('wcos_order_item_meta_classification', $business_adapter, 10);
+wcos_p2_adapter_cleanup($configured_order->get_id(), $configured_operation);
+wp_delete_post($configured_product->get_id(), true);
 
 /* Protected keys remain operational even if a hostile/buggy adapter tries to promote them. */
 $protected_product = wcos_p2_adapter_product('WCOS P2 protected metadata', '5.00');

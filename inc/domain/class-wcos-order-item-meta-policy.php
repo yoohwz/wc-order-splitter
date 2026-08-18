@@ -72,11 +72,6 @@ final class WCOS_Order_Item_Meta_Policy {
 	/**
 	 * Private line metadata is ambiguous until an integration declares whether
 	 * it is immutable business configuration or known operational state.
-	 *
-	 * Business adapters should use `wcos_order_item_meta_classification` and
-	 * return `business`. Operational adapters should leave classification as
-	 * operational and return true from `wcos_order_item_private_meta_is_known_operational`.
-	 * Protected core/mutation keys never require adapter classification.
 	 */
 	public static function unknown_private_keys(WC_Order_Item $item, $context = self::CONTEXT_SPLIT) {
 		$context = sanitize_key((string) $context);
@@ -101,9 +96,29 @@ final class WCOS_Order_Item_Meta_Policy {
 				$unknown[] = $key;
 			}
 		}
-		$unknown = array_values(array_unique($unknown));
-		sort($unknown, SORT_STRING);
-		return $unknown;
+		return self::sorted_unique($unknown);
+	}
+
+	/**
+	 * Business-vs-operational classification must be stable between the copy
+	 * path and the canonical line-identity path. A context-sensitive adapter can
+	 * otherwise copy configuration that is absent from identity, making distinct
+	 * configured lines indistinguishable to conservation/recovery contracts.
+	 */
+	public static function inconsistent_private_keys(WC_Order_Item $item) {
+		$inconsistent = array();
+		foreach ($item->get_meta_data() as $meta) {
+			$key = (string) $meta->key;
+			if (0 !== strpos($key, '_') || self::is_protected($key)) {
+				continue;
+			}
+			$split = self::classify($key, $meta->value, self::CONTEXT_SPLIT, $item);
+			$identity = self::classify($key, $meta->value, self::CONTEXT_IDENTITY, $item);
+			if ($split !== $identity) {
+				$inconsistent[] = $key;
+			}
+		}
+		return self::sorted_unique($inconsistent);
 	}
 
 	public static function classify($key, $value, $context, WC_Order_Item $item = null) {
@@ -197,6 +212,12 @@ final class WCOS_Order_Item_Meta_Policy {
 		}
 
 		return $value;
+	}
+
+	private static function sorted_unique(array $keys) {
+		$keys = array_values(array_unique(array_map('strval', $keys)));
+		sort($keys, SORT_STRING);
+		return $keys;
 	}
 
 	private static function is_associative(array $value) {
