@@ -66,6 +66,9 @@ jobs:
       - name: Prove authoritative journal survives bounded display history
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/journal-durability-smoke.php
 
+      - name: Reject corrupted reduced-stock source markers
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/stock-marker-validation-smoke.php
+
       - name: Stop WordPress
         if: always()
         run: npx wp-env stop
