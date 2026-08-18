@@ -84,6 +84,7 @@ final class WCOS_Order_Contract_Snapshot {
 			'total_tax' => $order->get_total_tax(),
 			'total' => $order->get_total(),
 			'transaction_id' => $order->get_transaction_id(),
+			'copy_context_signature' => WCOS_Order_Copy_Context::signature($order),
 			'stock_reduced' => (bool) $order->get_data_store()->get_stock_reduced($order->get_id()),
 			'items' => array(),
 		);
