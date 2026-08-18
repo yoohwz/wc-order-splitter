@@ -16,7 +16,9 @@ final class WCOS_Split_Compensator {
 		$operation_id = isset($record['operation_id']) ? sanitize_key($record['operation_id']) : '';
 		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
 		$snapshot = isset($context['source_snapshot']) && is_array($context['source_snapshot']) ? $context['source_snapshot'] : array();
-		$expected_after = isset($context['source_signature_after']) ? sanitize_key((string) $context['source_signature_after']) : '';
+		$expected_after = isset($context['source_recovery_signature_after'])
+			? sanitize_key((string) $context['source_recovery_signature_after'])
+			: '';
 		$expected_child_signatures = isset($context['child_signatures']) && is_array($context['child_signatures'])
 			? $context['child_signatures']
 			: array();
@@ -37,7 +39,7 @@ final class WCOS_Split_Compensator {
 
 		if ('compensating' !== $status) {
 			if ('' === $expected_after
-				|| !hash_equals($expected_after, WCOS_Order_Contract_Snapshot::source_signature($source))) {
+				|| !hash_equals($expected_after, WCOS_Order_Mutation_Snapshot::split_owned_signature($source))) {
 				throw new RuntimeException(__('The split source no longer matches its persisted mutation checkpoint; automatic compensation is unsafe.', 'wc-order-splitter'));
 			}
 			if ($expected_ids !== $current_ids) {
@@ -67,14 +69,19 @@ final class WCOS_Split_Compensator {
 				$source,
 				$operation_id,
 				'compensation_source_restored',
-				array('source_signature_compensated' => WCOS_Order_Contract_Snapshot::source_signature($source))
+				array(
+					'source_signature_compensated' => WCOS_Order_Contract_Snapshot::source_signature($source),
+					'source_recovery_signature_compensated' => WCOS_Order_Mutation_Snapshot::split_owned_signature($source),
+				)
 			)) {
 				throw new RuntimeException(__('The restored split source could not be checkpointed.', 'wc-order-splitter'));
 			}
 		}
 
 		$source = wc_get_order($source->get_id());
-		if (!$source || !hash_equals((string) $snapshot['source_signature'], WCOS_Order_Contract_Snapshot::source_signature($source))) {
+		if (!$source
+			|| !hash_equals((string) $snapshot['source_signature'], WCOS_Order_Contract_Snapshot::source_signature($source))
+			|| !hash_equals((string) $snapshot['source_recovery_signature'], WCOS_Order_Mutation_Snapshot::split_owned_signature($source))) {
 			throw new RuntimeException(__('The compensated source no longer matches its pre-split snapshot.', 'wc-order-splitter'));
 		}
 
@@ -92,7 +99,12 @@ final class WCOS_Split_Compensator {
 				throw new RuntimeException(__('A compensated split child could not be removed.', 'wc-order-splitter'));
 			}
 
-			$remaining = array_values(array_diff($expected_ids, array($child_id)));
+			$remaining = array();
+			foreach ($expected_ids as $candidate_id) {
+				if (wc_get_order($candidate_id)) {
+					$remaining[] = $candidate_id;
+				}
+			}
 			if (!WCOS_Operation_Journal::checkpoint(
 				$source,
 				$operation_id,
@@ -104,7 +116,9 @@ final class WCOS_Split_Compensator {
 		}
 
 		$source = wc_get_order($source->get_id());
-		if (!$source || !hash_equals((string) $snapshot['source_signature'], WCOS_Order_Contract_Snapshot::source_signature($source))) {
+		if (!$source
+			|| !hash_equals((string) $snapshot['source_signature'], WCOS_Order_Contract_Snapshot::source_signature($source))
+			|| !hash_equals((string) $snapshot['source_recovery_signature'], WCOS_Order_Mutation_Snapshot::split_owned_signature($source))) {
 			throw new RuntimeException(__('The source order drifted while split compensation was completing.', 'wc-order-splitter'));
 		}
 		if (!WCOS_Operation_Journal::mark_compensated(
@@ -140,12 +154,13 @@ final class WCOS_Split_Compensator {
 		}
 
 		$child_id = $child->get_id();
-		if (isset($expected_signatures[$child_id])) {
-			$expected = sanitize_key((string) $expected_signatures[$child_id]);
-			$actual = WCOS_Order_Contract_Snapshot::source_signature($child);
-			if ('' === $expected || !hash_equals($expected, $actual)) {
-				throw new RuntimeException(__('A split child changed after its persistence checkpoint; automatic compensation is unsafe.', 'wc-order-splitter'));
-			}
+		if (!isset($expected_signatures[$child_id])) {
+			throw new RuntimeException(__('A split child is missing its persisted recovery signature.', 'wc-order-splitter'));
+		}
+		$expected = sanitize_key((string) $expected_signatures[$child_id]);
+		$actual = WCOS_Order_Contract_Snapshot::source_signature($child);
+		if ('' === $expected || !hash_equals($expected, $actual)) {
+			throw new RuntimeException(__('A split child changed after its persistence checkpoint; automatic compensation is unsafe.', 'wc-order-splitter'));
 		}
 	}
 
