@@ -35,6 +35,7 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-order-mutation-authorizer.php';
 		include_once $root . 'domain/class-wcos-order-item-meta-policy.php';
 		include_once $root . 'domain/class-wcos-order-item-cloner.php';
+		include_once $root . 'domain/class-wcos-order-contract-snapshot.php';
 		include_once $root . 'domain/class-wcos-duplicate-order-service.php';
 		include_once $root . 'domain/class-wcos-split-order-service.php';
 
