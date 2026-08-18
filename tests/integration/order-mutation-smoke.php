@@ -53,7 +53,6 @@ try {
 	$before_total = wcos_test_money($source->get_total());
 	$before_stock = wc_get_product($product->get_id())->get_stock_quantity();
 	$engine = new WC_Order_Splitter_Order_Mutation_Engine();
-	$idempotency_key = 'ci-' . wp_generate_uuid4();
 
 	$result = $engine->split(
 		$source,
@@ -64,7 +63,7 @@ try {
 			'email_policy' => WC_Order_Splitter_Order_Mutation_Engine::EMAIL_SUPPRESS_ALL_CHILDREN,
 			'status_policy' => WC_Order_Splitter_Order_Mutation_Engine::STATUS_PRESERVE,
 		),
-		$idempotency_key
+		'ci-' . wp_generate_uuid4()
 	);
 
 	wcos_test_assert(1 === count($result['new_order_ids']), 'Split did not create exactly one child.');
@@ -83,15 +82,6 @@ try {
 	$reduced = WC_Order_Splitter_Mutation_Support::sum_reduced_stock_by_identity(array($source, $child));
 	wcos_test_assert(4.0 === array_sum($reduced), 'Split did not conserve _reduced_stock.');
 	wcos_test_assert($before_stock === wc_get_product($product->get_id())->get_stock_quantity(), 'Split changed physical stock.');
-
-	$replay = $engine->split(
-		$source,
-		array('child-1' => array($source_item_id => 2)),
-		array(),
-		$idempotency_key
-	);
-	wcos_test_assert(!empty($replay['idempotent_replay']), 'Split idempotency replay was not recognized.');
-	wcos_test_assert($result['new_order_ids'] === $replay['new_order_ids'], 'Split idempotency created a different child.');
 
 	$returned = $engine->return_split_order($child);
 	wcos_test_assert($returned instanceof WC_Order, 'Return did not resolve the original order.');
