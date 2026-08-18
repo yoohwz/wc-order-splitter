@@ -1,0 +1,41 @@
+name: Mutation execution context contracts
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  execution-context-contracts:
+    name: Execution context (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.1', '8.3']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Lint execution context files
+        shell: bash
+        run: |
+          set -euo pipefail
+          php -l inc/mutation-v2/class-wcos-v2-execution-preflight.php
+          php -l inc/mutation-v2/class-wcos-v2-execution-specification.php
+          php -l tests/v2/execution-context-contract-test.php
+
+      - name: Run execution context contracts
+        run: php tests/v2/execution-context-contract-test.php
