@@ -60,6 +60,9 @@ jobs:
           npx wp-env run cli wp option update woocommerce_custom_orders_table_enabled yes
           npx wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled yes
 
+      - name: Prove mutation leases stay bound to their operation ID
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/lease-operation-binding-smoke.php
+
       - name: Run source-save crash recovery contract
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/source-save-crash-smoke.php
 
