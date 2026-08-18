@@ -286,11 +286,11 @@ final class WC_Order_Splitter_Mutation_Support {
 					);
 				} elseif ($item instanceof WC_Order_Item_Tax) {
 					$entry['props'] = array(
-						'rate_id'             => $item->get_rate_id(),
-						'label'               => $item->get_label(),
-						'compound'            => $item->get_compound(),
-						'tax_total'           => $item->get_tax_total(),
-						'shipping_tax_total'  => $item->get_shipping_tax_total(),
+						'rate_id'            => $item->get_rate_id(),
+						'label'              => $item->get_label(),
+						'compound'           => $item->get_compound(),
+						'tax_total'          => $item->get_tax_total(),
+						'shipping_tax_total' => $item->get_shipping_tax_total(),
 					);
 				}
 				$items[] = $entry;
@@ -336,9 +336,10 @@ final class WC_Order_Splitter_Mutation_Support {
 			$after = self::add_amount_maps($after, self::order_totals($order));
 		}
 
+		$tolerance = pow(10, -self::decimals()) / 2;
 		foreach ($before as $key => $expected) {
 			$actual = isset($after[$key]) ? $after[$key] : 0;
-			if (abs((float) $expected - (float) $actual) > pow(10, -self::decimals())) {
+			if (abs((float) $expected - (float) $actual) > $tolerance) {
 				throw new WC_Order_Splitter_Mutation_Exception(
 					sprintf(__('Order total invariant failed for %1$s: expected %2$s, got %3$s.', 'wc-order-splitter'), $key, $expected, $actual),
 					0,
@@ -384,10 +385,11 @@ final class WC_Order_Splitter_Mutation_Support {
 
 	public static function assert_map_conserved($before, $after, $label, $precision = 6) {
 		$keys = array_unique(array_merge(array_keys($before), array_keys($after)));
+		$tolerance = pow(10, -$precision) / 2;
 		foreach ($keys as $key) {
 			$expected = isset($before[$key]) ? (float) $before[$key] : 0;
 			$actual = isset($after[$key]) ? (float) $after[$key] : 0;
-			if (abs($expected - $actual) > pow(10, -$precision)) {
+			if (abs($expected - $actual) > $tolerance) {
 				throw new WC_Order_Splitter_Mutation_Exception(
 					sprintf(__('%1$s invariant failed.', 'wc-order-splitter'), $label),
 					0,
