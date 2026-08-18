@@ -35,7 +35,7 @@
 = 1.4.10 (Apr 24, 2026) =
 * Fix: Updated some incorrect translation strings.
 * Improve: WooCommerce version 10.7 compatibility.
-* Improve: Clean and optimized some code.
+* Improve: Clean and opimized some codes.
 
 = 1.4.9 (Feb 3, 2026) =
 * Improve: WooCommerce version 10.4 compatibility.
@@ -83,7 +83,6 @@
 = 1.3.11 (Feb 15, 2025) =
 * Fix: Our other plugin compatibility.
 * Improve: WooCommerce compatibility.
-* Improve: Some improvements.
 
 = 1.3.10 (Jan 10, 2025) =
 * Improve: Integration with our other plugin.
@@ -103,78 +102,81 @@
 * Fix: The labels display based on the current user items per page settings.
 * Improve: Some improvements.
 
-= 1.3.6 (Oct 19, 2024) =
-* Improve: WooCommerce compatibility.
-* Improve: Minor fixes and improvements.
+= 1.3.6 (Oct 27, 2024) =
+* Fix: Shop manager unable to open the split table.
+* Fix: Order actions are disable at order edit page.
+* Fix: Minor errors.
+* Improve: Language file updated.
 
-= 1.3.5 (Sep 15, 2024) =
-* Improve: WooCommerce compatibility.
-* Improve: Minor fixes and improvements.
+= 1.3.5 (Oct 22, 2024) =
+* Fix: Shop manager permission.
+* Improve: Label updated.
 
-= 1.3.4 (Aug 8, 2024) =
-* Improve: WooCommerce compatibility.
-* Improve: Minor fixes and improvements.
+= 1.3.4 (Sep 9, 2024) =
+* Fix: Shipping fee, permission options errors.
 
-= 1.3.3 (Jul 15, 2024) =
-* Improve: WooCommerce compatibility.
-* Improve: Minor fixes and improvements.
+= 1.3.3 (Sep 5, 2024) =
+* Improve: Minor improving.
 
-= 1.3.2 (Jun 21, 2024) =
-* Improve: WooCommerce compatibility.
-* Improve: Minor fixes and improvements.
+= 1.3.2 (Aug 26, 2024) =
+* New: Development - Added filter hooks for order meta.
+* Fix: The disable email option conflicts with WooCommerce option.
+* Fix: The new order status and copy logic when duplicating.
+* Improve: Customer user included in the new orders.
+* Improve: Some language strings are updated.
 
-= 1.3.1 (May 16, 2024) =
-* Improve: WooCommerce compatibility.
-* Improve: Minor fixes and improvements.
+= 1.3.1 (Jul 26, 2024) =
+* New: Duplicate order in Order actions in Edit Order page. 
+* Fix: The bulk return action only displays at the Orders page.
+* Improve: The labels are updated.
+* Improve: A minor typo issue was removed.
 
-= 1.3.0 (Apr 20, 2024) =
-* New: Added return split order action.
-* Improve: WooCommerce compatibility.
+= 1.3.0 (Jul 17, 2024) =
+* New: Split orders by category or stock status.
+* New: Bulk return action is now working with HPOS.
+* Fix: Disable order email option affected to all the new orders.
+* Improve: Moved the split container after the order total for better display.
+* Improve: Added notes for the original and split orders.
+* Improve: Added the settings url into the plugins page.
+* Improve: Added the settings notice for the first installment.
+* Improve: Removed unnecessary translation strings.
 
-= 1.2.9 (Mar 16, 2024) =
-* Improve: WooCommerce compatibility.
-* Improve: Minor fixes and improvements.
+= 1.2.4 (Jul 9, 2024) =
+* New: Option to enable/disable the order labels (WooCommerce > Settings > Orders)
+* Fix: Set the default settings for the first install.
 
-= 1.2.8 (Feb 10, 2024) =
-* Improve: WooCommerce compatibility.
-* Improve: Minor fixes and improvements.
+= 1.2.3 =
+* Improve: Optimize the orginal & splitted labels at Orders page.
 
-= 1.2.7 (Jan 14, 2024) =
-* Improve: WooCommerce compatibility.
-* Improve: Minor fixes and improvements.
+= 1.2.2 =
+* New: Added the original & splitted labels at Orders & Edit order pages.
+* New: Added Bulk return action at Orders page.
+* Improve: Remove splitted order ids when returns to the original order.
+* Improve: Added the logic to handle the email sending actions for the sites using the filter to defer WooCommerce transactional emails.
 
-= 1.2.6 (Dec 17, 2023) =
-* Improve: WooCommerce compatibility.
-* Improve: Minor fixes and improvements.
+= 1.2.1 =
+* New: Split to multiple orders.
+* Improve: Minor bug fixed.
 
-= 1.2.5 (Nov 12, 2023) =
-* Improve: WooCommerce compatibility.
-* Improve: Minor fixes and improvements.
+= 1.2.0 =
+* New: Brand new OOP codes under the hood.
+* New: Permission option for shop manager.
+* Improve: Avoid to split all quantities in the order.
+* Improve: Small bugs fixed.
 
-= 1.2.4 (Oct 22, 2023) =
-* Improve: WooCommerce compatibility.
-* Improve: Minor fixes and improvements.
+= 1.1.1 =
+* New: Return the order back to the original.
+* New: Set order statuses that allow to split or return.
+Note: Only the 'processing' status has set as default. You have to go to the settings to set more if you wish.
 
-= 1.2.3 (Sep 17, 2023) =
-* Improve: WooCommerce compatibility.
-* Improve: Minor fixes and improvements.
+### 1.1.0
+* Order Splitter Settings added.
+* Exclude shipping fee optional.
+* Disable order email optional.
+* Minor improving.
 
-= 1.2.2 (Aug 12, 2023) =
-* Improve: WooCommerce compatibility.
-* Improve: Minor fixes and improvements.
+= 1.0.1 =
+* A serious error fixed.
 
-= 1.2.1 (Jul 8, 2023) =
-* Improve: WooCommerce compatibility.
-* Improve: Minor fixes and improvements.
-
-= 1.2.0 (Jun 3, 2023) =
-* New: Added split by category.
-* New: Added split by stock status.
-* Improve: WooCommerce compatibility.
-
-= 1.1.0 (May 6, 2023) =
-* New: Added split by quantity.
-* Improve: WooCommerce compatibility.
-
-= 1.0.0 =
-* Initial release.
+= 1.0 =
+* First released.
