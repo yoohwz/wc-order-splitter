@@ -39,6 +39,47 @@ jobs:
       - name: Run mutation-domain unit tests
         run: php tests/unit/run.php
 
+  integration-smoke:
+    name: WordPress + WooCommerce + HPOS smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install wp-env
+        run: npm install --no-audit --no-fund
+
+      - name: Start WordPress
+        run: npx wp-env start
+
+      - name: Install and activate WooCommerce
+        run: npx wp-env run cli wp plugin install woocommerce --activate
+
+      - name: Activate Order Splitter
+        run: npx wp-env run cli wp plugin activate wc-order-splitter
+
+      - name: Enable HPOS
+        run: |
+          npx wp-env run cli wp option update woocommerce_custom_orders_table_enabled yes
+          npx wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled yes
+
+      - name: Verify plugin and safety mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wp-env run cli wp plugin is-active woocommerce
+          npx wp-env run cli wp plugin is-active wc-order-splitter
+          npx wp-env run cli wp eval 'if (!defined("WC_ORDER_SPLITTER_MUTATIONS_ENABLED") || WC_ORDER_SPLITTER_MUTATIONS_ENABLED !== false) { exit(1); } echo "safety-mode-ok\n";'
+
+      - name: Stop WordPress
+        if: always()
+        run: npx wp-env stop
+
   release-contract:
     name: Release safety contract
     runs-on: ubuntu-latest
