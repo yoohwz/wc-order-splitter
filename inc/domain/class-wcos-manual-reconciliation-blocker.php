@@ -188,6 +188,19 @@ final class WCOS_Manual_Reconciliation_Blocker {
                 return true;
             }
 
+            /*
+             * Re-read and re-validate the exact current incident on every CAS
+             * attempt. A concurrent block() may replace incident A with a newer
+             * incident B between the caller's resolution check and this clear.
+             * An older reconciliation must never delete that newer blocker.
+             */
+            $journal = class_exists('WCOS_Operation_Journal')
+                ? WCOS_Operation_Journal::get($order, $operation_id)
+                : null;
+            if (!self::journal_resolves_incident($journal, $current['operations'][$operation_id])) {
+                return false;
+            }
+
             $replacement = $current;
             unset($replacement['operations'][$operation_id]);
             if (empty($replacement['operations'])) {
