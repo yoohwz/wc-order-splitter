@@ -682,7 +682,10 @@
         close.type = 'button';
         close.className = 'button-link wcos-split-method-close';
         close.setAttribute('aria-label', 'Close split method chooser');
-        close.innerHTML = '<span aria-hidden="true">×</span>';
+        var closeGlyph = document.createElement('span');
+        closeGlyph.setAttribute('aria-hidden', 'true');
+        closeGlyph.textContent = '×';
+        close.appendChild(closeGlyph);
         header.appendChild(heading);
         header.appendChild(close);
 
