@@ -47,10 +47,10 @@ try {
 
 	$ui_controller = WCOS_Split_Strategy_Admin_Controller::bootstrap();
 	wcos_p2_adapter_assert($ui_controller instanceof WCOS_Split_Strategy_Admin_Controller, 'Enabled test-only strategy UI did not bootstrap.');
-	wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION), 'Enabled strategy UI did not register Review AJAX.');
-	wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION), 'Enabled strategy UI did not register Confirm AJAX.');
-	wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION), 'Enabled strategy UI did not register Execute AJAX.');
-	wcos_p2_adapter_assert(false !== has_action('woocommerce_order_item_add_action_buttons'), 'Enabled strategy UI did not register order launcher rendering.');
+	wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION, array($ui_controller, 'ajax_review')), 'Enabled strategy UI did not register Review AJAX.');
+	wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION, array($ui_controller, 'ajax_confirm')), 'Enabled strategy UI did not register Confirm AJAX.');
+	wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION, array($ui_controller, 'ajax_execute')), 'Enabled strategy UI did not register Execute AJAX.');
+	wcos_p2_adapter_assert(false !== has_action('woocommerce_order_item_add_action_buttons', array($ui_controller, 'render_launcher')), 'Enabled strategy UI did not register its order launcher callback.');
 
 	ob_start();
 	$ui_controller->render_launcher(wc_get_order($ui_order_id));
@@ -97,6 +97,8 @@ try {
 		'returnFocus.focus()',
 		'field.disabled = busy || completed || !!confirmationState;',
 		"dialog.querySelectorAll('input, button')",
+		"typeof error.retryable !== 'boolean'",
+		'error.retryable = true;',
 	) as $needle) {
 		wcos_p2_adapter_assert(false !== strpos($js, $needle), 'Strategy client state/accessibility contract is missing: ' . $needle);
 	}
