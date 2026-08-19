@@ -45,6 +45,10 @@ wcos_p2_adapter_assert(
     in_array($crash_window_operation, $blocked_report['manual_reconciliation_operation_ids'], true),
     'Crash-window blocker did not expose its PII-free operation ID.'
 );
+wcos_p2_adapter_assert(
+    false !== strpos((string) $blocked_report['message'], $crash_window_operation),
+    'Operator-facing reconciliation feedback omitted the blocking operation ID.'
+);
 
 /* Finish the interrupted transition and prove a later explicit resolution clears it. */
 wcos_p2_adapter_assert(
