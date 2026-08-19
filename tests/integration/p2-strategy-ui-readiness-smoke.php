@@ -96,9 +96,11 @@ try {
 		"modalClass: 'wcos-strategy-backbone-modal'",
 		'removeExternalDescription',
 		'description.parentNode.removeChild(description)',
-		"statusBox = root.querySelector('.wcos-strategy-status')",
-		"errorBox = root.querySelector('.wcos-strategy-error')",
-		"resultBox = root.querySelector('.wcos-strategy-result')",
+		'function requireRef(element, label)',
+		"statusBox = requireRef(clonedForm.querySelector('.wcos-strategy-status'), 'status region')",
+		"errorBox = requireRef(clonedForm.querySelector('.wcos-strategy-error'), 'error region')",
+		"resultBox = requireRef(clonedForm.querySelector('.wcos-strategy-result'), 'result region')",
+		"cancelButton = requireRef(footer.querySelector('.wcos-strategy-cancel'), 'cancel button')",
 		'field.disabled = busy || completed || !!confirmationState;',
 		"dialog.querySelectorAll('input, button')",
 		"typeof error.retryable !== 'boolean'",
@@ -106,6 +108,7 @@ try {
 	) as $needle) {
 		wcos_p2_adapter_assert(false !== strpos($js, $needle), 'Strategy client state/Backbone-modal contract is missing: ' . $needle);
 	}
+	wcos_p2_adapter_assert(false === strpos($js, "errorBox = root.querySelector('.wcos-strategy-error')"), 'Strategy error region regressed to ambiguous modal-root binding.');
 	wcos_p2_adapter_assert(false === strpos($js, '.innerHTML'), 'Strategy client uses innerHTML for server-provided display data.');
 	wcos_p2_adapter_assert(false === strpos($js, 'window.alert'), 'Strategy client uses blocking window.alert().');
 	wcos_p2_adapter_assert(false === strpos($js, 'JSON.stringify(plan'), 'Strategy client constructs or sends a client-authored mutation plan.');

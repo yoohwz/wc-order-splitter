@@ -95,6 +95,7 @@
         var namespace = '.wcosBackboneModal' + String(instanceId);
         var restoreFocus = options.restoreFocus !== false;
         var removed = false;
+        var afterRemoved = null;
 
         $(trigger).WCBackboneModal({
             template: templateName,
@@ -134,8 +135,9 @@
             shell: shell,
             body: body,
             footer: footer,
-            close: function (shouldRestoreFocus) {
+            close: function (shouldRestoreFocus, callback) {
                 restoreFocus = shouldRestoreFocus !== false;
+                afterRemoved = typeof callback === 'function' ? callback : null;
                 var close = root.querySelector('.wc-backbone-modal-header .modal-close') || root.querySelector('.modal-close');
                 if (close) {
                     close.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
@@ -176,10 +178,24 @@
             if (restoreFocus && previousFocus && previousFocus.isConnected && typeof previousFocus.focus === 'function') {
                 previousFocus.focus();
             }
+            if (typeof afterRemoved === 'function') {
+                var callback = afterRemoved;
+                afterRemoved = null;
+                window.setTimeout(callback, 0);
+            }
         });
 
+        /*
+         * Call onReady after open() has returned its handle to the workflow.
+         * This avoids the synchronous RHS-assignment race that left callers
+         * observing a null modal handle while the modal was already visible.
+         */
         if (typeof options.onReady === 'function') {
-            options.onReady(root, handle);
+            window.setTimeout(function () {
+                if (!removed && root.isConnected) {
+                    options.onReady(root, handle);
+                }
+            }, 0);
         }
 
         return handle;

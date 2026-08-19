@@ -22,6 +22,12 @@ final class WCOS_Admin_Backbone_Modal_Assets {
 
 		$plugin_file = dirname(__DIR__, 2) . '/wc-order-splitter.php';
 		wp_enqueue_script('wc-backbone-modal');
+		wp_enqueue_style(
+			'wcos-admin-backbone-modal',
+			plugins_url('css/p2-backbone-modal.css', $plugin_file),
+			array(),
+			WC_ORDER_SPLITTER_VERSION
+		);
 		wp_enqueue_script(
 			'wcos-admin-backbone-modal',
 			plugins_url('js/p2-backbone-modal.js', $plugin_file),
