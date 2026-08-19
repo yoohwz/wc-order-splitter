@@ -21,6 +21,7 @@ list($fallback_source, $fallback_a_item, $fallback_b_item) = wcos_whole_line_run
 $fallback_source_id = $fallback_source->get_id();
 $fallback_operation = 'p2-whole-line-blocker-fallback-' . wp_generate_uuid4();
 $fallback_option_key = WCOS_Manual_Reconciliation_Blocker::KEY_PREFIX . $fallback_source_id;
+$fallback_meta_key = WCOS_Manual_Reconciliation_Blocker::FALLBACK_META_PREFIX . $fallback_operation;
 $fallback_injected = false;
 
 /*
@@ -79,6 +80,13 @@ $fallback_source = wc_get_order($fallback_source_id);
 wcos_p2_adapter_assert($fallback_source instanceof WC_Order, 'Fallback fixture source order disappeared.');
 wcos_p2_adapter_assert(!$fallback_source->get_item($fallback_a_item), 'Fallback fixture did not persist the destructive source-item deletion.');
 wcos_p2_adapter_assert(null === get_option($fallback_option_key, null), 'Primary blocker option unexpectedly persisted despite the injected CAS failure.');
+$fallback_incident = $fallback_source->get_meta($fallback_meta_key, true);
+wcos_p2_adapter_assert(
+	is_array($fallback_incident)
+	&& isset($fallback_incident['operation_id'])
+	&& $fallback_operation === sanitize_key((string) $fallback_incident['operation_id']),
+	'Order-meta fallback incident was not durably persisted for the destructive operation.'
+);
 
 $fallback_record = WCOS_Operation_Journal::get($fallback_source, $fallback_operation);
 wcos_p2_adapter_assert(
@@ -121,6 +129,10 @@ wcos_p2_adapter_assert(
 wcos_p2_adapter_assert(
 	!WCOS_Manual_Reconciliation_Blocker::has_active($fallback_source),
 	'Resolved fallback blocker remained active.'
+);
+wcos_p2_adapter_assert(
+	empty($fallback_source->get_meta($fallback_meta_key, true)),
+	'Resolved fallback order metadata remained persisted after authoritative reconciliation.'
 );
 
 foreach (wcos_p2_adapter_children($fallback_source_id, $fallback_operation) as $fallback_child) {
