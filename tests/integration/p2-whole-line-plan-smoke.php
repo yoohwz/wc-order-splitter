@@ -86,3 +86,4 @@ wp_delete_post($product_b->get_id(), true);
 echo "p2-whole-line-plan-ok\n";
 
 require __DIR__ . '/p2-whole-line-runtime-smoke.php';
+require __DIR__ . '/p2-whole-line-stock-ownership-smoke.php';
