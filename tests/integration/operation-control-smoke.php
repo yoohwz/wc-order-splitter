@@ -137,6 +137,7 @@ wcos_control_assert(WC_Order_Splitter_Safety_Guard::mutations_enabled(), 'Safety
 require __DIR__ . '/p2-production-split-enabled-smoke.php';
 require __DIR__ . '/p2-production-duplicate-enabled-smoke.php';
 require __DIR__ . '/p2-whole-line-plan-smoke.php';
+require __DIR__ . '/p2-strategy-planners-smoke.php';
 require __DIR__ . '/p2-duplicate-side-effects-smoke.php';
 require __DIR__ . '/p2-duplicate-precision-replay-smoke.php';
 require __DIR__ . '/p2-duplicate-compatibility-smoke.php';
