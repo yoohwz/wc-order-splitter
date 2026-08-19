@@ -106,11 +106,12 @@ wp_delete_post($guard_product_b->get_id(), true);
 /* Normal whole-line transfer conserves money/tax/quantity/_reduced_stock and physical stock. */
 $product_a = wcos_p2_adapter_product('WCOS whole-line stock A', '12.00', 30);
 $product_b = wcos_p2_adapter_product('WCOS whole-line stock B', '7.00', 40);
-list($source, $a_item_id, $b_item_id) = wcos_whole_line_runtime_order($product_a, 2, $product_b, 3, 'processing');
+list($source, $a_item_id, $b_item_id) = wcos_whole_line_runtime_order($product_a, 2, $product_b, 3, 'pending');
 $source_id = $source->get_id();
-wc_reduce_stock_levels($source);
-$source->get_data_store()->set_stock_reduced($source_id, true);
+$source->update_status('processing');
 $source = wc_get_order($source_id);
+wcos_p2_adapter_assert('28.000000' === WCOS_Decimal::normalize(wc_get_product($product_a->get_id())->get_stock_quantity(), 6), 'Processing did not reduce the moved product exactly once.');
+wcos_p2_adapter_assert('37.000000' === WCOS_Decimal::normalize(wc_get_product($product_b->get_id())->get_stock_quantity(), 6), 'Processing did not reduce the residual product exactly once.');
 $stock_after_sale_a = wc_get_product($product_a->get_id())->get_stock_quantity();
 $stock_after_sale_b = wc_get_product($product_b->get_id())->get_stock_quantity();
 $contract_before = WCOS_Order_Contract_Snapshot::aggregate(array($source));
