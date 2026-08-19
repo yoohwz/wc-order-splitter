@@ -36,6 +36,7 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-order-mutation-authorizer.php';
 		include_once $root . 'domain/class-wcos-order-item-meta-policy.php';
 		include_once $root . 'domain/class-wcos-order-item-cloner.php';
+		include_once $root . 'domain/class-wcos-split-execution-policy.php';
 		include_once $root . 'domain/class-wcos-split-plan.php';
 		include_once $root . 'domain/class-wcos-order-totals-rebuilder.php';
 		include_once $root . 'domain/class-wcos-tax-item-synchronizer.php';
@@ -71,8 +72,8 @@ class WC_Order_Splitter_Script {
 
 		/*
 		 * Legacy mutation handlers are deliberately never loaded here. Production
-		 * Split transport is isolated behind WCOS_Mutation_Gateway and remains
-		 * non-runnable while WCOS_Feature_Gates::SPLIT is hard-off.
+		 * Split transport is isolated behind WCOS_Mutation_Gateway; future server-
+		 * built strategies must still enter the same gateway/adapter/service path.
 		 */
 	}
 }
