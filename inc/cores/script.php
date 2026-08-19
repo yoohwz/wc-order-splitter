@@ -43,6 +43,7 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-order-copy-context.php';
 		include_once $root . 'domain/class-wcos-order-mutation-snapshot.php';
 		include_once $root . 'domain/class-wcos-operation-journal.php';
+		include_once $root . 'domain/class-wcos-manual-reconciliation-blocker.php';
 		include_once $root . 'domain/class-wcos-operation-journal-retention.php';
 		WCOS_Operation_Journal_Retention::bootstrap();
 		include_once $root . 'domain/class-wcos-order-relation-repository.php';
