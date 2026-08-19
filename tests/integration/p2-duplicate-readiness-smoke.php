@@ -92,7 +92,6 @@ try {
     wcos_p2_adapter_assert(false === strpos($preflight_json, 'DuplicatePrivateProbe'), 'Duplicate preflight leaked billing PII.');
     wcos_p2_adapter_assert(false === strpos($preflight_json, 'duplicate-private@example.test'), 'Duplicate preflight leaked billing email.');
 
-    /* Custom order-level meta is deliberately not copied by the service. */
     $duplicate_direct_operation = 'p2-duplicate-adapter-' . wp_generate_uuid4();
     $target = $duplicate_adapter->duplicate($duplicate_source, $duplicate_direct_operation);
     $target = wc_get_order($target->get_id());
@@ -122,7 +121,6 @@ try {
     wcos_p2_adapter_assert((int) WCOS_Duplicate_Preflight::POLICY_VERSION === (int) $journal['context']['policy_version'], 'Duplicate journal lost policy-version authority.');
     wcos_p2_adapter_assert(array_key_exists('price_precision', $journal['context']), 'Duplicate journal lost price precision.');
 
-    /* Unknown private line metadata fails before a mutation journal/target exists. */
     $unknown_product = wcos_p2_adapter_product('WCOS Duplicate unknown meta', '5.00');
     list($unknown_source, $unknown_item_id) = wcos_p2_adapter_order($unknown_product, 2);
     $unknown_item = $unknown_source->get_item($unknown_item_id);
@@ -144,7 +142,6 @@ try {
     $unknown_source->delete(true);
     wp_delete_post($unknown_product->get_id(), true);
 
-    /* Refunded orders fail closed before mutation. */
     $refund_product = wcos_p2_adapter_product('WCOS Duplicate refund reject', '7.00');
     list($refund_source, $refund_item_id) = wcos_p2_adapter_order($refund_product, 2);
     $refund = wc_create_refund(array(
@@ -158,7 +155,6 @@ try {
     wc_get_order($refund_source->get_id())->delete(true);
     wp_delete_post($refund_product->get_id(), true);
 
-    /* Production transport is fully wired but remains hard-off. */
     wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Duplicate_Admin_Controller::REVIEW_ACTION), 'Duplicate review AJAX route was not bootstrapped.');
     wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Duplicate_Admin_Controller::EXECUTE_ACTION), 'Duplicate execute AJAX route was not bootstrapped.');
     $nonce = wp_create_nonce('wcos_duplicate_order_' . $duplicate_source_id);
@@ -233,12 +229,17 @@ try {
     wcos_p2_adapter_assert(false === strpos($dialog_html, 'DuplicatePrivateProbe'), 'Duplicate dialog leaked billing PII.');
     wcos_p2_adapter_assert(false === strpos($dialog_html, 'duplicate-private@example.test'), 'Duplicate dialog leaked billing email.');
 
-    $js = file_get_contents(dirname(__DIR__, 2) . '/js/p2-duplicate-admin.js');
+    $root = dirname(__DIR__, 2);
+    $js = file_get_contents($root . '/js/p2-duplicate-admin.js');
     wcos_p2_adapter_assert(is_string($js) && '' !== $js, 'Unable to read Duplicate admin client.');
     wcos_p2_adapter_assert(false === strpos($js, 'innerHTML'), 'Duplicate admin client uses innerHTML.');
     wcos_p2_adapter_assert(false === strpos($js, 'alert('), 'Duplicate admin client uses blocking alert().');
-    foreach (array("event.key === 'Escape'", "event.key !== 'Tab'", 'returnFocus.focus()', 'var completed = false;', 'reviewButton.disabled = busy || completed;', 'executeButton.disabled = busy || completed') as $needle) {
-        wcos_p2_adapter_assert(false !== strpos($js, $needle), 'Duplicate admin client is missing terminal/accessibility behavior: ' . $needle);
+    foreach (array('var completed = false;', 'reviewButton.disabled = busy || completed;', 'executeButton.disabled = busy || completed', 'window.WCOSBackboneModal.open', "modalClass: 'wcos-duplicate-backbone-modal'", 'removeExternalDescription') as $needle) {
+        wcos_p2_adapter_assert(false !== strpos($js, $needle), 'Duplicate admin client is missing terminal/Backbone-modal behavior: ' . $needle);
+    }
+    $bridge = file_get_contents($root . '/js/p2-backbone-modal.js');
+    foreach (array('$.fn.WCBackboneModal', '.WCBackboneModal({', 'wc-backbone-modal-content', 'wc-backbone-modal-header', 'wc-backbone-modal-backdrop modal-close', 'wc_backbone_modal_removed') as $needle) {
+        wcos_p2_adapter_assert(is_string($bridge) && false !== strpos($bridge, $needle), 'Duplicate Backbone modal bridge is missing native WooCommerce behavior: ' . $needle);
     }
 } finally {
     if ($duplicate_operation) {
