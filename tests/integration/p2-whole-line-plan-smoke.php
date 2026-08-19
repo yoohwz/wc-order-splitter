@@ -93,3 +93,4 @@ require __DIR__ . '/p2-strategy-adapter-smoke.php';
 require __DIR__ . '/p2-strategy-confirmation-smoke.php';
 require __DIR__ . '/p2-strategy-transport-smoke.php';
 require __DIR__ . '/p2-strategy-ui-readiness-smoke.php';
+require __DIR__ . '/p2-strategy-modal-feedback-smoke.php';
