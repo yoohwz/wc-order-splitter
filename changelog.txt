@@ -2,6 +2,14 @@
 
 == Changelog ==
 
+= 1.4.13 (Aug 19, 2026) =
+* New: Re-enabled hardened manual quantity Split for supported WooCommerce orders.
+* Safety: Added server-side review/confirmation, strict plan parsing, nonce/capability checks, operation leases, durable journals, idempotent retry, and fail-closed recovery contracts.
+* Stock: Split remains an order-only mutation and preserves physical stock while redistributing WooCommerce stock-reduction markers for later cancellation/restock lifecycle handling.
+* Integrity: Preserved historical monetary values, per-rate tax state, exact line identity, configured line metadata policy, price precision, and source/child relationships.
+* Compatibility: Validated manual quantity Split across legacy order storage, HPOS-only, and HPOS compatibility/synchronization modes.
+* Safety: Duplicate, Merge, Return, and Bulk Return remain disabled until their hardened production workflows are completed.
+
 = 1.4.12 (Aug 18, 2026) =
 * Security/Privacy: Removed the automatic external subscription request and bundled endpoint integration.
 * Safety: Temporarily disabled split, duplicate, merge, return, and bulk-return mutations while the mutation engine is rebuilt around stock, totals, tax, line identity, idempotency, and rollback guarantees.
@@ -106,7 +114,6 @@
 = 1.3.2 (Aug 26, 2024) =
 * New: Development - Added filter hooks for order meta.
 * Fix: The disable email option conflicts with WooCommerce option.
-* Fix: The new order status and copy logic when duplicating.
 * Improve: Customer user included in the new orders.
 * Improve: Some language strings are updated.
 

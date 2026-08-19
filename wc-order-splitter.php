@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Order Splitter for WooCommerce
  * Plugin URI: https://github.com/yoohwz/wc-order-splitter
- * Description: WooCommerce order-management tooling with existing split-order labels and settings preserved during safety hardening.
- * Version: 1.4.12
+ * Description: Safely split WooCommerce orders by quantity with review, idempotency, HPOS support, and preserved historical order values.
+ * Version: 1.4.13
  * Author: YoOhw.com
  * Author URI: https://yoohw.com
  * Requires at least: 6.5

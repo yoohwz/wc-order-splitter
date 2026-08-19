@@ -5,65 +5,94 @@ Requires at least: 6.5
 Tested up to: 7.0
 WC tested up to: 11.0
 Requires PHP: 7.4
-Stable tag: 1.4.12
+Stable tag: 1.4.13
 License: GPLv3 or later
 License URI: https://www.gnu.org/licenses/gpl-3.0.html
 
-WooCommerce order-management tools from the admin, with a safety-first maintenance release while mutation workflows are being hardened.
+Safely split WooCommerce orders by quantity with server-side review, HPOS support, idempotent retries, and preserved historical order values.
 
 == Description ==
 
 Order Splitter for WooCommerce provides administrative tooling for WooCommerce order operations and split-order relationships.
 
-= Important safety notice for 1.4.12 =
+= Manual quantity Split in 1.4.13 =
 
-Version 1.4.12 is an emergency data-integrity hardening release. Order mutation actions (split, duplicate, merge, return, and bulk return) are temporarily disabled while the mutation engine is rebuilt around explicit stock, monetary, tax, line-identity, idempotency, and rollback guarantees.
+Version 1.4.13 re-enables the first hardened mutation workflow: manual quantity Split from the WooCommerce order edit screen.
 
-This safety mode does not modify existing orders or remove existing split-order relationship metadata. Existing relationship labels remain available in the WooCommerce admin.
+The workflow uses a server-reviewed confirmation flow and preserves historical order amounts and tax context instead of recalculating against current catalog values. Split operations are journaled and idempotent so an interrupted or retried request reuses the same child orders rather than creating duplicates.
 
-The release also removes an automatic external subscription request that was not required for the plugin's order-management functionality.
+The Split request is designed as an order-only mutation and must not change physical product stock. Stock-reduction markers are redistributed with the source and child orders so later WooCommerce cancellation/restock lifecycle behavior remains consistent.
+
+Other mutation workflows — Duplicate, Merge, Return, and Bulk Return — remain unavailable while they complete the same production-readiness process.
 
 [Premium version](https://yoohw.com/product/woocommerce-advanced-order-actions/) | [Documentation](https://docs.yoohw.com/category/woocommerce-advanced-order-actions/) | [Support](https://yoohw.com/support/) | [Demo](https://sandbox.yoohw.com/demo/wcaoa_demo.html)
 
 == Current functionality ==
 
-In 1.4.12:
+In 1.4.13:
 
-* Existing split-order relationship metadata remains intact.
-* Original/split order labels remain available in the admin when enabled.
-* Existing settings remain available so configuration is preserved across the safety release.
-* Order mutation actions are deliberately unavailable until their integrity guarantees have been completed and validated.
+* Manual quantity Split is available on supported WooCommerce orders.
+* A server-side review step validates the source order and requested quantity allocation before execution.
+* Child orders are created as Pending payment and do not inherit the source payment transaction ID.
+* Historical line totals and taxes are preserved at the order's captured price precision.
+* The Split operation does not intentionally write physical product stock.
+* Operation IDs, durable journals, leases, confirmation tokens, and idempotent retry handling protect against duplicate execution.
+* Legacy split-order relationship labels remain available.
+* WooCommerce legacy order storage, HPOS-only storage, and HPOS compatibility/synchronization mode are supported by the production acceptance matrix.
+* Duplicate, Merge, Return, and Bulk Return remain disabled in the free plugin.
 
-== Why are mutation actions temporarily disabled? ==
+== Split safety policy ==
 
-Order mutation changes financial and fulfillment records. A correct implementation must preserve quantities, stock-reduction state, line totals, discounts, fees, shipping, taxes, currency, variation identity, and relationships even when an operation is retried or interrupted.
+The first production-enabled manual quantity Split intentionally fails closed for unsupported cases instead of guessing how third-party business rules should be redistributed.
 
-Version 1.4.12 fails closed rather than allowing operations whose complete invariants have not yet been validated.
+The workflow currently rejects before mutation when an order contains unsupported conditions such as:
+
+* coupons;
+* refunds or partial refunds;
+* negative fees;
+* nested Split relationships;
+* unclassified or inconsistently classified private line-item metadata;
+* stock integrations that bypass WooCommerce stock APIs/hooks without an explicit compatibility adapter.
+
+Shipping and positive fees remain on the source order. Historical line taxes are allocated without recalculating current tax rates. Fractional quantities are accepted only when the active WooCommerce quantity integration actually preserves fractional stock amounts.
 
 == High-Performance Order Storage (HPOS) ==
 
-The plugin uses WooCommerce order CRUD APIs and declares HPOS compatibility. The mutation engine is being validated separately across HPOS, legacy storage, and compatibility/synchronization configurations before mutation actions are re-enabled.
+The plugin uses WooCommerce CRUD APIs and declares HPOS compatibility. Manual quantity Split is validated in CI against legacy order storage, HPOS-only storage, and HPOS compatibility/synchronization mode.
 
 == Installation ==
 
 1. Upload the `wc-order-splitter` folder to `/wp-content/plugins/`, or install the plugin from the WordPress plugin directory.
 2. Activate the plugin from Plugins in the WordPress admin.
 3. Make sure WooCommerce is installed and active.
-4. Go to WooCommerce > Settings > Orders to review preserved Order Splitter settings.
+4. Go to WooCommerce > Settings > Orders to review Order Splitter settings.
+5. Open a supported WooCommerce order and use the Split order action to review and confirm a quantity allocation.
 
 == Frequently Asked Questions ==
 
-= Are my existing split orders changed by 1.4.12? =
+= Which mutation workflow is enabled in 1.4.13? =
 
-No. Safety mode does not rewrite existing orders or relationship metadata.
+Manual quantity Split is enabled. Duplicate, Merge, Return, and Bulk Return remain disabled until their hardened replacements complete production acceptance.
 
-= Why can I no longer see the Split, Duplicate, Merge, or Return actions? =
+= Does Split change physical product stock? =
 
-They are intentionally disabled in 1.4.12 while the mutation engine is being hardened and validated against stock and financial invariants.
+The Split request is an order-only mutation and is designed not to write physical product stock. It redistributes WooCommerce stock-reduction markers between the source and child orders so later cancellation/restock lifecycle behavior remains consistent.
 
-= Does this release send site or administrator details to an external subscription endpoint? =
+= Why can a Split request be rejected before execution? =
 
-No. The automatic external subscription request has been removed.
+The first hardened workflow intentionally fails closed when it cannot prove conservation and compatibility, including orders with coupons, refunds, negative fees, nested Split state, or unclassified private line-item metadata.
+
+= What happens if I retry an interrupted Split? =
+
+The operation uses a server-generated operation ID, durable journal, source-order lease, and idempotent child discovery. A valid retry resumes or returns the original child set instead of creating duplicate child orders.
+
+= Are existing split-order relationships preserved? =
+
+Yes. Existing relationship metadata and admin labels remain available.
+
+= Does this release send site or administrator details to the removed external subscription endpoint? =
+
+No. The automatic external subscription request was removed in 1.4.12 and remains absent.
 
 = Where are older changelog entries? =
 
@@ -71,9 +100,17 @@ Older release notes are available in `changelog.txt`.
 
 == Changelog ==
 
+= 1.4.13 (Aug 19, 2026) =
+* New: Re-enabled hardened manual quantity Split for supported WooCommerce orders.
+* Safety: Added server-side review/confirmation, strict plan parsing, nonce/capability checks, operation leases, durable journals, idempotent retry, and fail-closed recovery contracts.
+* Stock: Split remains an order-only mutation and preserves physical stock while redistributing WooCommerce stock-reduction markers for later cancellation/restock lifecycle handling.
+* Integrity: Preserved historical monetary values, per-rate tax state, exact line identity, configured line metadata policy, price precision, and source/child relationships.
+* Compatibility: Validated manual quantity Split across legacy order storage, HPOS-only, and HPOS compatibility/synchronization modes.
+* Safety: Duplicate, Merge, Return, and Bulk Return remain disabled until their hardened production workflows are completed.
+
 = 1.4.12 (Aug 18, 2026) =
 * Security/Privacy: Removed the automatic external subscription request and its bundled endpoint integration.
-* Safety: Temporarily disabled split, duplicate, merge, return, and bulk-return mutations while the order mutation engine is hardened.
+* Safety: Temporarily disabled split, duplicate, merge, return, and bulk-return mutations while the order mutation engine was hardened.
 * Safety: Added an admin notice explaining the temporary fail-closed mode without modifying existing order data.
 * Compliance: Replaced the WordPress.org URL in `Plugin URI` with the plugin's source repository URL.
 * Compatibility: Raised the minimum WordPress version to 6.5 so Core can enforce the WooCommerce plugin dependency.
@@ -88,5 +125,5 @@ Older release notes are available in `changelog.txt`.
 
 == Upgrade Notice ==
 
-= 1.4.12 =
-Emergency safety release: removes the automatic external subscription request and temporarily disables order mutations while data-integrity guarantees are rebuilt and validated.
+= 1.4.13 =
+Manual quantity Split is re-enabled through the new hardened production path. Other mutation workflows remain fail-closed.
