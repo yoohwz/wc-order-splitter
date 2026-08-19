@@ -37,7 +37,8 @@ Category Review uses stable taxonomy term IDs as classification authority.
 - names and slugs are display metadata only and do not participate in the classification fingerprint;
 - if both an assigned ancestor and descendant are present, the deepest assigned leaf is the bucket authority;
 - multiple unrelated assigned leaf categories are ambiguous and fail closed;
-- an item with no category is placed in the explicit `category-uncategorized` bucket;
+- WooCommerce's configured `default_product_cat` term is treated as the explicit `category-uncategorized` bucket when it is the product's only leaf category; this decision uses the stable term ID, never the mutable default-category name or slug;
+- a true no-term product state also maps to `category-uncategorized` as a defensive fallback;
 - a deleted catalog product fails closed because current category classification cannot be proven;
 - at least two deterministic buckets are required;
 - the operator must later choose one reviewed bucket to remain on the source order;
@@ -79,7 +80,7 @@ Canonical integration acceptance must prove:
 - Category ancestor/descendant collapse is deterministic;
 - taxonomy display metadata does not change stable category authority;
 - unrelated category leaves fail closed;
-- uncategorized and deleted-product cases are explicit;
+- WooCommerce default-category/uncategorized and deleted-product cases are explicit;
 - Stock-status plans remain frozen after live catalog changes;
 - variation identity and parent-managed stock-owner evidence are preserved;
 - Review/build-plan do not mutate the source order.
