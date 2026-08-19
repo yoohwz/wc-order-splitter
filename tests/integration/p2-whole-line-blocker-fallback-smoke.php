@@ -4,10 +4,134 @@ if (!defined('ABSPATH')) {
 	exit(1);
 }
 
+function wcos_whole_line_primary_blocker_failure_filter($source_order_id) {
+	return static function($pre_option, $option, $default_value) use ($source_order_id) {
+		return array(
+			'schema_version' => WCOS_Manual_Reconciliation_Blocker::SCHEMA_VERSION,
+			'source_order_id' => absint($source_order_id),
+			'revision' => 999999,
+			'operations' => array(),
+		);
+	};
+}
+
 /*
- * Fault-inject primary blocker-option persistence failure after a destructive
- * whole-line source deletion has already reached durable storage. The source
- * must remain fail-closed through the independent order-meta fallback.
+ * First prove the exact crash window in isolation: destructive source state is
+ * durable, primary blocker persistence fails, the fallback is durable, and the
+ * process may die before the journal can transition to manual_reconciliation.
+ * Preflight must still block from fallback evidence alone.
+ */
+$window_a = wcos_p2_adapter_product('WCOS whole-line blocker window A', '8.00');
+$window_b = wcos_p2_adapter_product('WCOS whole-line blocker window B', '3.00');
+list($window_source, $window_a_item, $window_b_item) = wcos_whole_line_runtime_order(
+	$window_a,
+	2,
+	$window_b,
+	2,
+	'pending'
+);
+$window_source_id = $window_source->get_id();
+$window_operation = 'p2-whole-line-blocker-window-' . wp_generate_uuid4();
+$window_fingerprint = hash('sha256', $window_operation);
+wcos_p2_adapter_assert(
+	WCOS_Operation_Journal::start(
+		$window_source,
+		$window_operation,
+		'split',
+		array(
+			'execution_policy' => WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER,
+			'fully_moved_item_ids' => array($window_a_item),
+		),
+		$window_fingerprint
+	),
+	'Unable to start the fallback crash-window journal fixture.'
+);
+
+/* Persist the destructive deletion while the journal is still only started. */
+wcos_p2_adapter_assert(false !== $window_source->remove_item($window_a_item), 'Unable to stage the fallback crash-window source deletion.');
+$window_source->save();
+$window_source = wc_get_order($window_source_id);
+wcos_p2_adapter_assert(!$window_source->get_item($window_a_item), 'Fallback crash-window source deletion did not persist.');
+
+$window_option_key = WCOS_Manual_Reconciliation_Blocker::KEY_PREFIX . $window_source_id;
+$window_meta_key = WCOS_Manual_Reconciliation_Blocker::FALLBACK_META_PREFIX . $window_operation;
+$window_primary_failure_filter = wcos_whole_line_primary_blocker_failure_filter($window_source_id);
+add_filter('pre_option_' . $window_option_key, $window_primary_failure_filter, 10, 3);
+try {
+	wcos_p2_adapter_assert(
+		WCOS_Manual_Reconciliation_Blocker::block($window_source, $window_operation),
+		'Fallback crash-window blocker could not persist after primary option failure.'
+	);
+} finally {
+	remove_filter('pre_option_' . $window_option_key, $window_primary_failure_filter, 10);
+}
+
+$window_source = wc_get_order($window_source_id);
+wcos_p2_adapter_assert(null === get_option($window_option_key, null), 'Fallback crash-window unexpectedly persisted its primary blocker option.');
+$window_incident = $window_source->get_meta($window_meta_key, true);
+wcos_p2_adapter_assert(
+	is_array($window_incident)
+	&& isset($window_incident['operation_id'])
+	&& $window_operation === sanitize_key((string) $window_incident['operation_id']),
+	'Fallback crash-window order metadata was not durably persisted.'
+);
+$window_record = WCOS_Operation_Journal::get($window_source, $window_operation);
+wcos_p2_adapter_assert(
+	is_array($window_record) && 'started' === $window_record['status'],
+	'Fallback crash-window journal advanced unexpectedly before the simulated process death.'
+);
+wcos_p2_adapter_assert(
+	empty($window_source->get_meta(WCOS_Operation_Journal::MANUAL_RECONCILIATION_META_KEY, true)),
+	'Fallback crash-window unexpectedly wrote the manual-reconciliation journal index.'
+);
+$window_report = (new WCOS_Split_WooCommerce_Adapter())->preflight($window_source);
+wcos_p2_adapter_assert(
+	empty($window_report['supported']) && 'manual_reconciliation_required' === $window_report['reason'],
+	'Fallback-only crash-window evidence did not keep the destructively modified source fail-closed.'
+);
+wcos_p2_adapter_assert(
+	in_array($window_operation, (array) $window_report['manual_reconciliation_operation_ids'], true),
+	'Fallback-only crash-window preflight omitted its PII-free operation ID.'
+);
+
+/* Finish the interrupted transition and prove authoritative cleanup. */
+wcos_p2_adapter_assert(
+	WCOS_Operation_Journal::mark_manual_reconciliation(
+		$window_source,
+		$window_operation,
+		array(
+			'reason' => 'primary-blocker-option-failure-crash-window',
+			'execution_policy' => WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER,
+			'fully_moved_item_ids' => array($window_a_item),
+			'automatic_compensation_allowed' => false,
+		)
+	),
+	'Unable to finish the fallback crash-window manual-reconciliation transition.'
+);
+wcos_p2_adapter_assert(
+	WCOS_Operation_Journal::mark_manual_reconciled(
+		wc_get_order($window_source_id),
+		$window_operation,
+		array('reconciliation_note' => 'fallback-crash-window-test-cleanup')
+	),
+	'Unable to resolve the fallback crash-window fixture.'
+);
+$window_source = wc_get_order($window_source_id);
+wcos_p2_adapter_assert(
+	!WCOS_Manual_Reconciliation_Blocker::contains_operation($window_source_id, $window_operation),
+	'Resolved fallback crash-window blocker remained persisted.'
+);
+wcos_p2_adapter_assert(empty($window_source->get_meta($window_meta_key, true)), 'Resolved fallback crash-window metadata remained persisted.');
+WCOS_Operation_Journal::delete($window_source, $window_operation);
+$window_source->delete(true);
+wp_delete_post($window_a->get_id(), true);
+wp_delete_post($window_b->get_id(), true);
+
+/*
+ * Now exercise the actual whole-line service recovery path: force primary
+ * blocker-option persistence failure after a destructive source deletion has
+ * already reached durable storage. The source must remain fail-closed through
+ * the independent order-meta fallback while the journal also transitions.
  */
 $fallback_a = wcos_p2_adapter_product('WCOS whole-line blocker fallback A', '8.00');
 $fallback_b = wcos_p2_adapter_product('WCOS whole-line blocker fallback B', '3.00');
@@ -24,19 +148,7 @@ $fallback_option_key = WCOS_Manual_Reconciliation_Blocker::KEY_PREFIX . $fallbac
 $fallback_meta_key = WCOS_Manual_Reconciliation_Blocker::FALLBACK_META_PREFIX . $fallback_operation;
 $fallback_injected = false;
 
-/*
- * Force every primary get_option() read to observe a synthetic record that does
- * not exist in the database. The primary CAS can therefore never match/update
- * a persisted row and must exhaust its retries before fallback storage is used.
- */
-$primary_failure_filter = static function($pre_option, $option, $default_value) use ($fallback_source_id) {
-	return array(
-		'schema_version' => WCOS_Manual_Reconciliation_Blocker::SCHEMA_VERSION,
-		'source_order_id' => $fallback_source_id,
-		'revision' => 999999,
-		'operations' => array(),
-	);
-};
+$primary_failure_filter = wcos_whole_line_primary_blocker_failure_filter($fallback_source_id);
 add_filter('pre_option_' . $fallback_option_key, $primary_failure_filter, 10, 3);
 
 $fallback_callback = static function($stage, $mutating_source, $children) use (&$fallback_injected) {
@@ -105,7 +217,7 @@ wcos_p2_adapter_assert(
 $fallback_report = (new WCOS_Split_WooCommerce_Adapter())->preflight($fallback_source);
 wcos_p2_adapter_assert(
 	empty($fallback_report['supported']) && 'manual_reconciliation_required' === $fallback_report['reason'],
-	'Split preflight did not reject a source protected only by the blocker fallback store.'
+	'Split preflight did not reject a source protected by fallback blocker evidence.'
 );
 wcos_p2_adapter_assert(
 	in_array($fallback_operation, (array) $fallback_report['manual_reconciliation_operation_ids'], true),
