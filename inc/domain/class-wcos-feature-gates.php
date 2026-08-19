@@ -3,11 +3,12 @@
 defined('ABSPATH') || exit;
 
 /**
- * Central fail-closed workflow gates for the foundation release.
+ * Central fail-closed workflow gates.
  *
- * P1 is intentionally non-runnable from production controllers. Gate state is
- * internal code, not constants/options/filters, so another plugin, mu-plugin,
- * or wp-config.php cannot opt an unfinished workflow into production.
+ * Manual quantity Split is the first production-enabled mutation workflow.
+ * Every other mutation path remains internally hard-off. Gate state is code,
+ * not constants/options/filters, so another plugin, mu-plugin, or wp-config.php
+ * cannot opt an unfinished workflow into production.
  */
 final class WCOS_Feature_Gates {
 
@@ -18,7 +19,7 @@ final class WCOS_Feature_Gates {
 	const BULK_RETURN = 'bulk_return';
 
 	private static $states = array(
-		self::SPLIT => false,
+		self::SPLIT => true,
 		self::DUPLICATE => false,
 		self::MERGE => false,
 		self::RETURN_ORDER => false,
