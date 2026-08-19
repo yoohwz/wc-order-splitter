@@ -34,6 +34,17 @@
                 throw error;
             }
             return payload.data || {};
+        }).catch(function (error) {
+            /*
+             * An unclassified fetch/JSON transport failure may happen after the
+             * server accepted Execute. Preserve operation/token state so the
+             * same idempotent operation can be retried. Structured server errors
+             * already carry an explicit retryable boolean and are not changed.
+             */
+            if (typeof error.retryable !== 'boolean') {
+                error.retryable = true;
+            }
+            throw error;
         });
     }
 
