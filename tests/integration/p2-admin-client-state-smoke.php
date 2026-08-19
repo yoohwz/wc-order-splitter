@@ -10,6 +10,8 @@ wcos_p2_adapter_assert(is_string($js) && '' !== $js, 'Unable to read the Split a
 
 foreach (array(
     'var completed = false;',
+    "dialog.querySelectorAll('.wcos-split-quantity')",
+    'field.disabled = busy || completed;',
     'reviewButton.disabled = busy || completed;',
     'confirmCheckbox.disabled = busy || completed;',
     'executeButton.disabled = busy || completed || !state || !confirmCheckbox.checked;',
@@ -19,7 +21,7 @@ foreach (array(
 ) as $needle) {
     wcos_p2_adapter_assert(
         false !== strpos($js, $needle),
-        'Split admin client is missing terminal-success protection: ' . $needle
+        'Split admin client is missing terminal/async-boundary protection: ' . $needle
     );
 }
 
