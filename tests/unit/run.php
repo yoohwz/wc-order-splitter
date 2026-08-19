@@ -210,6 +210,17 @@ $tests['mutation contract rejects currency drift'] = static function() {
 	}, RuntimeException::class);
 };
 
+$tests['duplicate service and preflight policy versions stay aligned'] = static function() use ($root) {
+	$service = file_get_contents($root . 'class-wcos-duplicate-order-service.php');
+	$preflight = file_get_contents($root . 'class-wcos-duplicate-preflight.php');
+	assert_true(is_string($service) && is_string($preflight), 'Unable to read Duplicate policy sources.');
+	$service_match = array();
+	$preflight_match = array();
+	assert_true(1 === preg_match('/const POLICY_VERSION = ([0-9]+);/', $service, $service_match), 'Duplicate service policy version is missing.');
+	assert_true(1 === preg_match('/const POLICY_VERSION = ([0-9]+);/', $preflight, $preflight_match), 'Duplicate preflight policy version is missing.');
+	assert_same($service_match[1], $preflight_match[1]);
+};
+
 $failures = 0;
 foreach ($tests as $name => $test) {
 	try {
