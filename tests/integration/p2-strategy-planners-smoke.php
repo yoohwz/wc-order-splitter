@@ -73,6 +73,16 @@ try {
 }
 wcos_p2_adapter_assert($category_policy_rejected, 'Category planner accepted a tampered execution policy.');
 
+$category_evidence_tampered = $category_review;
+$category_evidence_tampered['buckets'][$other_bucket]['items'][$category_b_item] = '2.000000';
+$category_evidence_rejected = false;
+try {
+	WCOS_Category_Split_Planner::build_plan($category_evidence_tampered, $child_bucket);
+} catch (RuntimeException $exception) {
+	$category_evidence_rejected = false !== strpos($exception->getMessage(), 'integrity fingerprint');
+}
+wcos_p2_adapter_assert($category_evidence_rejected, 'Category planner accepted tampered frozen item allocation evidence.');
+
 /* Term ID is authority: changing name and slug changes display data, not classification identity. */
 $category_fingerprint_before_display_change = $category_review['classification_fingerprint'];
 $updated_other = wp_update_term(
@@ -179,6 +189,16 @@ try {
 	$stock_policy_rejected = false !== strpos($exception->getMessage(), 'whole-line execution policy');
 }
 wcos_p2_adapter_assert($stock_policy_rejected, 'Stock-status planner accepted a tampered execution policy.');
+
+$stock_evidence_tampered = $stock_review;
+$stock_evidence_tampered['buckets']['stock-outofstock']['evidence'][$stock_out_item]['stock_owner_id'] = 999999;
+$stock_evidence_rejected = false;
+try {
+	WCOS_Stock_Status_Split_Planner::build_plan($stock_evidence_tampered, 'stock-instock');
+} catch (RuntimeException $exception) {
+	$stock_evidence_rejected = false !== strpos($exception->getMessage(), 'integrity fingerprint');
+}
+wcos_p2_adapter_assert($stock_evidence_rejected, 'Stock-status planner accepted tampered frozen classification evidence.');
 
 /* Catalog changes after Review must not rewrite the already reviewed plan. */
 $stock_out = wc_get_product($stock_out->get_id());
