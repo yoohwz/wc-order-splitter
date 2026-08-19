@@ -34,6 +34,9 @@ final class WCOS_Operation_Journal {
         if (class_exists('WCOS_Price_Precision_Scope')) {
             $context['price_precision'] = WCOS_Price_Precision_Scope::current_or_store_precision();
         }
+        if ('split' === $type && class_exists('WCOS_Split_Preflight')) {
+            $context['policy_version'] = (int) WCOS_Split_Preflight::POLICY_VERSION;
+        }
 
         $now = gmdate('c');
         $record = array(
@@ -421,10 +424,12 @@ final class WCOS_Operation_Journal {
 
         $current_context = isset($current['context']) && is_array($current['context']) ? $current['context'] : array();
         $replacement_context = isset($replacement['context']) && is_array($replacement['context']) ? $replacement['context'] : array();
-        if (array_key_exists('price_precision', $current_context)) {
-            if (!array_key_exists('price_precision', $replacement_context)
-                || (int) $current_context['price_precision'] !== (int) $replacement_context['price_precision']) {
-                return false;
+        foreach (array('price_precision', 'policy_version') as $field) {
+            if (array_key_exists($field, $current_context)) {
+                if (!array_key_exists($field, $replacement_context)
+                    || (int) $current_context[$field] !== (int) $replacement_context[$field]) {
+                    return false;
+                }
             }
         }
 
