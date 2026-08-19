@@ -135,4 +135,8 @@
         max-width: none;
         min-width: 0;
     }
+
+    .wcos-strategy-backbone-modal footer .inner .button {
+        min-height: 44px;
+    }
 }
