@@ -135,5 +135,6 @@ wcos_control_assert(WC_Order_Splitter_Safety_Guard::mutations_enabled(), 'Safety
 require __DIR__ . '/p2-production-split-enabled-smoke.php';
 require __DIR__ . '/p2-duplicate-readiness-smoke.php';
 require __DIR__ . '/p2-duplicate-side-effects-smoke.php';
+require __DIR__ . '/p2-duplicate-precision-replay-smoke.php';
 
 echo "operation-lock-and-journal-ok\n";
