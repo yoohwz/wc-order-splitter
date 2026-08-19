@@ -29,6 +29,7 @@ try {
     wp_set_current_user($boundary_user_id);
 
     /* Split: verify succeeds, source changes, adapter must still fail before journal/child persistence. */
+    $split_source = wc_get_order($split_source_id);
     $split_plan = array('child-1' => array($split_item_id => '1.000000'));
     $split_preflight = (new WCOS_Split_WooCommerce_Adapter())->preflight($split_source);
     $split_confirmation = WCOS_Split_Confirmation_Store::create(
@@ -70,6 +71,7 @@ try {
     wcos_p2_adapter_assert(empty(wcos_p2_adapter_children($split_source_id, $split_operation)), 'Split verify-boundary rejection created a child.');
 
     /* Duplicate: same request-local authority must block before journal/target persistence. */
+    $duplicate_source = wc_get_order($duplicate_source_id);
     $duplicate_preflight = (new WCOS_Duplicate_WooCommerce_Adapter())->preflight($duplicate_source);
     $duplicate_confirmation = WCOS_Duplicate_Confirmation_Store::create(
         $duplicate_source,
