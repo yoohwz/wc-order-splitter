@@ -10,6 +10,16 @@ function wcos_control_assert($condition, $message) {
 	}
 }
 
+function wcos_duplicate_targets($source_id, $operation_id) {
+	return WCOS_Order_Relation_Repository::find(
+		array(
+			array('key' => '_wcos_operation_id', 'value' => sanitize_key($operation_id)),
+			array('key' => '_wcos_duplicate_source_order', 'value' => absint($source_id), 'type' => 'NUMERIC'),
+		),
+		-1
+	);
+}
+
 $order = wc_create_order();
 $order->set_status('pending');
 $order->save();
@@ -123,5 +133,6 @@ wcos_control_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT), 'Rel
 wcos_control_assert(WC_Order_Splitter_Safety_Guard::mutations_enabled(), 'Safety guard did not restore the production-enabled state.');
 
 require __DIR__ . '/p2-production-split-enabled-smoke.php';
+require __DIR__ . '/p2-duplicate-readiness-smoke.php';
 
 echo "operation-lock-and-journal-ok\n";
