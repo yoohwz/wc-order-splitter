@@ -15,12 +15,33 @@ Maintain a WordPress.org-compatible WooCommerce order-splitting plugin without v
 
 `inc/mutation-v2/`, duplicate implementations, marketing copy, historical changelog statements, and legacy behavior are not architecture authority.
 
+## Approved production baseline
+
+The repository no longer has an all-mutations-hard-off production baseline. The current approved runtime gate state is:
+
+- `WCOS_Feature_Gates::SPLIT = true`;
+- `WCOS_Feature_Gates::DUPLICATE = true`;
+- `WCOS_Feature_Gates::MERGE = false`;
+- `WCOS_Feature_Gates::RETURN_ORDER = false`;
+- `WCOS_Feature_Gates::BULK_RETURN = false`.
+
+The current approved Split strategy gate state is:
+
+- `WCOS_Split_Strategy_Gates::MANUAL_QUANTITY = true`;
+- `WCOS_Split_Strategy_Gates::CATEGORY = false`;
+- `WCOS_Split_Strategy_Gates::STOCK_STATUS = false`.
+
+`WC_Order_Splitter_Safety_Guard::mutations_enabled()` must reflect the canonical approved `WCOS_Feature_Gates` state rather than acting as a contradictory second gate.
+
+Changing any production workflow or strategy gate from `false` to `true` is a separate enablement milestone. It requires its own exact-state CI acceptance, independent technical review, and explicit Human Gate. Foundation/planner code may be packaged and loaded while its corresponding production strategy gate remains hard-off, provided it registers no production write surface.
+
 ## Non-negotiable gates
 
-- `WC_Order_Splitter_Safety_Guard::mutations_enabled()` remains `false` and `WCOS_Feature_Gates::any_enabled()` remains `false` until a later workflow release passes its full acceptance matrix and human gate.
-- No constant, option, filter, mu-plugin, or external plugin may enable an unfinished mutation workflow.
+- Preserve the approved production gate map above unless the change is the dedicated, explicitly accepted gate-changing milestone for that workflow/strategy.
+- No constant, option, filter, mu-plugin, or external plugin may enable an unfinished mutation workflow or Split strategy.
 - Never re-enable or bootstrap a legacy mutation handler to make a UI or integration test pass.
-- Future mutation controllers must enter through `WCOS_Mutation_Gateway`; controller code must not instantiate mutation services directly.
+- Production mutation controllers must enter through `WCOS_Mutation_Gateway`; controller code must not instantiate mutation services directly.
+- Read-only strategy planners must not become an implicit mutation route. Category and Stock-status remain planner-only while their strategy gates are hard-off.
 - Never copy an existing persisted `WC_Order_Item` object to another order.
 - Never identify a commercial line by `product_id` alone.
 - Never recalculate historical tax as an implicit side effect of Split, Duplicate, Merge, or Return.
@@ -38,7 +59,7 @@ Use one of these labels in plans and pull requests:
 - `P2_WOOCOMMERCE_ADAPTER`: runtime mutation controllers, production workflow enablement, side-effect policy, HPOS/legacy adapter validation, and endpoint reintroduction.
 - `P3_PRODUCT_QUALITY`: accessible UI, relation views, documentation, packaging, and release governance.
 
-P1 may contain internal adapter/service scaffolding used exclusively by integration tests to prove the domain contracts, but it must remain unreachable from production controllers and all workflow gates must stay hard-off. Any production-reachable write path is P2 and requires a separate acceptance gate.
+P1 may contain internal adapter/service/planner scaffolding used to prove domain contracts, but it must not create a new production write surface or alter an approved production gate unless the change is explicitly classified and reviewed as the corresponding P2 enablement milestone. Existing approved production workflows remain enabled while unrelated unfinished workflows/strategies stay hard-off.
 
 ## Required evidence
 
@@ -49,6 +70,7 @@ P1 may contain internal adapter/service scaffolding used exclusively by integrat
 - No removed external endpoint or data collection returns.
 - Plugin version and `Stable tag` stay aligned for release changes.
 - No second mutation engine or competing lock/journal implementation is introduced.
+- Canonical CI proves the exact approved production workflow and strategy gate state for the target branch.
 
 ### Mutation-domain changes
 
@@ -70,6 +92,7 @@ P1 may contain internal adapter/service scaffolding used exclusively by integrat
 - Double submission, stale lock, timeout, and injected failure recovery.
 - Exact email, webhook, stock-hook, analytics, and order-note counts.
 - Persisted invariants are verified after database re-read.
+- A future Category/Stock-status production adapter must bind frozen planner evidence and confirmation authority, establish request-local `WCOS_Stock_Side_Effect_Guard` scope, and must not recompute live classification during Execute.
 
 ## Commands
 
@@ -86,5 +109,6 @@ WooCommerce/WordPress integration contracts run through `.github/workflows/ci.ym
 - Treat money, tax, stock, refunds, and relation metadata as one transaction boundary.
 - Reject hidden fallback behavior. Unsupported input must return a stable error and leave orders unchanged.
 - Keep pull requests draft while required checks are absent, queued, or failing.
-- Keep P1 workflow gates hard-off even if internal services pass their tests.
-- Do not merge a production mutation controller or publish a WordPress.org ZIP without an independent technical review and human release gate.
+- Keep every unfinished workflow/strategy gate hard-off; do not revert already-approved production gates as a side effect of unrelated P1 work.
+- Do not merge a new production mutation controller, strategy transport, or gate-changing diff without independent technical review and explicit Human Gate.
+- Do not publish a WordPress.org ZIP unless the package/release workflow is green for the exact `main` state being released.
