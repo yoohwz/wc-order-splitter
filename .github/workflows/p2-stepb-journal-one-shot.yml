@@ -1,0 +1,156 @@
+name: P2 Step B one-shot fix applicator
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - synchronize
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'codex/order-splitter-p2-whole-line-runtime-v2' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/order-splitter-p2-whole-line-runtime-v2
+          fetch-depth: 0
+
+      - name: Patch journal authority and lifecycle fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          journal = Path('inc/domain/class-wcos-operation-journal.php')
+          text = journal.read_text()
+          needle = """        foreach (array('price_precision', 'policy_version') as $field) {
+            if (array_key_exists($field, $current_context)) {
+                if (!array_key_exists($field, $replacement_context)
+                    || (int) $current_context[$field] !== (int) $replacement_context[$field]) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+"""
+          replacement = """        foreach (array('price_precision', 'policy_version') as $field) {
+            if (array_key_exists($field, $current_context)) {
+                if (!array_key_exists($field, $replacement_context)
+                    || (int) $current_context[$field] !== (int) $replacement_context[$field]) {
+                    return false;
+                }
+            }
+        }
+
+        foreach (array('execution_policy', 'fully_moved_item_ids') as $field) {
+            if (array_key_exists($field, $current_context)) {
+                if (!array_key_exists($field, $replacement_context)
+                    || $current_context[$field] !== $replacement_context[$field]) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+"""
+          if needle not in text:
+              raise SystemExit('Operation journal immutable-field anchor not found')
+          journal.write_text(text.replace(needle, replacement, 1))
+
+          test = Path('tests/integration/p2-whole-line-runtime-smoke.php')
+          text = test.read_text()
+          old_fixture = """list($source, $a_item_id, $b_item_id) = wcos_whole_line_runtime_order($product_a, 2, $product_b, 3, 'processing');
+$source_id = $source->get_id();
+wc_reduce_stock_levels($source);
+$source->get_data_store()->set_stock_reduced($source_id, true);
+$source = wc_get_order($source_id);
+"""
+          new_fixture = """list($source, $a_item_id, $b_item_id) = wcos_whole_line_runtime_order($product_a, 2, $product_b, 3, 'pending');
+$source_id = $source->get_id();
+$source->update_status('processing');
+$source = wc_get_order($source_id);
+wcos_p2_adapter_assert('28.000000' === WCOS_Decimal::normalize(wc_get_product($product_a->get_id())->get_stock_quantity(), 6), 'Processing did not reduce the moved product exactly once.');
+wcos_p2_adapter_assert('37.000000' === WCOS_Decimal::normalize(wc_get_product($product_b->get_id())->get_stock_quantity(), 6), 'Processing did not reduce the residual product exactly once.');
+"""
+          if old_fixture not in text:
+              raise SystemExit('Whole-line stock fixture anchor not found')
+          text = text.replace(old_fixture, new_fixture, 1)
+
+          anchor = """wcos_p2_adapter_assert(null === WCOS_Operation_Journal::get($guard_source, $guard_operation), 'Guard rejection created a whole-line journal.');
+$guard_source->delete(true);
+"""
+          insertion = """wcos_p2_adapter_assert(null === WCOS_Operation_Journal::get($guard_source, $guard_operation), 'Guard rejection created a whole-line journal.');
+
+/* Destructive whole-line journal authority is immutable after start. */
+$immutable_operation = 'p2-whole-line-immutable-' . wp_generate_uuid4();
+$immutable_fingerprint = WCOS_Mutation_Fingerprint::create(
+	'split',
+	$guard_source->get_id(),
+	array('contract' => 'whole-line-immutable-context')
+);
+wcos_p2_adapter_assert(
+	WCOS_Operation_Journal::start(
+		$guard_source,
+		$immutable_operation,
+		'split',
+		array(
+			'execution_policy' => WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER,
+			'fully_moved_item_ids' => array($guard_item_a),
+		),
+		$immutable_fingerprint
+	),
+	'Unable to start destructive-authority journal fixture.'
+);
+wcos_p2_adapter_assert(
+	false === WCOS_Operation_Journal::checkpoint(
+		$guard_source,
+		$immutable_operation,
+		'tamper_execution_policy',
+		array('execution_policy' => WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY)
+	),
+	'Journal allowed execution_policy to change after start.'
+);
+wcos_p2_adapter_assert(
+	false === WCOS_Operation_Journal::checkpoint(
+		$guard_source,
+		$immutable_operation,
+		'tamper_destructive_items',
+		array('fully_moved_item_ids' => array($guard_item_b))
+	),
+	'Journal allowed fully_moved_item_ids to change after start.'
+);
+$immutable_record = WCOS_Operation_Journal::get($guard_source, $immutable_operation);
+wcos_p2_adapter_assert(
+	is_array($immutable_record)
+		&& WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER === $immutable_record['context']['execution_policy']
+		&& array($guard_item_a) === array_values($immutable_record['context']['fully_moved_item_ids']),
+	'Destructive journal authority changed after a rejected tamper attempt.'
+);
+WCOS_Operation_Journal::delete($guard_source, $immutable_operation);
+$guard_source->delete(true);
+"""
+          if anchor not in text:
+              raise SystemExit('Whole-line tamper insertion anchor not found')
+          test.write_text(text.replace(anchor, insertion, 1))
+          PY
+
+          php -l inc/domain/class-wcos-operation-journal.php
+          php -l tests/integration/p2-whole-line-runtime-smoke.php
+          git diff --check
+
+      - name: Commit reviewed fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "YoOhw CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add inc/domain/class-wcos-operation-journal.php tests/integration/p2-whole-line-runtime-smoke.php
+          git commit -m "P2 whole-line: lock journal authority and fix stock lifecycle fixture"
+          git push origin HEAD:codex/order-splitter-p2-whole-line-runtime-v2
