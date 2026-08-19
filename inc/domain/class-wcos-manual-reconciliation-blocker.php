@@ -23,13 +23,14 @@ final class WCOS_Manual_Reconciliation_Blocker {
         $key = self::key($order->get_id());
         for ($attempt = 0; $attempt < 5; $attempt++) {
             $current = get_option($key, null);
+            $incident = self::incident($order, $operation_id);
             if (!is_array($current)) {
                 $record = array(
                     'schema_version' => self::SCHEMA_VERSION,
                     'source_order_id' => $order->get_id(),
                     'revision' => 1,
                     'operations' => array(
-                        $operation_id => array('blocked_at' => gmdate('c')),
+                        $operation_id => $incident,
                     ),
                 );
                 if (add_option($key, $record, '', false)) {
@@ -39,10 +40,6 @@ final class WCOS_Manual_Reconciliation_Blocker {
                 continue;
             }
 
-            if (isset($current['operations'][$operation_id])) {
-                return true;
-            }
-
             $replacement = $current;
             $replacement['schema_version'] = self::SCHEMA_VERSION;
             $replacement['source_order_id'] = $order->get_id();
@@ -50,7 +47,7 @@ final class WCOS_Manual_Reconciliation_Blocker {
             $replacement['operations'] = isset($current['operations']) && is_array($current['operations'])
                 ? $current['operations']
                 : array();
-            $replacement['operations'][$operation_id] = array('blocked_at' => gmdate('c'));
+            $replacement['operations'][$operation_id] = $incident;
             ksort($replacement['operations'], SORT_STRING);
 
             if (self::compare_and_swap($key, $current, $replacement)) {
@@ -65,6 +62,11 @@ final class WCOS_Manual_Reconciliation_Blocker {
      * Return unresolved operation IDs. Missing/non-manual journals are still
      * treated as unresolved because they can represent a crash after the blocker
      * was durably written but before the journal transition completed.
+     *
+     * A manual_reconciled journal clears a blocker only when its journal revision
+     * is newer than the revision captured by that stock incident. This prevents a
+     * later incident on the same operation from being mistaken for an older
+     * reconciliation merely because both happened in the same wall-clock second.
      */
     public static function active_operation_ids(WC_Order $order) {
         if (!$order->get_id()) {
@@ -78,7 +80,7 @@ final class WCOS_Manual_Reconciliation_Blocker {
 
         $active = array();
         $resolved = array();
-        foreach (array_keys($record['operations']) as $operation_id) {
+        foreach ($record['operations'] as $operation_id => $incident) {
             $operation_id = sanitize_key((string) $operation_id);
             if ('' === $operation_id) {
                 continue;
@@ -89,8 +91,12 @@ final class WCOS_Manual_Reconciliation_Blocker {
             $status = is_array($journal) && isset($journal['status'])
                 ? sanitize_key((string) $journal['status'])
                 : '';
+            $journal_revision = is_array($journal) && isset($journal['revision']) ? (int) $journal['revision'] : 0;
+            $blocked_revision = is_array($incident) && isset($incident['journal_revision_at_block'])
+                ? (int) $incident['journal_revision_at_block']
+                : PHP_INT_MAX;
 
-            if ('manual_reconciled' === $status) {
+            if ('manual_reconciled' === $status && $journal_revision > $blocked_revision) {
                 $resolved[] = $operation_id;
                 continue;
             }
@@ -109,6 +115,18 @@ final class WCOS_Manual_Reconciliation_Blocker {
 
     public static function has_active(WC_Order $order) {
         return !empty(self::active_operation_ids($order));
+    }
+
+    private static function incident(WC_Order $order, $operation_id) {
+        $journal = class_exists('WCOS_Operation_Journal')
+            ? WCOS_Operation_Journal::get($order, $operation_id)
+            : null;
+        return array(
+            'blocked_at' => gmdate('c'),
+            'journal_revision_at_block' => is_array($journal) && isset($journal['revision'])
+                ? (int) $journal['revision']
+                : 0,
+        );
     }
 
     private static function clear_resolved(WC_Order $order, $operation_id) {
