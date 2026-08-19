@@ -1,0 +1,169 @@
+body.wcos-strategy-modal-open {
+    overflow: hidden;
+}
+
+.wcos-strategy-launcher-description {
+    margin: 0 12px 0 6px;
+}
+
+.wcos-strategy-dialog[hidden] {
+    display: none;
+}
+
+.wcos-strategy-dialog {
+    position: fixed;
+    inset: 0;
+    z-index: 100001;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+
+.wcos-strategy-dialog__backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+}
+
+.wcos-strategy-dialog__panel {
+    position: relative;
+    width: min(760px, 100%);
+    max-height: calc(100vh - 48px);
+    overflow: auto;
+    background: #fff;
+    border-radius: 4px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    padding: 24px;
+}
+
+.wcos-strategy-dialog__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+}
+
+.wcos-strategy-dialog__header h2 {
+    margin-top: 0;
+}
+
+.wcos-strategy-close {
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 28px;
+    line-height: 1;
+}
+
+.wcos-strategy-policy {
+    margin-top: 16px;
+    padding: 12px 16px;
+    border-left: 4px solid #646970;
+    background: #f6f7f7;
+}
+
+.wcos-strategy-policy h3,
+.wcos-strategy-review h3,
+.wcos-strategy-confirmation h3 {
+    margin-top: 0;
+}
+
+.wcos-strategy-review-controls,
+.wcos-strategy-review,
+.wcos-strategy-confirmation,
+.wcos-strategy-status,
+.wcos-strategy-error,
+.wcos-strategy-result {
+    margin-top: 16px;
+}
+
+.wcos-strategy-buckets {
+    margin: 16px 0;
+    padding: 0;
+    border: 0;
+}
+
+.wcos-strategy-buckets legend {
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+.wcos-strategy-bucket-options {
+    display: grid;
+    gap: 8px;
+}
+
+.wcos-strategy-bucket-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid #c3c4c7;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+}
+
+.wcos-strategy-bucket-option:focus-within {
+    border-color: #2271b1;
+    box-shadow: 0 0 0 1px #2271b1;
+}
+
+.wcos-strategy-bucket-option input[type="radio"] {
+    margin-top: 3px;
+}
+
+.wcos-strategy-bucket-content {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.wcos-strategy-confirm-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 12px 0;
+    font-weight: 600;
+}
+
+.wcos-strategy-error,
+.wcos-strategy-result {
+    padding: 10px 12px;
+}
+
+.wcos-strategy-result ul {
+    margin-left: 20px;
+}
+
+.wcos-strategy-dialog__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid #dcdcde;
+}
+
+@media (max-width: 782px) {
+    .wcos-strategy-dialog {
+        padding: 12px;
+    }
+
+    .wcos-strategy-dialog__panel {
+        max-height: calc(100vh - 24px);
+        padding: 16px;
+    }
+
+    .wcos-strategy-dialog__actions {
+        flex-direction: column-reverse;
+    }
+
+    .wcos-strategy-dialog__actions .button,
+    .wcos-strategy-review-controls .button,
+    .wcos-strategy-review .button,
+    .wcos-strategy-confirmation .button {
+        width: 100%;
+        min-height: 44px;
+    }
+}
