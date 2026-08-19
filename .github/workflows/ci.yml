@@ -45,7 +45,7 @@ jobs:
         run: php tests/unit/run.php
 
   foundation-contract:
-    name: Architecture and hard-off contract
+    name: Architecture and approved production gate contract
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -66,7 +66,7 @@ jobs:
             exit 1
           fi
 
-      - name: Verify mutation runtime remains internally hard off
+      - name: Verify approved production gate state
         shell: bash
         run: |
           set -euo pipefail
@@ -77,8 +77,12 @@ jobs:
           test "$plugin_version" = "$stable_tag"
           grep -Fq 'Requires at least: 6.5' wc-order-splitter.php
           grep -Fq 'Requires at least: 6.5' readme.txt
-          grep -A2 -F 'public static function mutations_enabled()' inc/cores/safety.php | grep -Fq 'return false;'
-          grep -Fq 'private static $states = array(' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'return WCOS_Feature_Gates::any_enabled();' inc/cores/safety.php
+          grep -Fq 'self::SPLIT => true' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::DUPLICATE => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::MERGE => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::RETURN_ORDER => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'Legacy mutation handlers are deliberately never loaded here.' inc/cores/script.php
 
           if grep -R --line-number -E 'WC_ORDER_SPLITTER_(MUTATIONS|SPLIT|DUPLICATE|MERGE|RETURN|BULK_RETURN)_ENABLED' \
@@ -123,7 +127,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Validate release metadata and hard-off runtime
+      - name: Validate release metadata and production gate contract
         shell: bash
         run: |
           set -euo pipefail
@@ -133,8 +137,12 @@ jobs:
           test -n "$plugin_version"
           test -n "$stable_tag"
           test "$plugin_version" = "$stable_tag"
-          grep -A2 -F 'public static function mutations_enabled()' inc/cores/safety.php | grep -Fq 'return false;'
-          grep -Fq 'private static $states = array(' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'return WCOS_Feature_Gates::any_enabled();' inc/cores/safety.php
+          grep -Fq 'self::SPLIT => true' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::DUPLICATE => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::MERGE => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::RETURN_ORDER => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php
           test ! -d inc/mutation-v2
 
           telemetry_host='yoexpress''.''top'
@@ -185,6 +193,22 @@ jobs:
             fi
           done
 
+          for required_path in \
+            'inc/backend/class-wcos-split-admin-controller.php' \
+            'inc/backend/class-wcos-split-confirmation-store.php' \
+            'inc/backend/class-wcos-split-request-parser.php' \
+            'inc/domain/class-wcos-feature-gates.php' \
+            'inc/domain/class-wcos-mutation-gateway.php' \
+            'inc/domain/class-wcos-split-woocommerce-adapter.php' \
+            'inc/domain/class-wcos-split-order-service.php' \
+            'css/p2-split-admin.css' \
+            'js/p2-split-admin.js'; do
+            if test ! -e "$package_root/$required_path"; then
+              echo "Required production Split path is missing from package: $required_path" >&2
+              exit 1
+            fi
+          done
+
           if find "$package_root" -type l | grep -q .; then
             echo 'Release package must not contain symbolic links.' >&2
             exit 1
@@ -211,6 +235,11 @@ jobs:
           archive_stable_tag=$(unzip -p wc-order-splitter.zip wc-order-splitter/readme.txt | sed -n 's/^Stable tag: //p' | head -n 1)
           test -n "$archive_version"
           test "$archive_version" = "$archive_stable_tag"
+          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::SPLIT => true'
+          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::DUPLICATE => false'
+          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::MERGE => false'
+          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::RETURN_ORDER => false'
+          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::BULK_RETURN => false'
           if unzip -Z1 wc-order-splitter.zip | grep -E '(^|/)(tests|docs|node_modules|inc/mutation-v2)(/|$)|(^|/)AGENTS\.md$'; then
             echo 'Development-only content entered the ZIP.' >&2
             exit 1
@@ -286,7 +315,7 @@ jobs:
           npx wp-env run cli wp option update woocommerce_custom_orders_table_enabled yes
           npx wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled yes
 
-      - name: Verify plugin, storage mode, and fail-closed runtime
+      - name: Verify plugin, storage mode, and Split-only production state
         shell: bash
         run: |
           set -euo pipefail
@@ -296,8 +325,17 @@ jobs:
             $expected = "${{ matrix.storage }}";
             $hpos = \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
             if (("legacy" === $expected && $hpos) || ("legacy" !== $expected && !$hpos)) { exit(1); }
-            if (WCOS_Feature_Gates::any_enabled()) { exit(1); }
-            if (WC_Order_Splitter_Safety_Guard::mutations_enabled()) { exit(1); }
+            if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT)) { exit(1); }
+            if (!WCOS_Feature_Gates::any_enabled()) { exit(1); }
+            if (!WC_Order_Splitter_Safety_Guard::mutations_enabled()) { exit(1); }
+            foreach (array(
+              WCOS_Feature_Gates::DUPLICATE,
+              WCOS_Feature_Gates::MERGE,
+              WCOS_Feature_Gates::RETURN_ORDER,
+              WCOS_Feature_Gates::BULK_RETURN
+            ) as $disabled_workflow) {
+              if (WCOS_Feature_Gates::enabled($disabled_workflow)) { exit(1); }
+            }
             foreach (array(
               "WC_ORDER_SPLITTER_MUTATIONS_ENABLED",
               "WC_ORDER_SPLITTER_SPLIT_ENABLED",
@@ -308,6 +346,8 @@ jobs:
             ) as $legacy_gate) {
               if (defined($legacy_gate)) { exit(1); }
             }
+            if (false === has_action("wp_ajax_" . WCOS_Split_Admin_Controller::REVIEW_ACTION)) { exit(1); }
+            if (false === has_action("wp_ajax_" . WCOS_Split_Admin_Controller::EXECUTE_ACTION)) { exit(1); }
             $legacy_hooks = array(
               "wp_ajax_split_order",
               "wp_ajax_split_order_by_category",
@@ -319,7 +359,7 @@ jobs:
             foreach ($legacy_hooks as $hook) {
               if (false !== has_action($hook)) { exit(1); }
             }
-            echo "storage-and-safety-mode-ok\n";
+            echo "storage-and-split-production-state-ok\n";
           '
 
       - name: Verify mutation lease and durable journal controls
