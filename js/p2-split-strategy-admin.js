@@ -108,6 +108,31 @@
             var statusBox = null;
             var errorBox = null;
             var resultBox = null;
+            var feedbackBox = null;
+
+            function showReviewAction() {
+                reviewButton.hidden = false;
+                confirmButton.hidden = true;
+                executeButton.hidden = true;
+            }
+
+            function showConfirmAction() {
+                reviewButton.hidden = true;
+                confirmButton.hidden = false;
+                executeButton.hidden = true;
+            }
+
+            function showExecuteAction() {
+                reviewButton.hidden = true;
+                confirmButton.hidden = true;
+                executeButton.hidden = false;
+            }
+
+            function hideWorkflowActions() {
+                reviewButton.hidden = true;
+                confirmButton.hidden = true;
+                executeButton.hidden = true;
+            }
 
             function clearError() {
                 errorBox.hidden = true;
@@ -122,6 +147,7 @@
 
             function setStatus(message) {
                 statusBox.textContent = message || '';
+                statusBox.hidden = !message;
             }
 
             function clearResult() {
@@ -143,6 +169,10 @@
                 confirmationSummary.textContent = '';
                 confirmCheckbox.checked = false;
                 executeButton.disabled = true;
+                executeButton.hidden = true;
+                if (reviewState) {
+                    showConfirmAction();
+                }
             }
 
             function invalidateReview() {
@@ -155,6 +185,7 @@
                 reviewSummary.textContent = '';
                 clearBucketOptions();
                 confirmButton.disabled = true;
+                showReviewAction();
             }
 
             function setBusy(nextBusy) {
@@ -236,6 +267,7 @@
                     renderBuckets(data.review || {});
                     reviewSummary.textContent = data.review && data.review.message ? String(data.review.message) : '';
                     reviewSection.hidden = false;
+                    showConfirmAction();
                     setStatus(text('reviewReady', 'Choose the one bucket that must remain on the source order.'));
                     var firstRadio = bucketOptions.querySelector('.wcos-strategy-bucket-radio');
                     (firstRadio || reviewSection).focus();
@@ -276,11 +308,14 @@
                     confirmationSummary.textContent = text('confirmationReady', 'The plan is frozen. Acknowledge the policy and execute when ready.');
                     confirmationSection.hidden = false;
                     confirmCheckbox.checked = false;
+                    showExecuteAction();
                     setStatus(text('confirmationReady', 'The plan is frozen. Acknowledge the policy and execute when ready.'));
                     confirmCheckbox.focus();
                 }).catch(function (error) {
                     if (!error.retryable) {
                         invalidateReview();
+                    } else {
+                        showConfirmAction();
                     }
                     setStatus('');
                     showError(error.message);
@@ -338,6 +373,7 @@
                     confirmation_token: confirmationState.token
                 }).then(function (data) {
                     completed = true;
+                    hideWorkflowActions();
                     setStatus(text('completed', 'Strategy Split completed successfully.'));
                     Array.prototype.forEach.call(dialog.querySelectorAll('input, button'), function (field) {
                         if (!field.classList.contains('wcos-strategy-cancel') && !field.classList.contains('modal-close')) {
@@ -347,9 +383,9 @@
                     renderSuccess(data);
                 }).catch(function (error) {
                     if (!error.retryable) {
-                        confirmationState = null;
-                        confirmationSection.hidden = true;
-                        confirmCheckbox.checked = false;
+                        invalidateReview();
+                    } else {
+                        showExecuteAction();
                     }
                     setStatus('');
                     showError(error.message);
@@ -391,6 +427,30 @@
                     statusBox = requireRef(clonedForm.querySelector('.wcos-strategy-status'), 'status region');
                     errorBox = requireRef(clonedForm.querySelector('.wcos-strategy-error'), 'error region');
                     resultBox = requireRef(clonedForm.querySelector('.wcos-strategy-result'), 'result region');
+
+                    feedbackBox = document.createElement('div');
+                    feedbackBox.className = 'wcos-strategy-feedback';
+                    clonedForm.insertBefore(feedbackBox, clonedForm.firstChild);
+                    feedbackBox.appendChild(statusBox);
+                    feedbackBox.appendChild(errorBox);
+                    feedbackBox.appendChild(resultBox);
+                    statusBox.hidden = true;
+                    errorBox.classList.add('inline');
+                    resultBox.classList.add('inline');
+
+                    footer.appendChild(reviewButton);
+                    footer.appendChild(confirmButton);
+                    footer.appendChild(executeButton);
+                    reviewButton.classList.add('button-primary', 'button-large');
+                    confirmButton.classList.remove('button-secondary');
+                    confirmButton.classList.add('button-primary', 'button-large');
+                    executeButton.classList.add('button-large');
+                    showReviewAction();
+
+                    var reviewControls = clonedForm.querySelector('.wcos-strategy-review-controls');
+                    if (reviewControls && !reviewControls.children.length && reviewControls.parentNode) {
+                        reviewControls.parentNode.removeChild(reviewControls);
+                    }
                 },
                 onReady: function () {
                     reviewButton.addEventListener('click', reviewStrategy);
