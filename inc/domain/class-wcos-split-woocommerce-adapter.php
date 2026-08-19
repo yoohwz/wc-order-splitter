@@ -133,7 +133,11 @@ final class WCOS_Split_WooCommerce_Adapter {
 
         $report['supported'] = false;
         $report['reason'] = 'manual_reconciliation_required';
-        $report['message'] = __('This order has an unresolved mutation incident that requires manual stock reconciliation before another split can run.', 'wc-order-splitter');
+        $report['message'] = sprintf(
+            /* translators: %s: comma-separated mutation operation IDs requiring manual stock reconciliation. */
+            __('This order has an unresolved mutation incident that requires manual stock reconciliation before another split can run. Operation ID(s): %s.', 'wc-order-splitter'),
+            implode(', ', $operation_ids)
+        );
         $report['manual_reconciliation_count'] = count($operation_ids);
         $report['manual_reconciliation_operation_ids'] = $operation_ids;
         return $report;
