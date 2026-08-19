@@ -90,3 +90,4 @@ require __DIR__ . '/p2-whole-line-blocker-fallback-smoke.php';
 require __DIR__ . '/p2-whole-line-stock-ownership-smoke.php';
 require __DIR__ . '/p2-strategy-planners-smoke.php';
 require __DIR__ . '/p2-strategy-adapter-smoke.php';
+require __DIR__ . '/p2-strategy-confirmation-smoke.php';
