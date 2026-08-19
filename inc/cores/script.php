@@ -58,6 +58,9 @@ class WC_Order_Splitter_Script {
 		WCOS_Mutation_Recovery_Coordinator::bootstrap();
 		include_once $root . 'domain/class-wcos-split-preflight.php';
 		include_once $root . 'domain/class-wcos-split-woocommerce-adapter.php';
+		include_once $root . 'domain/class-wcos-split-strategy-gates.php';
+		include_once $root . 'domain/class-wcos-category-split-planner.php';
+		include_once $root . 'domain/class-wcos-stock-status-split-planner.php';
 		include_once $root . 'domain/class-wcos-duplicate-preflight.php';
 		include_once $root . 'domain/class-wcos-duplicate-woocommerce-adapter.php';
 		include_once $root . 'domain/class-wcos-mutation-gateway.php';
