@@ -105,6 +105,22 @@ final class WCOS_Operation_Journal_Retention {
         if (!in_array($status, array('completed', 'failed', 'compensated', 'manual_reconciled'), true)) {
             return false;
         }
+
+        /*
+         * A resolved reconciliation journal remains the authoritative proof that
+         * permits a source-level fail-closed blocker to be cleared. Never delete
+         * that proof while the blocker option still contains this operation.
+         */
+        if ('manual_reconciled' === $status
+            && class_exists('WCOS_Manual_Reconciliation_Blocker')
+            && isset($record['source_order_id'], $record['operation_id'])
+            && WCOS_Manual_Reconciliation_Blocker::contains_operation(
+                absint($record['source_order_id']),
+                sanitize_key((string) $record['operation_id'])
+            )) {
+            return false;
+        }
+
         $completed_at = isset($record['completed_at']) ? (string) $record['completed_at'] : '';
         if ('' === $completed_at) {
             return false;
