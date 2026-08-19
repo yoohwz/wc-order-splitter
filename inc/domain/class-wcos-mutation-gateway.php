@@ -7,7 +7,8 @@ defined('ABSPATH') || exit;
  *
  * Controllers must never instantiate mutation services directly. This gateway
  * applies the production feature/strategy gates first, then centralized
- * authorization, before delegating to a hardened WooCommerce adapter/service.
+ * authorization and immutable confirmation authority, before delegating to a
+ * hardened WooCommerce adapter/service.
  */
 final class WCOS_Mutation_Gateway {
 
@@ -22,17 +23,26 @@ final class WCOS_Mutation_Gateway {
 		return (new WCOS_Split_WooCommerce_Adapter())->preflight($source, $operation_id, $confirmed_precision);
 	}
 
-	public function split_strategy(WC_Order $source, $strategy, array $plan, $operation_id, $confirmed_precision = null) {
+	public function split_strategy(WC_Order $source, $strategy, $operation_id, $confirmation_token) {
 		WCOS_Feature_Gates::assert_enabled(WCOS_Feature_Gates::SPLIT);
 		$strategy = WCOS_Split_Strategy_WooCommerce_Adapter::normalize_strategy($strategy);
 		WCOS_Split_Strategy_Gates::assert_enabled($strategy);
 		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::SPLIT, $source);
+
+		$verified = WCOS_Split_Strategy_Confirmation_Store::verify(
+			$source,
+			$strategy,
+			$operation_id,
+			$confirmation_token,
+			get_current_user_id()
+		);
 		return (new WCOS_Split_Strategy_WooCommerce_Adapter())->split(
 			$source,
 			$strategy,
-			$plan,
-			$operation_id,
-			$confirmed_precision
+			$verified['plan'],
+			$verified['operation_id'],
+			$verified['price_precision'],
+			$verified['strategy_authority']
 		);
 	}
 
