@@ -28,6 +28,7 @@
     var state = null;
     var returnFocus = null;
     var busy = false;
+    var completed = false;
 
     function text(key, fallback) {
         return typeof strings[key] === 'string' && strings[key] ? strings[key] : fallback;
@@ -46,8 +47,10 @@
         dialog.hidden = false;
         document.body.classList.add('wcos-split-modal-open');
         window.setTimeout(function () {
-            var firstQuantity = dialog.querySelector('.wcos-split-quantity');
-            (firstQuantity || panel).focus();
+            var preferred = completed && !resultBox.hidden
+                ? resultBox
+                : dialog.querySelector('.wcos-split-quantity:not([disabled])');
+            (preferred || panel).focus();
         }, 0);
     }
 
@@ -83,6 +86,9 @@
     }
 
     function invalidateReview() {
+        if (completed) {
+            return;
+        }
         state = null;
         reviewBox.hidden = true;
         reviewSummary.textContent = '';
@@ -183,14 +189,17 @@
     function setBusy(nextBusy) {
         busy = !!nextBusy;
         form.setAttribute('aria-busy', busy ? 'true' : 'false');
-        reviewButton.disabled = busy;
-        confirmCheckbox.disabled = busy;
-        executeButton.disabled = busy || !state || !confirmCheckbox.checked;
+        reviewButton.disabled = busy || completed;
+        confirmCheckbox.disabled = busy || completed;
+        executeButton.disabled = busy || completed || !state || !confirmCheckbox.checked;
         cancelButton.disabled = busy;
         closeButton.disabled = busy;
     }
 
     function reviewPlan() {
+        if (busy || completed) {
+            return;
+        }
         clearError();
         clearResult();
         var plan;
@@ -267,7 +276,7 @@
     }
 
     function executePlan() {
-        if (!state || !confirmCheckbox.checked) {
+        if (busy || completed || !state || !confirmCheckbox.checked) {
             return;
         }
         clearError();
@@ -280,15 +289,14 @@
             operation_id: state.operationId,
             confirmation_token: state.token
         }).then(function (data) {
+            completed = true;
             setStatus(text('completed', 'Split completed successfully.'));
             Array.prototype.forEach.call(dialog.querySelectorAll('input, select'), function (field) {
                 field.disabled = true;
             });
-            reviewButton.disabled = true;
-            executeButton.disabled = true;
             renderSuccess(data);
         }).catch(function (error) {
-            if (error.code === 'confirmation_source_changed' || error.code === 'confirmation_expired') {
+            if (!error.retryable) {
                 invalidateReview();
             }
             setStatus('');
@@ -304,10 +312,13 @@
     reviewButton.addEventListener('click', reviewPlan);
     executeButton.addEventListener('click', executePlan);
     confirmCheckbox.addEventListener('change', function () {
-        executeButton.disabled = busy || !state || !confirmCheckbox.checked;
+        executeButton.disabled = busy || completed || !state || !confirmCheckbox.checked;
     });
 
     form.addEventListener('input', function (event) {
+        if (completed) {
+            return;
+        }
         if (event.target.classList.contains('wcos-split-quantity')) {
             invalidateReview();
             clearError();
