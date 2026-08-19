@@ -129,6 +129,10 @@ final class WCOS_Split_Strategy_WooCommerce_Adapter {
 	}
 
 	private function assert_confirmation_matches_request(WC_Order $source, $strategy, array $canonical_plan, $operation_id, $confirmed_precision, array $confirmation) {
+		$replay_authority = sanitize_key(isset($confirmation['replay_authority']) ? (string) $confirmation['replay_authority'] : '');
+		if (!in_array($replay_authority, array('confirmation', 'journal'), true)) {
+			throw new RuntimeException(__('A verified Split strategy confirmation is required before execution.', 'wc-order-splitter'));
+		}
 		if (sanitize_key(isset($confirmation['operation_id']) ? (string) $confirmation['operation_id'] : '') !== $operation_id) {
 			throw new RuntimeException(__('The Split strategy confirmation does not match this operation ID.', 'wc-order-splitter'));
 		}
