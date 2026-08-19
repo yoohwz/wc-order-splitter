@@ -27,7 +27,7 @@ final class WCOS_Duplicate_Preflight_Exception extends RuntimeException {
  * Reports intentionally contain no customer/address/payment plaintext.
  */
 final class WCOS_Duplicate_Preflight {
-    const POLICY_VERSION = 1;
+    const POLICY_VERSION = 4;
 
     public static function policy() {
         return array(
