@@ -89,7 +89,7 @@ foreach ($summary as $entry) {
 	}
 }
 wcos_control_assert(is_array($summary_entry) && 'completed' === $summary_entry['status'], 'Bounded order-meta audit summary was not updated.');
-wcos_control_assert(!empty($summary_entry['completed_at']), 'Audit summary is missing the terminal timestamp.');
+wcos_control_assert(!empty($summary_entry['completed_at']), 'Audit summary is missing its terminal timestamp.');
 wcos_control_assert(WCOS_Operation_Journal::delete($order, $journal_operation), 'Durable journal cleanup failed.');
 $order->delete(true);
 
@@ -136,5 +136,7 @@ require __DIR__ . '/p2-production-split-enabled-smoke.php';
 require __DIR__ . '/p2-duplicate-readiness-smoke.php';
 require __DIR__ . '/p2-duplicate-side-effects-smoke.php';
 require __DIR__ . '/p2-duplicate-precision-replay-smoke.php';
+require __DIR__ . '/p2-duplicate-compatibility-smoke.php';
+require __DIR__ . '/p2-duplicate-confirmation-race-smoke.php';
 
 echo "operation-lock-and-journal-ok\n";
