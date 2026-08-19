@@ -23,7 +23,13 @@ final class WCOS_Split_Order_Service {
 	const OPERATION_META = '_wcos_operation_id';
 	const CHILD_KEY_META = '_wcos_split_child_key';
 
-	public function split(WC_Order $source, array $plan, $operation_id, $execution_policy = 'partial_lines_only') {
+	public function split(
+		WC_Order $source,
+		array $plan,
+		$operation_id,
+		$execution_policy = WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY,
+		array $strategy_authority = array()
+	) {
 		$operation_id = sanitize_key($operation_id);
 		$execution_policy = WCOS_Split_Execution_Policy::normalize($execution_policy);
 		if (WCOS_Split_Execution_Policy::allows_whole_line_transfer($execution_policy)
@@ -38,6 +44,18 @@ final class WCOS_Split_Order_Service {
 		}
 
 		$canonical_plan = WCOS_Split_Plan::canonicalize_request($plan);
+		if (!empty($strategy_authority)) {
+			if (!WCOS_Split_Execution_Policy::allows_whole_line_transfer($execution_policy)) {
+				throw new RuntimeException(__('Split strategy authority requires the whole-line execution policy.', 'wc-order-splitter'));
+			}
+			$strategy_authority = WCOS_Split_Strategy_Authority::assert_matches_execution(
+				$strategy_authority,
+				$source,
+				$canonical_plan,
+				$execution_policy
+			);
+		}
+
 		$existing = WCOS_Operation_Journal::get($source, $operation_id);
 		$legacy_journal = is_array($existing)
 			&& (!isset($existing['context']) || !is_array($existing['context']) || !array_key_exists('execution_policy', $existing['context']));
@@ -55,10 +73,14 @@ final class WCOS_Split_Order_Service {
 		if (!$legacy_journal) {
 			$fingerprint_context['execution_policy'] = $execution_policy;
 		}
+		if (!empty($strategy_authority)) {
+			$fingerprint_context['strategy_authority'] = $strategy_authority;
+		}
 		$fingerprint = WCOS_Mutation_Fingerprint::create(self::TYPE, $source->get_id(), $fingerprint_context);
 
 		if (is_array($existing)) {
 			WCOS_Operation_Journal::assert_fingerprint($existing, $fingerprint);
+			$this->assert_recorded_strategy_authority($existing, $strategy_authority);
 			$status = isset($existing['status']) ? sanitize_key((string) $existing['status']) : '';
 			if ('manual_reconciliation' === $status) {
 				throw new RuntimeException(__('This Split operation requires manual reconciliation before it can continue.', 'wc-order-splitter'));
@@ -86,6 +108,7 @@ final class WCOS_Split_Order_Service {
 			$record = WCOS_Operation_Journal::get($source, $operation_id);
 			if (is_array($record)) {
 				WCOS_Operation_Journal::assert_fingerprint($record, $fingerprint);
+				$this->assert_recorded_strategy_authority($record, $strategy_authority);
 				$record_policy = isset($record['context']['execution_policy'])
 					? WCOS_Split_Execution_Policy::normalize($record['context']['execution_policy'])
 					: WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY;
@@ -131,15 +154,23 @@ final class WCOS_Split_Order_Service {
 				$fully_moved_item_ids = WCOS_Split_Plan::fully_moved_item_ids($source, $normalized_plan, $execution_policy);
 				$before_contract = WCOS_Order_Contract_Snapshot::aggregate(array($source));
 				$source_stock_reduced = (bool) $source->get_data_store()->get_stock_reduced($source_id);
+				$source_signature = WCOS_Order_Contract_Snapshot::source_signature($source);
+				if (!empty($strategy_authority)
+					&& !hash_equals((string) $strategy_authority['source_signature'], $source_signature)) {
+					throw new RuntimeException(__('The confirmed Split strategy source signature no longer matches the order.', 'wc-order-splitter'));
+				}
 				$context = array(
 					'plan' => $normalized_plan,
 					'child_keys' => WCOS_Split_Plan::child_keys($normalized_plan),
 					'execution_policy' => $execution_policy,
 					'fully_moved_item_ids' => $fully_moved_item_ids,
-					'source_signature' => WCOS_Order_Contract_Snapshot::source_signature($source),
+					'source_signature' => $source_signature,
 					'before_contract' => $before_contract,
 					'source_stock_reduced' => $source_stock_reduced,
 				);
+				if (!empty($strategy_authority)) {
+					$context['strategy_authority'] = $strategy_authority;
+				}
 				if (!WCOS_Operation_Journal::start($source, $operation_id, self::TYPE, $context, $fingerprint)) {
 					throw new RuntimeException(__('Unable to start the split operation journal.', 'wc-order-splitter'));
 				}
@@ -256,6 +287,23 @@ final class WCOS_Split_Order_Service {
 			throw $throwable;
 		} finally {
 			WCOS_Operation_Lock::release($source_id, $lease_token);
+		}
+	}
+
+	private function assert_recorded_strategy_authority(array $record, array $requested_authority) {
+		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
+		$has_recorded = isset($context['strategy_authority']) && is_array($context['strategy_authority']);
+		$has_requested = !empty($requested_authority);
+		if ($has_recorded !== $has_requested) {
+			throw new RuntimeException(__('The requested Split strategy authority does not match the durable operation journal.', 'wc-order-splitter'));
+		}
+		if (!$has_recorded) {
+			return;
+		}
+		$recorded = WCOS_Split_Strategy_Authority::normalize($context['strategy_authority']);
+		$requested = WCOS_Split_Strategy_Authority::normalize($requested_authority);
+		if ($recorded !== $requested) {
+			throw new RuntimeException(__('The requested Split strategy authority does not match the durable operation journal.', 'wc-order-splitter'));
 		}
 	}
 
