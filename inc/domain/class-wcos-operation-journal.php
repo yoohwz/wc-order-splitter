@@ -242,6 +242,13 @@ final class WCOS_Operation_Journal {
         );
         if ($updated) {
             self::update_manual_reconciliation_index($order, $operation_id, false);
+            if (class_exists('WCOS_Manual_Reconciliation_Blocker')) {
+                $fresh = wc_get_order($order->get_id());
+                if ($fresh instanceof WC_Order
+                    && !WCOS_Manual_Reconciliation_Blocker::resolve_if_reconciled($fresh, $operation_id)) {
+                    do_action('wcos_manual_reconciliation_blocker_clear_error', $fresh, $operation_id);
+                }
+            }
         }
         return $updated;
     }
