@@ -85,6 +85,7 @@ $order->delete(true);
 
 require __DIR__ . '/p2-quantity-split-adapter-smoke.php';
 require __DIR__ . '/p2-manual-reconciliation-smoke.php';
+require __DIR__ . '/p2-manual-reconciliation-crash-window-smoke.php';
 require __DIR__ . '/p2-price-precision-smoke.php';
 require __DIR__ . '/p2-stock-matrix-smoke.php';
 require __DIR__ . '/p2-stock-cancellation-lifecycle-smoke.php';
