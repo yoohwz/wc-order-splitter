@@ -44,6 +44,42 @@
         return document.getElementById('wc-backbone-modal-dialog');
     }
 
+    function remapClonedIds(container, instanceId) {
+        if (!container) {
+            return;
+        }
+
+        var idMap = {};
+        Array.prototype.forEach.call(container.querySelectorAll('[id]'), function (element) {
+            var oldId = element.id;
+            if (!oldId) {
+                return;
+            }
+            var newId = 'wcos-modal-' + String(instanceId) + '-' + oldId;
+            idMap[oldId] = newId;
+            element.id = newId;
+        });
+
+        function remapTokens(value) {
+            return String(value || '').split(/\s+/).filter(Boolean).map(function (token) {
+                return idMap[token] || token;
+            }).join(' ');
+        }
+
+        Array.prototype.forEach.call(container.querySelectorAll('[for]'), function (element) {
+            var oldFor = element.getAttribute('for');
+            if (oldFor && idMap[oldFor]) {
+                element.setAttribute('for', idMap[oldFor]);
+            }
+        });
+
+        ['aria-labelledby', 'aria-describedby', 'aria-controls', 'aria-owns'].forEach(function (attribute) {
+            Array.prototype.forEach.call(container.querySelectorAll('[' + attribute + ']'), function (element) {
+                element.setAttribute(attribute, remapTokens(element.getAttribute(attribute)));
+            });
+        });
+    }
+
     function open(options) {
         options = options || {};
         if (!ensureTemplate()) {
@@ -55,7 +91,8 @@
 
         var previousFocus = document.activeElement;
         var trigger = options.trigger || document.body;
-        var namespace = '.wcosBackboneModal' + String(++sequence);
+        var instanceId = ++sequence;
+        var namespace = '.wcosBackboneModal' + String(instanceId);
         var restoreFocus = options.restoreFocus !== false;
         var removed = false;
 
@@ -114,6 +151,7 @@
         if (typeof options.build === 'function') {
             options.build(body, footer, root, handle);
         }
+        remapClonedIds(body, instanceId);
 
         root.addEventListener('click', function (event) {
             if (!event.target.closest('.modal-close')) {
