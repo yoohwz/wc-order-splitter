@@ -123,5 +123,6 @@ wcos_control_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT), 'Rel
 wcos_control_assert(WC_Order_Splitter_Safety_Guard::mutations_enabled(), 'Safety guard did not restore the production-enabled state.');
 
 require __DIR__ . '/p2-production-split-enabled-smoke.php';
+require __DIR__ . '/p2-whole-line-transfer-smoke.php';
 
 echo "operation-lock-and-journal-ok\n";
