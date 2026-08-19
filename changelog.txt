@@ -2,6 +2,14 @@
 
 == Changelog ==
 
+= 1.4.14 (Aug 19, 2026) =
+* New: Enabled the hardened single-order Duplicate workflow for supported WooCommerce orders.
+* Safety: Added server-reviewed Duplicate confirmation, nonce/capability enforcement, source-state verification, operation leases, durable journals, and idempotent retry under the approved production gate.
+* Integrity: Duplicate creates fresh order-item objects and preserves supported historical line, shipping, fee, tax, coupon, and configured business metadata without recalculating current catalog values.
+* Payment/Stock: Duplicate targets remain Pending payment and do not inherit the source transaction ID, paid state, order-level stock-reduction state, or line `_reduced_stock`; Duplicate does not intentionally write physical product stock.
+* Compatibility: Validated production Duplicate across legacy order storage, HPOS-only, and HPOS compatibility/synchronization modes, including 0/2/3-decimal precision, deleted products, configured lines, retries, source races, and side-effect contracts.
+* Safety: Merge, Return, and Bulk Return remain disabled until their hardened production workflows are completed.
+
 = 1.4.13 (Aug 19, 2026) =
 * New: Re-enabled hardened manual quantity Split for supported WooCommerce orders.
 * Safety: Added server-side review/confirmation, strict plan parsing, nonce/capability checks, operation leases, durable journals, idempotent retry, and fail-closed recovery contracts.
