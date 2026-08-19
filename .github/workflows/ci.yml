@@ -79,7 +79,7 @@ jobs:
           grep -Fq 'Requires at least: 6.5' readme.txt
           grep -Fq 'return WCOS_Feature_Gates::any_enabled();' inc/cores/safety.php
           grep -Fq 'self::SPLIT => true' inc/domain/class-wcos-feature-gates.php
-          grep -Fq 'self::DUPLICATE => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::DUPLICATE => true' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::MERGE => false' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::RETURN_ORDER => false' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php
@@ -144,7 +144,7 @@ jobs:
           test "$plugin_version" = "$stable_tag"
           grep -Fq 'return WCOS_Feature_Gates::any_enabled();' inc/cores/safety.php
           grep -Fq 'self::SPLIT => true' inc/domain/class-wcos-feature-gates.php
-          grep -Fq 'self::DUPLICATE => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::DUPLICATE => true' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::MERGE => false' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::RETURN_ORDER => false' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php
@@ -248,7 +248,7 @@ jobs:
           test -n "$archive_version"
           test "$archive_version" = "$archive_stable_tag"
           unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::SPLIT => true'
-          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::DUPLICATE => false'
+          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::DUPLICATE => true'
           unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::MERGE => false'
           unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::RETURN_ORDER => false'
           unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::BULK_RETURN => false'
@@ -331,7 +331,7 @@ jobs:
           npx wp-env run cli wp option update woocommerce_custom_orders_table_enabled yes
           npx wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled yes
 
-      - name: Verify plugin, storage mode, and Split-only production state
+      - name: Verify plugin, storage mode, and Split + Duplicate production state
         shell: bash
         run: |
           set -euo pipefail
@@ -342,10 +342,10 @@ jobs:
             $hpos = \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
             if (("legacy" === $expected && $hpos) || ("legacy" !== $expected && !$hpos)) { exit(1); }
             if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT)) { exit(1); }
+            if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::DUPLICATE)) { exit(1); }
             if (!WCOS_Feature_Gates::any_enabled()) { exit(1); }
             if (!WC_Order_Splitter_Safety_Guard::mutations_enabled()) { exit(1); }
             foreach (array(
-              WCOS_Feature_Gates::DUPLICATE,
               WCOS_Feature_Gates::MERGE,
               WCOS_Feature_Gates::RETURN_ORDER,
               WCOS_Feature_Gates::BULK_RETURN
@@ -377,7 +377,7 @@ jobs:
             foreach ($legacy_hooks as $hook) {
               if (false !== has_action($hook)) { exit(1); }
             }
-            echo "storage-and-split-production-state-ok\n";
+            echo "storage-and-split-duplicate-production-state-ok\n";
           '
 
       - name: Verify mutation lease and durable journal controls

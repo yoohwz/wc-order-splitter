@@ -94,10 +94,10 @@ wcos_control_assert(WCOS_Operation_Journal::delete($order, $journal_operation), 
 $order->delete(true);
 
 /*
- * Preserve the complete hard-off P2 regression suite even after the first
- * production workflow is enabled. This Reflection scope is test-only: it
- * temporarily restores the pre-enablement gate map, executes the previously
- * accepted foundation contracts unchanged, then restores the real release map.
+ * Preserve the complete hard-off P2 regression suite after production gates are
+ * enabled. This Reflection scope is test-only: it temporarily restores the
+ * all-false gate map, executes the previously accepted hard-off contracts
+ * unchanged, then restores the real release map.
  */
 $feature_gate_reflection = new ReflectionClass('WCOS_Feature_Gates');
 $feature_gate_states = $feature_gate_reflection->getProperty('states');
@@ -125,15 +125,17 @@ try {
 	require __DIR__ . '/p2-review-confirmation-toctou-smoke.php';
 	require __DIR__ . '/p2-policy-replay-smoke.php';
 	require __DIR__ . '/p2-durable-replay-smoke.php';
+	require __DIR__ . '/p2-duplicate-readiness-smoke.php';
 } finally {
 	$feature_gate_states->setValue(null, $release_gate_states);
 }
 
 wcos_control_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT), 'Release Split gate was not restored after hard-off regression scope.');
+wcos_control_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::DUPLICATE), 'Release Duplicate gate was not restored after hard-off regression scope.');
 wcos_control_assert(WC_Order_Splitter_Safety_Guard::mutations_enabled(), 'Safety guard did not restore the production-enabled state.');
 
 require __DIR__ . '/p2-production-split-enabled-smoke.php';
-require __DIR__ . '/p2-duplicate-readiness-smoke.php';
+require __DIR__ . '/p2-production-duplicate-enabled-smoke.php';
 require __DIR__ . '/p2-duplicate-side-effects-smoke.php';
 require __DIR__ . '/p2-duplicate-precision-replay-smoke.php';
 require __DIR__ . '/p2-duplicate-compatibility-smoke.php';

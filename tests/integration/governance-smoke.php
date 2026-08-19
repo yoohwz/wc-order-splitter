@@ -24,16 +24,19 @@ foreach (array(
 	'WC_ORDER_SPLITTER_MUTATIONS_ENABLED',
 	'WC_ORDER_SPLITTER_SPLIT_ENABLED',
 	'WC_ORDER_SPLITTER_DUPLICATE_ENABLED',
+	'WC_ORDER_SPLITTER_MERGE_ENABLED',
+	'WC_ORDER_SPLITTER_RETURN_ENABLED',
+	'WC_ORDER_SPLITTER_BULK_RETURN_ENABLED',
 ) as $constant) {
 	if (!defined($constant)) {
 		define($constant, true);
 	}
 }
 wcos_governance_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT), 'Approved manual quantity Split gate is not enabled.');
+wcos_governance_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::DUPLICATE), 'Approved hardened Duplicate gate is not enabled.');
 wcos_governance_assert(WCOS_Feature_Gates::any_enabled(), 'Approved production workflow set was reported as entirely disabled.');
 wcos_governance_assert(WC_Order_Splitter_Safety_Guard::mutations_enabled(), 'Safety guard did not reflect the approved production gate set.');
 foreach (array(
-	WCOS_Feature_Gates::DUPLICATE,
 	WCOS_Feature_Gates::MERGE,
 	WCOS_Feature_Gates::RETURN_ORDER,
 	WCOS_Feature_Gates::BULK_RETURN,
@@ -68,6 +71,7 @@ wcos_governance_assert(!is_wp_error($admin_id) && !is_wp_error($manager_id) && !
 update_option('order_splitter_shop_manager_permission', 'no');
 wp_set_current_user($admin_id);
 WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::SPLIT, $order);
+WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::DUPLICATE, $order);
 
 wp_set_current_user($manager_id);
 wcos_governance_expect_runtime(
@@ -78,6 +82,7 @@ wcos_governance_expect_runtime(
 );
 update_option('order_splitter_shop_manager_permission', 'yes');
 WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::SPLIT, $order);
+WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::DUPLICATE, $order);
 
 wp_set_current_user($subscriber_id);
 wcos_governance_expect_runtime(
@@ -97,9 +102,9 @@ wcos_governance_expect_runtime(
 $gateway = new WCOS_Mutation_Gateway();
 wcos_governance_expect_runtime(
 	static function() use ($gateway, $order) {
-		$gateway->duplicate($order, 'governance-disabled-' . wp_generate_uuid4());
+		$gateway->merge($order, $order, 'governance-disabled-' . wp_generate_uuid4());
 	},
-	'The mandatory gateway did not keep Duplicate hard-off.'
+	'The mandatory gateway did not keep Merge hard-off.'
 );
 
 /* Public business metadata is copied; private metadata needs an explicit adapter. */
