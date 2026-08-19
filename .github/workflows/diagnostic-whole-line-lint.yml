@@ -1,0 +1,29 @@
+name: Diagnostic whole-line lint
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint ${{ matrix.file }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        file:
+          - inc/domain/class-wcos-split-execution-policy.php
+          - inc/domain/class-wcos-split-plan.php
+          - inc/domain/class-wcos-split-order-service.php
+          - inc/cores/script.php
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          coverage: none
+      - run: php -l "${{ matrix.file }}"
