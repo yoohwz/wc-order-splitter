@@ -66,14 +66,23 @@ foreach (array(
     "container.querySelectorAll('[for]')",
     "['aria-labelledby', 'aria-describedby', 'aria-controls', 'aria-owns']",
     'remapClonedIds(body, instanceId);',
+    'var afterRemoved = null;',
+    "afterRemoved = typeof callback === 'function' ? callback : null;",
+    'window.setTimeout(callback, 0);',
+    'options.onReady(root, handle);',
 ) as $needle) {
-    wcos_p2_adapter_assert(false !== strpos($bridge, $needle), 'Shared modal bridge is missing WooCommerce Backbone/ID-remap contract: ' . $needle);
+    wcos_p2_adapter_assert(false !== strpos($bridge, $needle), 'Shared modal bridge is missing WooCommerce Backbone/readiness contract: ' . $needle);
 }
+wcos_p2_adapter_assert(
+    false !== strpos($bridge, "if (!removed && root.isConnected) {\n                    options.onReady(root, handle);"),
+    'Backbone modal onReady is not deferred until the rendered modal handle is stable.'
+);
 wcos_p2_adapter_assert(false === strpos($bridge, '.innerHTML'), 'Shared Backbone modal bridge uses innerHTML.');
 
 $asset_contract = file_get_contents($root . '/inc/backend/class-wcos-admin-backbone-modal-assets.php');
 wcos_p2_adapter_assert(is_string($asset_contract) && false !== strpos($asset_contract, "wp_enqueue_script('wc-backbone-modal')"), 'Backbone modal asset contract does not require the WooCommerce native handle.');
 wcos_p2_adapter_assert(false !== strpos($asset_contract, "array('jquery', 'wc-backbone-modal')"), 'Shared modal bridge does not declare the WooCommerce Backbone dependency.');
+wcos_p2_adapter_assert(false !== strpos($asset_contract, "plugins_url('css/p2-backbone-modal.css'"), 'Shared Backbone modal footer stylesheet is not enqueued.');
 wcos_p2_adapter_assert(false !== strpos($asset_contract, "'wcos-split-admin', 'wcos-duplicate-admin', 'wcos-split-strategy-admin'"), 'Workflow modal clients are not dependency-bound to the shared bridge.');
 
 $css = file_get_contents($root . '/css/p2-split-admin.css');
@@ -81,5 +90,9 @@ wcos_p2_adapter_assert(is_string($css) && false !== strpos($css, '.wcos-split-ba
 wcos_p2_adapter_assert(false !== strpos($css, '.wcos-split-method-backbone-modal .wc-backbone-modal-content'), 'Split method chooser does not use the WooCommerce Backbone shell.');
 wcos_p2_adapter_assert(false !== strpos($css, '.wcos-split-remove-child'), 'Remove-last-child button styling is missing.');
 wcos_p2_adapter_assert(false !== strpos($css, 'color: #b32d2e;'), 'Remove-last-child destructive text color is missing.');
+
+$shared_css = file_get_contents($root . '/css/p2-backbone-modal.css');
+wcos_p2_adapter_assert(is_string($shared_css) && false !== strpos($shared_css, 'justify-content: flex-end !important;'), 'Backbone modal footer actions are not grouped at the standard right edge.');
+wcos_p2_adapter_assert(false !== strpos($shared_css, '.wcos-admin-backbone-modal__footer'), 'Shared Backbone modal footer selector is missing.');
 
 echo "p2-admin-client-terminal-state-ok\n";
