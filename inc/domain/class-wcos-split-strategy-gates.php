@@ -17,8 +17,8 @@ final class WCOS_Split_Strategy_Gates {
 
 	private static $states = array(
 		self::MANUAL_QUANTITY => true,
-		self::CATEGORY => false,
-		self::STOCK_STATUS => false,
+		self::CATEGORY => true, // Sandbox candidate only. Do not merge to production.
+		self::STOCK_STATUS => true, // Sandbox candidate only. Do not merge to production.
 	);
 
 	public static function enabled($strategy) {
