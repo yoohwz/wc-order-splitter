@@ -189,6 +189,9 @@
     function setBusy(nextBusy) {
         busy = !!nextBusy;
         form.setAttribute('aria-busy', busy ? 'true' : 'false');
+        Array.prototype.forEach.call(dialog.querySelectorAll('.wcos-split-quantity'), function (field) {
+            field.disabled = busy || completed;
+        });
         reviewButton.disabled = busy || completed;
         confirmCheckbox.disabled = busy || completed;
         executeButton.disabled = busy || completed || !state || !confirmCheckbox.checked;
