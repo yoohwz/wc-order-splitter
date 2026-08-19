@@ -21,6 +21,13 @@
         return value;
     }
 
+    function requireRef(element, label) {
+        if (!element) {
+            throw new Error('Strategy Split modal failed to bind ' + label + '.');
+        }
+        return element;
+    }
+
     function request(sourceDialog, action, data) {
         var body = new URLSearchParams();
         body.set('action', action);
@@ -360,29 +367,30 @@
                 build: function (body, footer, root) {
                     var sourceForm = sourceDialog.querySelector('.wcos-strategy-form');
                     var sourceActions = sourceDialog.querySelector('.wcos-strategy-dialog__actions');
-                    var clonedForm = sourceForm.cloneNode(true);
+                    var clonedForm = requireRef(sourceForm, 'source form').cloneNode(true);
                     var clonedActions = clonedForm.querySelector('.wcos-strategy-dialog__actions');
                     if (clonedActions && clonedActions.parentNode) {
                         clonedActions.parentNode.removeChild(clonedActions);
                     }
                     body.appendChild(clonedForm);
                     cloneFooter(sourceActions, footer);
+
                     dialog = root;
                     form = clonedForm;
-                    closeButton = root.querySelector('.wc-backbone-modal-header .modal-close');
-                    cancelButton = root.querySelector('.wcos-strategy-cancel');
-                    reviewButton = root.querySelector('.wcos-strategy-review-button');
-                    reviewSection = root.querySelector('.wcos-strategy-review');
-                    reviewSummary = root.querySelector('.wcos-strategy-review-summary');
-                    bucketOptions = root.querySelector('.wcos-strategy-bucket-options');
-                    confirmButton = root.querySelector('.wcos-strategy-confirm-button');
-                    confirmationSection = root.querySelector('.wcos-strategy-confirmation');
-                    confirmationSummary = root.querySelector('.wcos-strategy-confirmation-summary');
-                    confirmCheckbox = root.querySelector('.wcos-strategy-confirm-checkbox');
-                    executeButton = root.querySelector('.wcos-strategy-execute-button');
-                    statusBox = root.querySelector('.wcos-strategy-status');
-                    errorBox = root.querySelector('.wcos-strategy-error');
-                    resultBox = root.querySelector('.wcos-strategy-result');
+                    closeButton = requireRef(root.querySelector('.wc-backbone-modal-header .modal-close'), 'close button');
+                    cancelButton = requireRef(footer.querySelector('.wcos-strategy-cancel'), 'cancel button');
+                    reviewButton = requireRef(clonedForm.querySelector('.wcos-strategy-review-button'), 'Review button');
+                    reviewSection = requireRef(clonedForm.querySelector('.wcos-strategy-review'), 'Review section');
+                    reviewSummary = requireRef(clonedForm.querySelector('.wcos-strategy-review-summary'), 'Review summary');
+                    bucketOptions = requireRef(clonedForm.querySelector('.wcos-strategy-bucket-options'), 'bucket options');
+                    confirmButton = requireRef(clonedForm.querySelector('.wcos-strategy-confirm-button'), 'Confirm button');
+                    confirmationSection = requireRef(clonedForm.querySelector('.wcos-strategy-confirmation'), 'confirmation section');
+                    confirmationSummary = requireRef(clonedForm.querySelector('.wcos-strategy-confirmation-summary'), 'confirmation summary');
+                    confirmCheckbox = requireRef(clonedForm.querySelector('.wcos-strategy-confirm-checkbox'), 'confirmation checkbox');
+                    executeButton = requireRef(clonedForm.querySelector('.wcos-strategy-execute-button'), 'Execute button');
+                    statusBox = requireRef(clonedForm.querySelector('.wcos-strategy-status'), 'status region');
+                    errorBox = requireRef(clonedForm.querySelector('.wcos-strategy-error'), 'error region');
+                    resultBox = requireRef(clonedForm.querySelector('.wcos-strategy-result'), 'result region');
                 },
                 onReady: function () {
                     reviewButton.addEventListener('click', reviewStrategy);
