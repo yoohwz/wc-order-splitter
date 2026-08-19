@@ -26,16 +26,16 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          run_id=''
           for attempt in $(seq 1 45); do
-            row="$(gh run list \
+            runs="$(gh run list \
               --repo "$GITHUB_REPOSITORY" \
-              --workflow 'Sandbox strategy candidate' \
               --commit "$HEAD_SHA" \
               --event push \
-              --limit 5 \
-              --json databaseId,status,conclusion,headSha \
-              --jq 'map(select(.headSha == env.HEAD_SHA)) | first // empty')"
+              --limit 20 \
+              --json databaseId,status,conclusion,headSha,name)"
+            row="$(printf '%s' "$runs" | jq -c --arg sha "$HEAD_SHA" '
+              map(select(.headSha == $sha and .name == "Sandbox strategy candidate")) | first // empty
+            ')"
             if test -n "$row"; then
               run_id="$(printf '%s' "$row" | jq -r '.databaseId')"
               status="$(printf '%s' "$row" | jq -r '.status')"
