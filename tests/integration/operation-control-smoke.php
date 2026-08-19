@@ -84,10 +84,19 @@ wcos_control_assert(WCOS_Operation_Journal::delete($order, $journal_operation), 
 $order->delete(true);
 
 require __DIR__ . '/p2-quantity-split-adapter-smoke.php';
+require __DIR__ . '/p2-manual-reconciliation-smoke.php';
+require __DIR__ . '/p2-manual-reconciliation-crash-window-smoke.php';
+require __DIR__ . '/p2-price-precision-smoke.php';
 require __DIR__ . '/p2-stock-matrix-smoke.php';
+require __DIR__ . '/p2-stock-cancellation-lifecycle-smoke.php';
 require __DIR__ . '/p2-charge-tax-matrix-smoke.php';
 require __DIR__ . '/p2-production-side-effect-smoke.php';
 require __DIR__ . '/p2-metadata-compatibility-smoke.php';
 require __DIR__ . '/p2-journal-retention-smoke.php';
+require __DIR__ . '/p2-admin-transport-smoke.php';
+require __DIR__ . '/p2-admin-client-state-smoke.php';
+require __DIR__ . '/p2-review-confirmation-toctou-smoke.php';
+require __DIR__ . '/p2-policy-replay-smoke.php';
+require __DIR__ . '/p2-durable-replay-smoke.php';
 
 echo "operation-lock-and-journal-ok\n";
