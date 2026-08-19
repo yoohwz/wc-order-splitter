@@ -14,18 +14,42 @@ The controller must never instantiate the mutation service directly.
 
 ## Persistent manual reconciliation
 
-A confirmed physical-stock write observed after WooCommerce's normal pre-write guard is outside the order-only mutation snapshot. Such an incident is persisted as the authoritative journal state `manual_reconciliation`, even if the operation had already reached `completed`.
+A confirmed physical-stock write observed after WooCommerce's normal pre-write guard is outside the order-only mutation snapshot. Such an incident is fail-closed and must block every subsequent Split on that source until a human has reconciled stock.
 
-While unresolved:
+### Two-phase fail-closed persistence
+
+`WCOS_Manual_Reconciliation_Blocker` is persisted **before** the authoritative journal transitions to `manual_reconciliation`.
+
+This ordering is intentional. The blocker is a non-autoloaded, PII-free source-order record containing only operation identifiers, timestamps, and the journal revision observed when the stock incident was recorded. If the PHP process dies after the blocker write but before the journal transition, preflight still rejects the source. The crash window therefore produces a safe false-positive block rather than a false-negative that could permit another Split.
+
+After the journal transition succeeds:
 
 - `completed_at` is cleared;
 - automatic compensation is disabled;
 - the journal is not retention-purgeable;
-- the source order carries only a PII-free operation-ID index for lookup;
-- preflight blocks retry and every new Split on the source;
+- the existing order-meta operation-ID index remains available for audit visibility;
+- preflight reports the unresolved operation ID(s) directly in its PII-free message;
+- retry and every new Split on the same source are rejected;
 - the operation cannot auto-resume or auto-finalize.
 
-Only the explicit `manual_reconciled` transition clears the blocking index and returns the journal to normal terminal retention.
+A blocker is considered resolved only when the authoritative journal reaches `manual_reconciled` at a **newer journal revision** than the revision recorded by that stock incident. This prevents an older reconciliation from accidentally clearing a later incident on the same operation.
+
+### Manual reconciliation operating procedure
+
+The first production-enabled quantity Split must never automatically modify physical stock to resolve this state and must not expose a one-click "resolve" action.
+
+Before an operation may be marked `manual_reconciled`, an authorized operator/developer must:
+
+1. identify the operation ID reported by Split preflight;
+2. inspect the authoritative journal and its `stock_side_effects` evidence;
+3. identify the actual stock owner for every affected product/variation, including parent-managed variations;
+4. compare current physical stock with the intended post-order stock state;
+5. inspect the source and child `_reduced_stock` markers and order-level stock-reduced flags;
+6. correct stock externally only when the reconciliation evidence proves a correction is required;
+7. record who performed the reconciliation and a meaningful audit note;
+8. only then perform the explicit `WCOS_Operation_Journal::mark_manual_reconciled()` transition.
+
+The transition records resolution; it does **not** perform or infer a stock correction. If the operator cannot prove the correct physical-stock state, the source remains blocked and the operation must be escalated for manual support investigation.
 
 ## Price precision
 
@@ -37,7 +61,20 @@ Precision authority is:
 2. server confirmation record created by the review step;
 3. current store setting for a new review.
 
-A retry continues under the captured precision even if the ambient store setting changed after an interruption. Acceptance covers zero-decimal and three-decimal monetary/tax conservation.
+A retry continues under the captured precision even if the ambient store setting changes after an interruption. Acceptance covers zero-decimal and three-decimal monetary/tax conservation as well as the default two-decimal case.
+
+## Safety-policy version authority
+
+A reviewed Split confirmation is bound to `WCOS_Split_Preflight::POLICY_VERSION`. When the first durable journal is created, that policy version is persisted alongside `price_precision` and becomes immutable journal context.
+
+Consequences:
+
+- a live confirmation must match the durable journal's policy version once a journal exists;
+- journal checkpoint/state transitions cannot rewrite the captured policy version;
+- durable replay after the confirmation TTL requires a stored policy version;
+- a durable operation whose recorded policy version differs from current code fails closed with `policy_changed` rather than resuming under new semantics.
+
+This prevents an interrupted mutation reviewed under one safety policy from silently continuing after deployment of a different policy.
 
 ## Stock lifecycle
 
@@ -90,7 +127,7 @@ The temporary confirmation record contains no customer/address plaintext. It bin
 - Split policy version;
 - expiry.
 
-Before mutation begins, execution rejects changed source state, changed policy, invalid/expired tokens, user/order mismatch, or precision mismatch. Once a durable journal exists, that journal is authoritative for idempotent retry of the same operation.
+Before mutation begins, execution rejects changed source state, changed policy, invalid/expired tokens, user/order mismatch, or precision mismatch. Once a durable journal exists, that journal is authoritative for idempotent retry of the same operation and carries the immutable replay plan, price precision, and safety-policy version.
 
 ### Execute
 
@@ -129,6 +166,19 @@ The server-rendered dialog provides a line-by-child allocation matrix so one sou
 - result links built with DOM APIs and text nodes;
 - server-side policy disclosure, including intentionally unsupported cases.
 
+### Client state authority
+
+The client is never authoritative for quantities or financial validation, but its review state must accurately represent what the human confirmed.
+
+Therefore:
+
+- all quantity fields are frozen while an asynchronous review or execute request is in flight, preventing the visible matrix from diverging from the plan the server reviewed;
+- quantity edits invalidate the previous confirmation;
+- successful execution enters a terminal client state;
+- `finally`/busy-state cleanup cannot re-enable Review, acknowledgement, Execute, or quantity inputs after success;
+- reopening the dialog after success focuses the result region instead of a disabled quantity field;
+- non-retryable execute errors invalidate the reviewed confirmation state.
+
 The launcher and assets remain hidden while `SPLIT` is hard-off.
 
 ## Intentionally unsupported in first quantity-Split release
@@ -155,6 +205,9 @@ Changing `WCOS_Feature_Gates::SPLIT` to `true` requires all of the following on 
 - HPOS compatibility/sync green;
 - all P1 recovery/concurrency/failure contracts green;
 - all P2 adapter, manual-reconciliation, precision, stock lifecycle, tax/charge/payment, side-effect, metadata, retention, transport and accessibility contracts green;
+- fail-closed manual-reconciliation crash-window contract green;
+- durable replay policy-version binding contract green;
+- client terminal-state and review/quantity TOCTOU contracts green;
 - independent technical/security/accessibility review;
 - explicit Human Gate approving production enablement.
 
