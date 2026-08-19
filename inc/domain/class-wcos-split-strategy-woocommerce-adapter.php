@@ -40,8 +40,15 @@ final class WCOS_Split_Strategy_WooCommerce_Adapter {
 		throw new InvalidArgumentException(__('Unsupported server-built Split strategy.', 'wc-order-splitter'));
 	}
 
-	public function split(WC_Order $source, $strategy, array $plan, $operation_id, $confirmed_precision = null) {
-		self::normalize_strategy($strategy);
+	public function split(
+		WC_Order $source,
+		$strategy,
+		array $plan,
+		$operation_id,
+		$confirmed_precision = null,
+		array $strategy_authority = array()
+	) {
+		$strategy = self::normalize_strategy($strategy);
 		$operation_id = sanitize_key((string) $operation_id);
 		if ('' === $operation_id) {
 			throw new InvalidArgumentException(__('A split operation ID is required.', 'wc-order-splitter'));
@@ -54,12 +61,23 @@ final class WCOS_Split_Strategy_WooCommerce_Adapter {
 		}
 
 		$normalized_plan = $this->assert_whole_line_bucket_plan($source, $plan, $operation_id);
+		if (!empty($strategy_authority)) {
+			$strategy_authority = WCOS_Split_Strategy_Authority::normalize($strategy_authority);
+			if ($strategy_authority['strategy'] !== $strategy) {
+				throw new RuntimeException(__('The confirmed Split strategy authority belongs to a different strategy.', 'wc-order-splitter'));
+			}
+			if ($strategy_authority['plan'] !== $normalized_plan) {
+				throw new RuntimeException(__('The confirmed Split strategy authority does not match the frozen execution plan.', 'wc-order-splitter'));
+			}
+		}
+
 		return (new WCOS_Split_WooCommerce_Adapter())->split(
 			$source,
 			$normalized_plan,
 			$operation_id,
 			$confirmed_precision,
-			WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER
+			WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER,
+			$strategy_authority
 		);
 	}
 
