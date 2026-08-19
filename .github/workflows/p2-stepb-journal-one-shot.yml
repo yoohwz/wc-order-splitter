@@ -1,3 +1,4 @@
+# retrigger: lock whole-line destructive journal authority
 name: P2 Step B journal one-shot patch
 
 on:
