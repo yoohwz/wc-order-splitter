@@ -69,9 +69,21 @@ wcos_p2_adapter_assert(
 );
 
 $crash_window_source = wc_get_order($crash_window_source_id);
+wcos_p2_adapter_assert(
+    !WCOS_Manual_Reconciliation_Blocker::contains_operation($crash_window_source_id, $crash_window_operation),
+    'Explicit manual reconciliation did not eagerly clear its source-level blocker.'
+);
+$resolved_journal = WCOS_Operation_Journal::get($crash_window_source, $crash_window_operation);
+wcos_p2_adapter_assert(
+    WCOS_Operation_Journal_Retention::is_expired_terminal_record(
+        array_merge($resolved_journal, array('completed_at' => gmdate('c', time() - (100 * DAY_IN_SECONDS)))),
+        time()
+    ),
+    'Resolved reconciliation journal remained retention-blocked after its source blocker cleared.'
+);
 $resolved_report = $crash_window_adapter->preflight($crash_window_source);
 wcos_p2_adapter_assert('manual_reconciliation_required' !== $resolved_report['reason'], 'Resolved crash-window blocker remained active.');
-wcos_p2_adapter_assert(!WCOS_Manual_Reconciliation_Blocker::has_active($crash_window_source), 'Resolved crash-window blocker was not lazily cleared by journal revision.');
+wcos_p2_adapter_assert(!WCOS_Manual_Reconciliation_Blocker::has_active($crash_window_source), 'Resolved crash-window blocker remained active after eager clear.');
 
 wcos_p2_adapter_cleanup($crash_window_source_id, $crash_window_operation);
 wp_delete_post($crash_window_product->get_id(), true);
