@@ -3,10 +3,12 @@
 defined('ABSPATH') || exit;
 
 /**
- * Emergency safety guard for order mutation workflows.
+ * Safety guard for production mutation workflows and unavailable settings.
  *
- * Version 1.4.12 deliberately fails closed while the mutation engine is rebuilt
- * around stock, monetary, line-identity, idempotency, and recovery invariants.
+ * The canonical workflow state lives in WCOS_Feature_Gates. This guard keeps
+ * the emergency fail-closed notice for builds where no production workflow is
+ * enabled and continues to protect settings routes that require unavailable
+ * Premium classes.
  */
 class WC_Order_Splitter_Safety_Guard {
 
@@ -16,7 +18,11 @@ class WC_Order_Splitter_Safety_Guard {
 	}
 
 	public static function mutations_enabled() {
-		return false;
+		if (!class_exists('WCOS_Feature_Gates')) {
+			return false;
+		}
+
+		return WCOS_Feature_Gates::any_enabled();
 	}
 
 	public function guard_unavailable_settings_sections() {
@@ -69,7 +75,7 @@ class WC_Order_Splitter_Safety_Guard {
 		<div class="notice notice-warning">
 			<p>
 				<strong><?php esc_html_e('Order Splitter safety mode is active.', 'wc-order-splitter'); ?></strong>
-				<?php esc_html_e('Order mutation actions are temporarily disabled in this release while their stock, totals, tax, and rollback guarantees are being hardened. Existing orders and split-order relationship metadata are not changed by this safety mode.', 'wc-order-splitter'); ?>
+				<?php esc_html_e('No order mutation workflow is currently enabled for production use. Existing orders and split-order relationship metadata are not changed by this safety mode.', 'wc-order-splitter'); ?>
 			</p>
 		</div>
 		<?php
