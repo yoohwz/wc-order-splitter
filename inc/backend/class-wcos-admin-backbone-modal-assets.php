@@ -6,12 +6,13 @@ defined('ABSPATH') || exit;
  * Shared admin dependency for all Order Splitter modal workflows.
  *
  * WooCommerce registers wc-backbone-modal as a supported admin script handle.
- * This bridge is loaded only on order-edit screens and is enqueued before the
- * Split, strategy Split, and Duplicate clients.
+ * This bridge is loaded only on order-edit screens and becomes an explicit
+ * dependency of every Order Splitter workflow client.
  */
 final class WCOS_Admin_Backbone_Modal_Assets {
 	public static function bootstrap() {
 		add_action('admin_enqueue_scripts', array(__CLASS__, 'enqueue'), 5);
+		add_action('admin_enqueue_scripts', array(__CLASS__, 'bind_workflow_dependencies'), 100);
 	}
 
 	public static function enqueue() {
@@ -28,6 +29,28 @@ final class WCOS_Admin_Backbone_Modal_Assets {
 			WC_ORDER_SPLITTER_VERSION,
 			true
 		);
+	}
+
+	public static function bind_workflow_dependencies() {
+		if (!self::is_order_edit_screen()) {
+			return;
+		}
+
+		$scripts = wp_scripts();
+		if (!$scripts || !isset($scripts->registered['wcos-admin-backbone-modal'])) {
+			return;
+		}
+
+		foreach (array('wcos-split-admin', 'wcos-duplicate-admin', 'wcos-split-strategy-admin') as $handle) {
+			if (!isset($scripts->registered[$handle])) {
+				continue;
+			}
+			$deps = (array) $scripts->registered[$handle]->deps;
+			if (!in_array('wcos-admin-backbone-modal', $deps, true)) {
+				$deps[] = 'wcos-admin-backbone-modal';
+				$scripts->registered[$handle]->deps = array_values(array_unique($deps));
+			}
+		}
 	}
 
 	private static function is_order_edit_screen() {
