@@ -1,0 +1,14 @@
+Order Splitter for WooCommerce — Sandbox Strategy Candidate UI3
+
+This package is intended for sandbox testing only.
+
+Candidate-only strategy gate state:
+- manual_quantity = true
+- category = true
+- stock_status = true
+
+UI3 uses WooCommerce native Backbone modals for Split method selection, Quantity Split, Duplicate, Category Split and Stock-status Split. Category/Stock-status contextual feedback is modal-local and must not be rendered on the order page.
+
+The hardened Split and Duplicate workflows remain enabled. Merge, Return Order, and Bulk Return remain disabled.
+
+This candidate is not a production release and must not be deployed to a live store until separate production enablement review and Human Gate approval are completed.
