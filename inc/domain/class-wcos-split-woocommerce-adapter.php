@@ -35,7 +35,7 @@ final class WCOS_Split_WooCommerce_Adapter {
                 throw new RuntimeException(__('The source order is no longer available.', 'wc-order-splitter'));
             }
 
-            WCOS_Split_Preflight::assert_supported($source, $precision);
+            $this->assert_supported($source, $precision);
             $stock_token = WCOS_Stock_Side_Effect_Guard::begin($operation_id);
 
             /*
@@ -91,10 +91,52 @@ final class WCOS_Split_WooCommerce_Adapter {
             if (!$source instanceof WC_Order) {
                 throw new RuntimeException(__('The source order is no longer available.', 'wc-order-splitter'));
             }
-            return WCOS_Split_Preflight::report($source, $precision);
+            return $this->apply_reconciliation_blocker(
+                $source,
+                WCOS_Split_Preflight::report($source, $precision)
+            );
         } finally {
             WCOS_Price_Precision_Scope::end($precision_token);
         }
+    }
+
+    private function assert_supported(WC_Order $source, $precision) {
+        $report = $this->apply_reconciliation_blocker(
+            $source,
+            WCOS_Split_Preflight::report($source, $precision)
+        );
+        if (empty($report['supported'])) {
+            throw new WCOS_Split_Preflight_Exception(
+                isset($report['reason']) ? $report['reason'] : 'unsupported',
+                isset($report['message']) ? $report['message'] : __('This order is not supported by the quantity-split adapter.', 'wc-order-splitter'),
+                $report
+            );
+        }
+        return $report;
+    }
+
+    private function apply_reconciliation_blocker(WC_Order $source, array $report) {
+        if (!class_exists('WCOS_Manual_Reconciliation_Blocker')) {
+            return $report;
+        }
+
+        $operation_ids = WCOS_Manual_Reconciliation_Blocker::active_operation_ids($source);
+        if (empty($operation_ids)) {
+            return $report;
+        }
+
+        $existing = isset($report['manual_reconciliation_operation_ids'])
+            ? array_values(array_filter(array_map('sanitize_key', (array) $report['manual_reconciliation_operation_ids'])))
+            : array();
+        $operation_ids = array_values(array_unique(array_merge($existing, $operation_ids)));
+        sort($operation_ids, SORT_STRING);
+
+        $report['supported'] = false;
+        $report['reason'] = 'manual_reconciliation_required';
+        $report['message'] = __('This order has an unresolved mutation incident that requires manual stock reconciliation before another split can run.', 'wc-order-splitter');
+        $report['manual_reconciliation_count'] = count($operation_ids);
+        $report['manual_reconciliation_operation_ids'] = $operation_ids;
+        return $report;
     }
 
     private function mark_manual_stock_reconciliation($source_id, $operation_id, array $events, Throwable $throwable) {
@@ -104,6 +146,23 @@ final class WCOS_Split_WooCommerce_Adapter {
         }
         $record = WCOS_Operation_Journal::get($fresh, $operation_id);
         if (!is_array($record)) {
+            return false;
+        }
+
+        /*
+         * Persist the source-level blocker first. If the process dies before the
+         * journal transition, the next preflight remains fail-closed rather than
+         * missing a physical-stock incident because the secondary index was never
+         * written.
+         */
+        if (!WCOS_Manual_Reconciliation_Blocker::block($fresh, $operation_id)) {
+            do_action(
+                'wcos_manual_reconciliation_record_error',
+                $fresh,
+                $operation_id,
+                $events,
+                $throwable
+            );
             return false;
         }
 
@@ -119,6 +178,7 @@ final class WCOS_Split_WooCommerce_Adapter {
         );
 
         if (!$updated) {
+            /* Keep the first-phase blocker in place deliberately. */
             do_action(
                 'wcos_manual_reconciliation_record_error',
                 $fresh,
