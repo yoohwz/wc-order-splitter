@@ -42,7 +42,7 @@ The first hardened Duplicate rejects before mutation when it cannot prove compat
 - unsupported fractional quantities when the active WooCommerce quantity integration no longer preserves fractional stock amounts;
 - internally inconsistent historical totals/taxes.
 
-Deleted catalog products remain supported because persisted historical order-item state is authoritative.
+Deleted catalog products remain supported because persisted historical order-item state is authoritative. Paid source orders are supported, but their Duplicate target remains pending and never inherits the source transaction ID, `date_paid`, or stock-reduced state.
 
 ## Historical item integrity
 
@@ -54,7 +54,7 @@ Aggregate monetary equality is not sufficient for Duplicate. The service verifie
 - tax rate ID/label/compound/rate percent/cart/shipping tax totals and business metadata;
 - coupon code/discount/discount-tax and business metadata.
 
-Persisted item IDs must be fresh and may never be re-parented from the source order.
+Persisted item IDs must be fresh and may never be re-parented from the source order. Configured lines sharing a product ID remain distinct when an explicit metadata adapter classifies their private business metadata consistently for Duplicate and canonical identity.
 
 ## Review -> confirmation -> execute
 
@@ -67,9 +67,21 @@ The read-only Review endpoint requires:
 
 The server creates the operation UUID and short-lived confirmation token. The stored record contains only the token HMAC plus source/user/signature/price-precision/policy authority.
 
-Execute re-verifies the same nonce, authorization, source signature, user, token, price precision and Duplicate policy before any mutation. Once a durable journal exists, it becomes replay authority after confirmation expiry.
+Source authority is checked across every pre-mutation boundary:
+
+1. the source object used by Review must match the fresh preflight `source_signature`;
+2. confirmation creation reloads the source under the reviewed price precision and requires the same signature;
+3. Execute confirmation verification reloads and rechecks the source before mutation;
+4. for a new operation without a durable journal, confirmation verification publishes only the verified PII-free source hash into request-local authority;
+5. the WooCommerce adapter reloads the source again immediately before preflight/service and must still match that verified hash.
+
+The last check closes the narrow confirmation-verify -> adapter/service TOCTOU window. Once a durable journal exists, the journal becomes replay authority and the request-local transient signature is deliberately not used.
+
+Execute also re-verifies the same nonce, authorization, user, token, price precision and Duplicate policy before any mutation. Once a durable journal exists, it becomes replay authority after confirmation expiry.
 
 `DUPLICATE=false` means Execute returns `workflow_disabled` and does not create a journal or target order in this readiness milestone.
+
+The same request-local post-verification source authority was applied to the already production-enabled manual quantity Split path after independent review found the shared boundary issue; the canonical integration matrix protects both workflows.
 
 ## Stock / side-effect contract
 
@@ -88,6 +100,8 @@ Acceptance requires:
 ## Precision and durable replay
 
 Duplicate executes under request-local `WCOS_Price_Precision_Scope`. The durable journal captures immutable `price_precision` and Duplicate preflight `policy_version`.
+
+`WCOS_Duplicate_Order_Service::POLICY_VERSION` and `WCOS_Duplicate_Preflight::POLICY_VERSION` are one production authority and are locked together by a unit contract so service fingerprint semantics cannot drift from review/confirmation semantics.
 
 Acceptance covers 0-, 2- and 3-decimal historical order values. An interrupted operation must replay using journal precision/policy even if the ambient store precision changes. A changed durable policy fails closed instead of replaying under new semantics.
 
