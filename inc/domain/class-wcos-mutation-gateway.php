@@ -22,17 +22,18 @@ final class WCOS_Mutation_Gateway {
 		return (new WCOS_Split_WooCommerce_Adapter())->preflight($source, $operation_id, $confirmed_precision);
 	}
 
-	public function split_strategy(WC_Order $source, $strategy, array $plan, $operation_id, $confirmed_precision = null) {
+	public function split_strategy(WC_Order $source, $strategy, array $plan, $operation_id, $confirmed_precision = null, array $confirmation = array()) {
 		WCOS_Feature_Gates::assert_enabled(WCOS_Feature_Gates::SPLIT);
 		$strategy = WCOS_Split_Strategy_WooCommerce_Adapter::normalize_strategy($strategy);
 		WCOS_Split_Strategy_Gates::assert_enabled($strategy);
 		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::SPLIT, $source);
-		return (new WCOS_Split_Strategy_WooCommerce_Adapter())->split(
+		return (new WCOS_Split_Strategy_WooCommerce_Adapter())->split_confirmed(
 			$source,
 			$strategy,
 			$plan,
 			$operation_id,
-			$confirmed_precision
+			$confirmed_precision,
+			$confirmation
 		);
 	}
 
