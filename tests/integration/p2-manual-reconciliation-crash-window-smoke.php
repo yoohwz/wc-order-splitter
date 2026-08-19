@@ -50,6 +50,18 @@ wcos_p2_adapter_assert(
     'Operator-facing reconciliation feedback omitted the blocking operation ID.'
 );
 
+/*
+ * If eager blocker cleanup ever fails after resolution, retention must not erase
+ * the only authoritative journal proof needed to clear that blocker later.
+ */
+$retention_guard_record = $crash_window_journal;
+$retention_guard_record['status'] = 'manual_reconciled';
+$retention_guard_record['completed_at'] = gmdate('c', time() - (100 * DAY_IN_SECONDS));
+wcos_p2_adapter_assert(
+    !WCOS_Operation_Journal_Retention::is_expired_terminal_record($retention_guard_record, time()),
+    'Retention considered a reconciled journal purgeable while its source blocker still existed.'
+);
+
 /* Finish the interrupted transition and prove a later explicit resolution clears it. */
 wcos_p2_adapter_assert(
     WCOS_Operation_Journal::mark_manual_reconciliation(
