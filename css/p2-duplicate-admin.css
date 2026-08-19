@@ -3,7 +3,19 @@ body.wcos-duplicate-modal-open {
 }
 
 .wcos-duplicate-launcher-description {
-    margin-left: 8px;
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
+.wcos-duplicate-launcher {
+    margin-right: 6px;
 }
 
 .wcos-duplicate-dialog[hidden] {
@@ -32,7 +44,7 @@ body.wcos-duplicate-modal-open {
     max-height: calc(100vh - 48px);
     overflow: auto;
     background: #fff;
-    border-radius: 4px;
+    border-radius: 6px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
     padding: 24px;
 }
