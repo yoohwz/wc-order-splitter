@@ -88,8 +88,36 @@ echo "p2-whole-line-plan-ok\n";
 require __DIR__ . '/p2-whole-line-runtime-smoke.php';
 require __DIR__ . '/p2-whole-line-blocker-fallback-smoke.php';
 require __DIR__ . '/p2-whole-line-stock-ownership-smoke.php';
-require __DIR__ . '/p2-strategy-planners-smoke.php';
-require __DIR__ . '/p2-strategy-adapter-smoke.php';
-require __DIR__ . '/p2-strategy-confirmation-smoke.php';
-require __DIR__ . '/p2-strategy-transport-smoke.php';
-require __DIR__ . '/p2-strategy-ui-readiness-smoke.php';
+
+/*
+ * Candidate builds keep the entire pre-enablement strategy regression suite by
+ * temporarily restoring the accepted hard-off strategy map. The same controller
+ * hooks are removed during that scope so these tests see the exact foundation
+ * boundary they originally accepted. Candidate gates/routes are restored before
+ * production-state candidate acceptance runs.
+ */
+$strategy_gate_reflection = new ReflectionClass('WCOS_Split_Strategy_Gates');
+$strategy_gate_states = $strategy_gate_reflection->getProperty('states');
+$strategy_gate_states->setAccessible(true);
+$candidate_strategy_states = $strategy_gate_states->getValue();
+$candidate_strategy_controller = WCOS_Split_Strategy_Admin_Controller::bootstrap();
+if ($candidate_strategy_controller instanceof WCOS_Split_Strategy_Admin_Controller) {
+	$candidate_strategy_controller->unregister_hooks();
+}
+$hard_off_strategy_states = $candidate_strategy_states;
+$hard_off_strategy_states[WCOS_Split_Strategy_Gates::CATEGORY] = false;
+$hard_off_strategy_states[WCOS_Split_Strategy_Gates::STOCK_STATUS] = false;
+$strategy_gate_states->setValue(null, $hard_off_strategy_states);
+
+try {
+	require __DIR__ . '/p2-strategy-planners-smoke.php';
+	require __DIR__ . '/p2-strategy-adapter-smoke.php';
+	require __DIR__ . '/p2-strategy-confirmation-smoke.php';
+	require __DIR__ . '/p2-strategy-transport-smoke.php';
+	require __DIR__ . '/p2-strategy-ui-readiness-smoke.php';
+} finally {
+	$strategy_gate_states->setValue(null, $candidate_strategy_states);
+	WCOS_Split_Strategy_Admin_Controller::bootstrap();
+}
+
+require __DIR__ . '/p2-strategy-sandbox-candidate-smoke.php';
