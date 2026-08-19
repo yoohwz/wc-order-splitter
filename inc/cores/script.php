@@ -33,6 +33,7 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-mutation-contract.php';
 		include_once $root . 'domain/class-wcos-operation-lock.php';
 		include_once $root . 'domain/class-wcos-feature-gates.php';
+		include_once $root . 'domain/class-wcos-split-strategy-gates.php';
 		include_once $root . 'domain/class-wcos-order-mutation-authorizer.php';
 		include_once $root . 'domain/class-wcos-order-item-meta-policy.php';
 		include_once $root . 'domain/class-wcos-order-item-cloner.php';
@@ -58,6 +59,8 @@ class WC_Order_Splitter_Script {
 		WCOS_Mutation_Recovery_Coordinator::bootstrap();
 		include_once $root . 'domain/class-wcos-split-preflight.php';
 		include_once $root . 'domain/class-wcos-split-woocommerce-adapter.php';
+		include_once $root . 'domain/class-wcos-category-split-planner.php';
+		include_once $root . 'domain/class-wcos-stock-status-split-planner.php';
 		include_once $root . 'domain/class-wcos-duplicate-preflight.php';
 		include_once $root . 'domain/class-wcos-duplicate-woocommerce-adapter.php';
 		include_once $root . 'domain/class-wcos-mutation-gateway.php';
@@ -78,8 +81,9 @@ class WC_Order_Splitter_Script {
 
 		/*
 		 * Legacy mutation handlers are deliberately never loaded here. Hardened
-		 * production transports must enter through WCOS_Mutation_Gateway; their
-		 * individual workflow gates remain the only execution authority.
+		 * production transports must enter through WCOS_Mutation_Gateway. Category
+		 * and Stock-status classes loaded above are read-only planners only; their
+		 * strategy gates remain hard-off and no production transport is registered.
 		 */
 	}
 }
