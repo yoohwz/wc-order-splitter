@@ -91,10 +91,17 @@ final class WCOS_Split_WooCommerce_Adapter {
             if (!$source instanceof WC_Order) {
                 throw new RuntimeException(__('The source order is no longer available.', 'wc-order-splitter'));
             }
-            return $this->apply_reconciliation_blocker(
+            $report = $this->apply_reconciliation_blocker(
                 $source,
                 WCOS_Split_Preflight::report($source, $precision)
             );
+            /*
+             * PII-free hash of the exact source state the server reviewed. The
+             * confirmation store must compare this against its own scoped reload
+             * before creating a token, closing Review -> confirmation TOCTOU.
+             */
+            $report['source_signature'] = WCOS_Order_Contract_Snapshot::source_signature($source);
+            return $report;
         } finally {
             WCOS_Price_Precision_Scope::end($precision_token);
         }
