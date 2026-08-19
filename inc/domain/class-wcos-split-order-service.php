@@ -23,9 +23,10 @@ final class WCOS_Split_Order_Service {
 	const OPERATION_META = '_wcos_operation_id';
 	const CHILD_KEY_META = '_wcos_split_child_key';
 
-	public function split(WC_Order $source, array $plan, $operation_id, $execution_policy = 'partial_lines_only') {
+	public function split(WC_Order $source, array $plan, $operation_id, $execution_policy = 'partial_lines_only', array $operation_context = array()) {
 		$operation_id = sanitize_key($operation_id);
 		$execution_policy = WCOS_Split_Execution_Policy::normalize($execution_policy);
+		$operation_context = $this->normalize_operation_context($operation_context, $execution_policy);
 		if (WCOS_Split_Execution_Policy::allows_whole_line_transfer($execution_policy)
 			&& (!class_exists('WCOS_Stock_Side_Effect_Guard') || !WCOS_Stock_Side_Effect_Guard::has_active_scope())) {
 			throw new RuntimeException(__('Whole-line Split requires an active request-local stock side-effect guard.', 'wc-order-splitter'));
@@ -54,6 +55,9 @@ final class WCOS_Split_Order_Service {
 		);
 		if (!$legacy_journal) {
 			$fingerprint_context['execution_policy'] = $execution_policy;
+		}
+		if (isset($operation_context['strategy_authority'])) {
+			$fingerprint_context['strategy_authority'] = $operation_context['strategy_authority'];
 		}
 		$fingerprint = WCOS_Mutation_Fingerprint::create(self::TYPE, $source->get_id(), $fingerprint_context);
 
@@ -140,6 +144,9 @@ final class WCOS_Split_Order_Service {
 					'before_contract' => $before_contract,
 					'source_stock_reduced' => $source_stock_reduced,
 				);
+				if (isset($operation_context['strategy_authority'])) {
+					$context['strategy_authority'] = $operation_context['strategy_authority'];
+				}
 				if (!WCOS_Operation_Journal::start($source, $operation_id, self::TYPE, $context, $fingerprint)) {
 					throw new RuntimeException(__('Unable to start the split operation journal.', 'wc-order-splitter'));
 				}
@@ -257,6 +264,23 @@ final class WCOS_Split_Order_Service {
 		} finally {
 			WCOS_Operation_Lock::release($source_id, $lease_token);
 		}
+	}
+
+	private function normalize_operation_context(array $operation_context, $execution_policy) {
+		foreach (array_keys($operation_context) as $key) {
+			if ('strategy_authority' !== $key) {
+				throw new InvalidArgumentException(__('Unknown Split operation authority context.', 'wc-order-splitter'));
+			}
+		}
+		if (!array_key_exists('strategy_authority', $operation_context)) {
+			return array();
+		}
+		if (WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER !== $execution_policy
+			|| !is_array($operation_context['strategy_authority'])
+			|| empty($operation_context['strategy_authority'])) {
+			throw new InvalidArgumentException(__('Semantic Split strategy authority requires the whole-line execution policy.', 'wc-order-splitter'));
+		}
+		return array('strategy_authority' => $operation_context['strategy_authority']);
 	}
 
 	private function assert_supported_source(WC_Order $source) {
