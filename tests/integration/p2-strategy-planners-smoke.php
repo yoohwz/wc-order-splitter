@@ -116,10 +116,12 @@ wcos_p2_adapter_assert(empty($ambiguous_report['supported']) && 'ambiguous_multi
 $ambiguous_order->delete(true);
 wp_delete_post($ambiguous_product->get_id(), true);
 
-/* Uncategorized is explicit rather than silently dropped. */
+/* Force a truly termless product: WooCommerce normally assigns its default product category. */
 $uncategorized_product = wcos_p2_adapter_product('WCOS Category uncategorized', '4.00');
 $categorized_product = wcos_p2_adapter_product('WCOS Category categorized', '5.00');
-wp_set_object_terms($uncategorized_product->get_id(), array(), 'product_cat');
+wp_delete_object_term_relationships($uncategorized_product->get_id(), 'product_cat');
+$uncategorized_terms = wp_get_post_terms($uncategorized_product->get_id(), 'product_cat');
+wcos_p2_adapter_assert(!is_wp_error($uncategorized_terms) && empty($uncategorized_terms), 'Unable to construct a truly termless Category planner fixture.');
 wp_set_object_terms($categorized_product->get_id(), array(absint($child_term['term_id'])), 'product_cat');
 $uncategorized_order = wc_create_order();
 $uncategorized_order->set_status('pending');
