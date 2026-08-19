@@ -7,7 +7,8 @@ defined('ABSPATH') || exit;
  *
  * Safety policy:
  * - shipping, fees, and coupons are never duplicated;
- * - every source product line must retain a positive quantity;
+ * - manual quantity Split keeps a positive residual on every affected line;
+ * - explicit server-built strategy policy may transfer a whole line;
  * - child orders are persisted as pending review;
  * - historical amounts/tax arrays are allocated at currency precision;
  * - reduced-stock markers are redistributed without touching physical stock;
@@ -22,8 +23,13 @@ final class WCOS_Split_Order_Service {
 	const OPERATION_META = '_wcos_operation_id';
 	const CHILD_KEY_META = '_wcos_split_child_key';
 
-	public function split(WC_Order $source, array $plan, $operation_id) {
+	public function split(WC_Order $source, array $plan, $operation_id, $execution_policy = 'partial_lines_only') {
 		$operation_id = sanitize_key($operation_id);
+		$execution_policy = WCOS_Split_Execution_Policy::normalize($execution_policy);
+		if (WCOS_Split_Execution_Policy::allows_whole_line_transfer($execution_policy)
+			&& (!class_exists('WCOS_Stock_Side_Effect_Guard') || !WCOS_Stock_Side_Effect_Guard::has_active_scope())) {
+			throw new RuntimeException(__('Whole-line Split requires an active request-local stock side-effect guard.', 'wc-order-splitter'));
+		}
 		if ('' === $operation_id) {
 			throw new InvalidArgumentException(__('A split operation ID is required.', 'wc-order-splitter'));
 		}
@@ -32,22 +38,35 @@ final class WCOS_Split_Order_Service {
 		}
 
 		$canonical_plan = WCOS_Split_Plan::canonicalize_request($plan);
-		$fingerprint = WCOS_Mutation_Fingerprint::create(
-			self::TYPE,
-			$source->get_id(),
-			array(
-				'policy_version' => self::POLICY_VERSION,
-				'plan' => $canonical_plan,
-				'shipping_policy' => 'keep_on_source',
-				'fee_policy' => 'keep_on_source',
-				'child_status' => 'pending',
-			)
-		);
-
 		$existing = WCOS_Operation_Journal::get($source, $operation_id);
+		$legacy_journal = is_array($existing)
+			&& (!isset($existing['context']) || !is_array($existing['context']) || !array_key_exists('execution_policy', $existing['context']));
+		if ($legacy_journal && WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY !== $execution_policy) {
+			throw new RuntimeException(__('A legacy Split journal cannot be resumed under the whole-line transfer policy.', 'wc-order-splitter'));
+		}
+
+		$fingerprint_context = array(
+			'policy_version' => self::POLICY_VERSION,
+			'plan' => $canonical_plan,
+			'shipping_policy' => 'keep_on_source',
+			'fee_policy' => 'keep_on_source',
+			'child_status' => 'pending',
+		);
+		if (!$legacy_journal) {
+			$fingerprint_context['execution_policy'] = $execution_policy;
+		}
+		$fingerprint = WCOS_Mutation_Fingerprint::create(self::TYPE, $source->get_id(), $fingerprint_context);
+
 		if (is_array($existing)) {
 			WCOS_Operation_Journal::assert_fingerprint($existing, $fingerprint);
-			if (isset($existing['status']) && 'completed' === $existing['status']) {
+			$status = isset($existing['status']) ? sanitize_key((string) $existing['status']) : '';
+			if ('manual_reconciliation' === $status) {
+				throw new RuntimeException(__('This Split operation requires manual reconciliation before it can continue.', 'wc-order-splitter'));
+			}
+			if ('manual_reconciled' === $status) {
+				throw new RuntimeException(__('This Split operation was manually reconciled and is closed.', 'wc-order-splitter'));
+			}
+			if ('completed' === $status) {
 				return $this->load_completed_children($source, $operation_id, $canonical_plan, $existing);
 			}
 		}
@@ -67,6 +86,12 @@ final class WCOS_Split_Order_Service {
 			$record = WCOS_Operation_Journal::get($source, $operation_id);
 			if (is_array($record)) {
 				WCOS_Operation_Journal::assert_fingerprint($record, $fingerprint);
+				$record_policy = isset($record['context']['execution_policy'])
+					? WCOS_Split_Execution_Policy::normalize($record['context']['execution_policy'])
+					: WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY;
+				if ($record_policy !== $execution_policy) {
+					throw new RuntimeException(__('The requested Split execution policy does not match the durable operation journal.', 'wc-order-splitter'));
+				}
 				$recovered = $this->try_finalize_persisted($source, $operation_id, $canonical_plan, $record);
 				if (is_array($recovered)) {
 					return $recovered;
@@ -75,11 +100,15 @@ final class WCOS_Split_Order_Service {
 				$expected_signature = isset($record['context']['source_signature']) ? (string) $record['context']['source_signature'] : '';
 				$current_signature = WCOS_Order_Contract_Snapshot::source_signature($source);
 				if ('' === $expected_signature || !hash_equals($expected_signature, $current_signature)) {
-					WCOS_Operation_Journal::require_recovery(
-						$source,
-						$operation_id,
-						array('reason' => 'source_changed_without_conserved_commit')
-					);
+					if ($this->whole_line_source_deletion_persisted($source, $record)) {
+						$this->mark_whole_line_manual_reconciliation($source, $operation_id, $record, 'source_changed_without_conserved_commit');
+					} else {
+						WCOS_Operation_Journal::require_recovery(
+							$source,
+							$operation_id,
+							array('reason' => 'source_changed_without_conserved_commit')
+						);
+					}
 					throw new RuntimeException(__('The source order changed after splitting started and the persisted state is not a conserved commit.', 'wc-order-splitter'));
 				}
 
@@ -88,19 +117,25 @@ final class WCOS_Split_Order_Service {
 				}
 				$normalized_plan = isset($record['context']['plan']) && is_array($record['context']['plan'])
 					? $record['context']['plan']
-					: WCOS_Split_Plan::normalize($source, $canonical_plan);
+					: WCOS_Split_Plan::normalize($source, $canonical_plan, $execution_policy);
 				$before_contract = isset($record['context']['before_contract']) && is_array($record['context']['before_contract'])
 					? $record['context']['before_contract']
 					: WCOS_Order_Contract_Snapshot::aggregate(array($source));
 				$source_stock_reduced = !empty($record['context']['source_stock_reduced']);
+				$fully_moved_item_ids = isset($record['context']['fully_moved_item_ids'])
+					? array_values(array_unique(array_filter(array_map('absint', (array) $record['context']['fully_moved_item_ids']))))
+					: array();
 			} else {
 				$this->assert_supported_source($source);
-				$normalized_plan = WCOS_Split_Plan::normalize($source, $canonical_plan);
+				$normalized_plan = WCOS_Split_Plan::normalize($source, $canonical_plan, $execution_policy);
+				$fully_moved_item_ids = WCOS_Split_Plan::fully_moved_item_ids($source, $normalized_plan, $execution_policy);
 				$before_contract = WCOS_Order_Contract_Snapshot::aggregate(array($source));
 				$source_stock_reduced = (bool) $source->get_data_store()->get_stock_reduced($source_id);
 				$context = array(
 					'plan' => $normalized_plan,
 					'child_keys' => WCOS_Split_Plan::child_keys($normalized_plan),
+					'execution_policy' => $execution_policy,
+					'fully_moved_item_ids' => $fully_moved_item_ids,
 					'source_signature' => WCOS_Order_Contract_Snapshot::source_signature($source),
 					'before_contract' => $before_contract,
 					'source_stock_reduced' => $source_stock_reduced,
@@ -117,7 +152,7 @@ final class WCOS_Split_Order_Service {
 			$this->assert_supported_source($source);
 			$execution_stock_before = WCOS_Order_Contract_Snapshot::product_stock($source);
 			$tax_templates = WCOS_Tax_Item_Synchronizer::templates($source);
-			$expected_children = $this->build_mutation($source, $normalized_plan, $operation_id, $tax_templates);
+			$expected_children = $this->build_mutation($source, $normalized_plan, $operation_id, $tax_templates, $execution_policy);
 			$existing_children = $this->discover_children($source, $operation_id);
 			$children = $this->persist_or_reuse_children(
 				$source,
@@ -161,7 +196,7 @@ final class WCOS_Split_Order_Service {
 
 			$source = wc_get_order($source_id);
 			$children = $this->reload_children($children);
-			$this->verify_persisted_split($source, $children, $normalized_plan, $operation_id, $before_contract, $source_stock_reduced);
+			$this->verify_persisted_split($source, $children, $normalized_plan, $operation_id, $before_contract, $source_stock_reduced, $fully_moved_item_ids);
 			WCOS_Order_Contract_Snapshot::assert_product_stock_equal(
 				$execution_stock_before,
 				WCOS_Order_Contract_Snapshot::product_stock($source)
@@ -187,14 +222,18 @@ final class WCOS_Split_Order_Service {
 						return $recovered;
 					}
 				} catch (Throwable $recovery_error) {
-					WCOS_Operation_Journal::require_recovery(
-						$fresh_source,
-						$operation_id,
-						array(
-							'error' => $throwable->getMessage(),
-							'recovery_error' => $recovery_error->getMessage(),
-						)
-					);
+					if ($this->whole_line_source_deletion_persisted($fresh_source, $record)) {
+						$this->mark_whole_line_manual_reconciliation($fresh_source, $operation_id, $record, 'whole_line_recovery_verification_failed', $recovery_error);
+					} else {
+						WCOS_Operation_Journal::require_recovery(
+							$fresh_source,
+							$operation_id,
+							array(
+								'error' => $throwable->getMessage(),
+								'recovery_error' => $recovery_error->getMessage(),
+							)
+						);
+					}
 					throw $recovery_error;
 				}
 
@@ -208,6 +247,8 @@ final class WCOS_Split_Order_Service {
 							'target_order_ids' => $this->child_ids($this->discover_children($fresh_source, $operation_id)),
 						)
 					);
+				} elseif ($this->whole_line_source_deletion_persisted($fresh_source, $record)) {
+					$this->mark_whole_line_manual_reconciliation($fresh_source, $operation_id, $record, 'whole_line_source_state_ambiguous', $throwable);
 				} else {
 					WCOS_Operation_Journal::require_recovery($fresh_source, $operation_id, array('error' => $throwable->getMessage()));
 				}
@@ -257,7 +298,7 @@ final class WCOS_Split_Order_Service {
 		}
 	}
 
-	private function build_mutation(WC_Order $source, array $plan, $operation_id, array $tax_templates) {
+	private function build_mutation(WC_Order $source, array $plan, $operation_id, array $tax_templates, $execution_policy) {
 		$precision = wc_get_price_decimals();
 		$children = array();
 		foreach (WCOS_Split_Plan::child_keys($plan) as $child_key) {
@@ -265,7 +306,11 @@ final class WCOS_Split_Order_Service {
 		}
 
 		foreach ($source->get_items('line_item') as $item_id => $source_item) {
-			$this->allocate_line($source_item, (int) $item_id, $plan, $children, $precision);
+			$this->allocate_line($source, $source_item, (int) $item_id, $plan, $children, $precision, $execution_policy);
+		}
+
+		if (empty($source->get_items('line_item'))) {
+			throw new RuntimeException(__('Whole-line Split may not remove every product line from the source order.', 'wc-order-splitter'));
 		}
 
 		WCOS_Tax_Item_Synchronizer::synchronize($source, $tax_templates, $precision, true);
@@ -302,7 +347,7 @@ final class WCOS_Split_Order_Service {
 		return $child;
 	}
 
-	private function allocate_line(WC_Order_Item_Product $source_item, $item_id, array $plan, array $children, $precision) {
+	private function allocate_line(WC_Order $source, WC_Order_Item_Product $source_item, $item_id, array $plan, array $children, $precision, $execution_policy) {
 		$source_quantity_units = WCOS_Decimal::to_units($source_item->get_quantity(), 6);
 		$weights = array();
 		$split_units = 0;
@@ -319,10 +364,15 @@ final class WCOS_Split_Order_Service {
 		}
 
 		$remaining_units = $source_quantity_units - $split_units;
-		if ($remaining_units <= 0) {
-			throw new RuntimeException(__('A source line would be removed by the split plan.', 'wc-order-splitter'));
+		if ($remaining_units < 0) {
+			throw new RuntimeException(__('A Split plan allocated more than the source line quantity.', 'wc-order-splitter'));
 		}
-		$weights = array_merge(array('source' => WCOS_Decimal::from_units($remaining_units, 6)), $weights);
+		if (0 === $remaining_units && !WCOS_Split_Execution_Policy::allows_whole_line_transfer($execution_policy)) {
+			throw new RuntimeException(__('The active Split policy does not allow a source line to be removed.', 'wc-order-splitter'));
+		}
+		if ($remaining_units > 0) {
+			$weights = array_merge(array('source' => WCOS_Decimal::from_units($remaining_units, 6)), $weights);
+		}
 
 		$subtotals = WCOS_Amount_Allocator::allocate($source_item->get_subtotal(), $weights, $precision);
 		$totals = WCOS_Amount_Allocator::allocate($source_item->get_total(), $weights, $precision);
@@ -332,20 +382,6 @@ final class WCOS_Split_Order_Service {
 		if ('' !== $reduced_stock) {
 			$reduced_allocations = WCOS_Amount_Allocator::allocate($reduced_stock, $weights, 6);
 		}
-
-		$source_taxes = $tax_allocations['source'];
-		$source_result = $source_item->set_props(array(
-			'quantity' => WCOS_Decimal::from_units($remaining_units, 6),
-			'subtotal' => $subtotals['source'],
-			'total' => $totals['source'],
-			'taxes' => $source_taxes,
-			'subtotal_tax' => $this->sum_tax_bucket($source_taxes['subtotal'], $precision),
-			'total_tax' => $this->sum_tax_bucket($source_taxes['total'], $precision),
-		));
-		if (is_wp_error($source_result)) {
-			throw new RuntimeException($source_result->get_error_message());
-		}
-		$this->replace_reduced_stock($source_item, isset($reduced_allocations['source']) ? $reduced_allocations['source'] : null);
 
 		foreach ($weights as $destination => $quantity) {
 			if ('source' === $destination) {
@@ -368,6 +404,32 @@ final class WCOS_Split_Order_Service {
 			$child_item->add_meta_data('_wcos_source_item_id', $item_id, true);
 			$this->replace_reduced_stock($child_item, isset($reduced_allocations[$destination]) ? $reduced_allocations[$destination] : null);
 			$children[$destination]->add_item($child_item);
+		}
+
+		if ($remaining_units > 0) {
+			$source_taxes = $tax_allocations['source'];
+			$source_result = $source_item->set_props(array(
+				'quantity' => WCOS_Decimal::from_units($remaining_units, 6),
+				'subtotal' => $subtotals['source'],
+				'total' => $totals['source'],
+				'taxes' => $source_taxes,
+				'subtotal_tax' => $this->sum_tax_bucket($source_taxes['subtotal'], $precision),
+				'total_tax' => $this->sum_tax_bucket($source_taxes['total'], $precision),
+			));
+			if (is_wp_error($source_result)) {
+				throw new RuntimeException($source_result->get_error_message());
+			}
+			$this->replace_reduced_stock($source_item, isset($reduced_allocations['source']) ? $reduced_allocations['source'] : null);
+			return;
+		}
+
+		/*
+		 * WC_Order::remove_item() only marks this persisted item for deletion on
+		 * the later source save. The product-stock lifecycle is deliberately not
+		 * invoked here; the request-local stock guard remains the safety proof.
+		 */
+		if (false === $source->remove_item($item_id)) {
+			throw new RuntimeException(__('The fully allocated source line could not be staged for removal.', 'wc-order-splitter'));
 		}
 	}
 
@@ -507,10 +569,13 @@ final class WCOS_Split_Order_Service {
 		}
 
 		$source_stock_reduced = !empty($record['context']['source_stock_reduced']);
+		$fully_moved_item_ids = isset($record['context']['fully_moved_item_ids'])
+			? array_values(array_unique(array_filter(array_map('absint', (array) $record['context']['fully_moved_item_ids']))))
+			: array();
 		$this->apply_relations($source, $children);
 		$source->save_meta_data();
 		$this->synchronize_child_stock_flags($children, $source_stock_reduced);
-		$this->verify_persisted_split($source, $children, $canonical_plan, $operation_id, $before_contract, $source_stock_reduced);
+		$this->verify_persisted_split($source, $children, $canonical_plan, $operation_id, $before_contract, $source_stock_reduced, $fully_moved_item_ids);
 
 		if (!WCOS_Operation_Journal::mark_committed($source, $operation_id, array('target_order_ids' => $this->child_ids($children), 'recovered' => true))) {
 			throw new RuntimeException(__('Unable to record the recovered split commit point.', 'wc-order-splitter'));
@@ -522,12 +587,20 @@ final class WCOS_Split_Order_Service {
 		return array_values($children);
 	}
 
-	private function verify_persisted_split(WC_Order $source, array $children, array $plan, $operation_id, array $before_contract, $source_stock_reduced) {
+	private function verify_persisted_split(WC_Order $source, array $children, array $plan, $operation_id, array $before_contract, $source_stock_reduced, array $fully_moved_item_ids = array()) {
 		if (!$source) {
 			throw new RuntimeException(__('The source order could not be reloaded after split persistence.', 'wc-order-splitter'));
 		}
 		if (array_keys($children) !== WCOS_Split_Plan::child_keys($plan)) {
 			throw new RuntimeException(__('The persisted split child set does not match the normalized plan.', 'wc-order-splitter'));
+		}
+		if (empty($source->get_items('line_item'))) {
+			throw new RuntimeException(__('The persisted source order no longer contains a product line.', 'wc-order-splitter'));
+		}
+		foreach ($fully_moved_item_ids as $source_item_id) {
+			if ($source->get_item(absint($source_item_id)) instanceof WC_Order_Item_Product) {
+				throw new RuntimeException(__('A whole-line Split source item remained persisted after full transfer.', 'wc-order-splitter'));
+			}
 		}
 		$this->assert_conserved($before_contract, array_merge(array($source), array_values($children)));
 
@@ -603,6 +676,44 @@ final class WCOS_Split_Order_Service {
 			}
 		}
 		return array_values(array_unique(array_map('absint', $ids)));
+	}
+
+	private function whole_line_source_deletion_persisted(WC_Order $source, array $record) {
+		$policy = isset($record['context']['execution_policy'])
+			? WCOS_Split_Execution_Policy::normalize($record['context']['execution_policy'])
+			: WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY;
+		if (!WCOS_Split_Execution_Policy::allows_whole_line_transfer($policy)) {
+			return false;
+		}
+		$item_ids = isset($record['context']['fully_moved_item_ids'])
+			? array_values(array_unique(array_filter(array_map('absint', (array) $record['context']['fully_moved_item_ids']))))
+			: array();
+		if (empty($item_ids)) {
+			return false;
+		}
+		foreach ($item_ids as $item_id) {
+			if (!$source->get_item($item_id)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private function mark_whole_line_manual_reconciliation(WC_Order $source, $operation_id, array $record, $reason, Throwable $throwable = null) {
+		if (!class_exists('WCOS_Manual_Reconciliation_Blocker') || !WCOS_Manual_Reconciliation_Blocker::block($source, $operation_id)) {
+			return false;
+		}
+		$context = array(
+			'reason' => sanitize_key((string) $reason),
+			'workflow' => 'split',
+			'execution_policy' => isset($record['context']['execution_policy']) ? $record['context']['execution_policy'] : '',
+			'fully_moved_item_ids' => isset($record['context']['fully_moved_item_ids']) ? $record['context']['fully_moved_item_ids'] : array(),
+			'automatic_compensation_allowed' => false,
+		);
+		if ($throwable) {
+			$context['error'] = $throwable->getMessage();
+		}
+		return WCOS_Operation_Journal::mark_manual_reconciliation($source, $operation_id, $context);
 	}
 
 	private function add_notes_best_effort(WC_Order $source, array $children) {
