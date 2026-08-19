@@ -39,13 +39,21 @@ final class WCOS_Split_Confirmation_Store {
         try {
             /*
              * Review preflight was evaluated under this precision. Rehydrate the
-             * source under the same precision before capturing its confirmation
-             * signature so tax rounding during order-item hydration cannot make
-             * the execute step report a false source_changed conflict.
+             * source under the same precision, then require it to match the
+             * PII-free signature captured by preflight. This closes the narrow
+             * Review -> confirmation TOCTOU window before a token is issued.
              */
             $scoped_source = wc_get_order($source->get_id());
             if (!$scoped_source instanceof WC_Order) {
                 throw new RuntimeException(__('The source order is no longer available.', 'wc-order-splitter'));
+            }
+            $reviewed_signature = isset($preflight['source_signature']) ? (string) $preflight['source_signature'] : '';
+            $current_signature = WCOS_Order_Contract_Snapshot::source_signature($scoped_source);
+            if ('' === $reviewed_signature || !hash_equals($reviewed_signature, $current_signature)) {
+                throw new WCOS_Split_Confirmation_Exception(
+                    'source_changed',
+                    __('The order changed while the Split plan was being reviewed. Review the current order state again before creating a confirmation.', 'wc-order-splitter')
+                );
             }
 
             $now = time();
@@ -55,7 +63,7 @@ final class WCOS_Split_Confirmation_Store {
                 'token_hash' => self::token_hash($token),
                 'source_order_id' => $scoped_source->get_id(),
                 'user_id' => $user_id,
-                'source_signature' => WCOS_Order_Contract_Snapshot::source_signature($scoped_source),
+                'source_signature' => $current_signature,
                 'plan' => WCOS_Split_Plan::canonicalize_request($plan),
                 'price_precision' => $precision,
                 'policy_version' => isset($preflight['policy']['policy_version']) ? absint($preflight['policy']['policy_version']) : 0,
