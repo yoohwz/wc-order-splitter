@@ -31,11 +31,7 @@
 }
 
 .wcos-strategy-feedback {
-    margin: 0 0 16px;
-}
-
-.wcos-strategy-feedback:empty {
-    display: none;
+    margin: 0;
 }
 
 .wcos-strategy-feedback .wcos-strategy-status {
@@ -49,7 +45,7 @@
 }
 
 .wcos-strategy-feedback .notice:last-child {
-    margin-bottom: 0;
+    margin-bottom: 12px;
 }
 
 .wcos-strategy-policy {
