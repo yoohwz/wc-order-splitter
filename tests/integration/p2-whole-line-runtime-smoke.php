@@ -49,6 +49,56 @@ try {
 }
 wcos_p2_adapter_assert($guard_rejected, 'Whole-line runtime executed without the mandatory stock side-effect guard.');
 wcos_p2_adapter_assert(null === WCOS_Operation_Journal::get($guard_source, $guard_operation), 'Guard rejection created a whole-line journal.');
+
+/* Destructive execution authority is immutable once the durable journal starts. */
+$authority_operation = 'p2-whole-line-authority-' . wp_generate_uuid4();
+$authority_started = WCOS_Operation_Journal::start(
+	$guard_source,
+	$authority_operation,
+	'split',
+	array(
+		'execution_policy' => WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER,
+		'fully_moved_item_ids' => array($guard_item_a),
+	),
+	hash('sha256', $authority_operation)
+);
+wcos_p2_adapter_assert($authority_started, 'Whole-line authority fixture could not start its durable journal.');
+wcos_p2_adapter_assert(
+	!WCOS_Operation_Journal::checkpoint(
+		$guard_source,
+		$authority_operation,
+		'tamper_execution_policy',
+		array('execution_policy' => WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY)
+	),
+	'Whole-line journal allowed execution_policy to change after start.'
+);
+wcos_p2_adapter_assert(
+	!WCOS_Operation_Journal::checkpoint(
+		$guard_source,
+		$authority_operation,
+		'tamper_fully_moved_items',
+		array('fully_moved_item_ids' => array($guard_item_b))
+	),
+	'Whole-line journal allowed fully_moved_item_ids to change after start.'
+);
+wcos_p2_adapter_assert(
+	WCOS_Operation_Journal::checkpoint(
+		$guard_source,
+		$authority_operation,
+		'authority_preserved',
+		array('probe' => 'ok')
+	),
+	'Whole-line journal rejected a non-authority checkpoint after immutability checks.'
+);
+$authority_record = WCOS_Operation_Journal::get($guard_source, $authority_operation);
+wcos_p2_adapter_assert(
+	is_array($authority_record)
+	&& WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER === $authority_record['context']['execution_policy']
+	&& array($guard_item_a) === array_values($authority_record['context']['fully_moved_item_ids']),
+	'Whole-line journal did not preserve its original destructive execution authority.'
+);
+WCOS_Operation_Journal::delete($guard_source, $authority_operation);
+
 $guard_source->delete(true);
 wp_delete_post($guard_product_a->get_id(), true);
 wp_delete_post($guard_product_b->get_id(), true);
