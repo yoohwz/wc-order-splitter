@@ -31,7 +31,8 @@ class WooCommerce_Order_Splitter {
 		$wcos_plugin_version = isset($wcos_plugin_data['Version']) ? $wcos_plugin_data['Version'] : '';
 
 		if (!defined('WC_ORDER_SPLITTER_VERSION')) {
-			define('WC_ORDER_SPLITTER_VERSION', $wcos_plugin_version);
+			/* Candidate-only suffix forces refreshed Backbone modal JS/CSS while header stays 1.4.14. */
+			define('WC_ORDER_SPLITTER_VERSION', $wcos_plugin_version . '-sandbox-ui3');
 		}
 
 		add_filter('plugin_action_links_' . plugin_basename(__FILE__), array($this, 'add_action_links'));
