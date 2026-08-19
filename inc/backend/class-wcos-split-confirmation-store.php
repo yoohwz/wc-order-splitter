@@ -37,22 +37,35 @@ final class WCOS_Split_Confirmation_Store {
         $precision = WCOS_Price_Precision_Scope::validate(isset($preflight['price_precision']) ? $preflight['price_precision'] : wc_get_price_decimals());
         $precision_token = WCOS_Price_Precision_Scope::begin($precision);
         try {
+            $reviewed_signature = isset($preflight['source_signature']) ? (string) $preflight['source_signature'] : '';
+
             /*
-             * Review preflight was evaluated under this precision. Rehydrate the
-             * source under the same precision, then require it to match the
-             * PII-free signature captured by preflight. This closes the narrow
-             * Review -> confirmation TOCTOU window before a token is issued.
+             * The passed source is the exact object the strict request parser
+             * validated. Require it to match the fresh preflight snapshot first,
+             * closing parser -> preflight races inside one Review request.
+             */
+            $parsed_signature = WCOS_Order_Contract_Snapshot::source_signature($source);
+            if ('' === $reviewed_signature || !hash_equals($reviewed_signature, $parsed_signature)) {
+                throw new WCOS_Split_Confirmation_Exception(
+                    'source_changed',
+                    __('The order changed while the Split plan was being reviewed. Review the current order state again before creating a confirmation.', 'wc-order-splitter')
+                );
+            }
+
+            /*
+             * Rehydrate again under the same reviewed precision and require the
+             * database state to remain identical before issuing an operation ID
+             * and token. Any later edit is caught by verify() before mutation.
              */
             $scoped_source = wc_get_order($source->get_id());
             if (!$scoped_source instanceof WC_Order) {
                 throw new RuntimeException(__('The source order is no longer available.', 'wc-order-splitter'));
             }
-            $reviewed_signature = isset($preflight['source_signature']) ? (string) $preflight['source_signature'] : '';
             $current_signature = WCOS_Order_Contract_Snapshot::source_signature($scoped_source);
-            if ('' === $reviewed_signature || !hash_equals($reviewed_signature, $current_signature)) {
+            if (!hash_equals($reviewed_signature, $current_signature)) {
                 throw new WCOS_Split_Confirmation_Exception(
                     'source_changed',
-                    __('The order changed while the Split plan was being reviewed. Review the current order state again before creating a confirmation.', 'wc-order-splitter')
+                    __('The order changed while the Split confirmation was being created. Review the current order state again.', 'wc-order-splitter')
                 );
             }
 
