@@ -275,14 +275,18 @@ try {
     wcos_p2_adapter_assert(false === strpos($html, 'PrivateFirstNameProbe'), 'Billing first name leaked into the Split dialog.');
     wcos_p2_adapter_assert(false === strpos($html, 'private-probe@example.test'), 'Billing email leaked into the Split dialog.');
 
-    /* Client script keeps user-visible values in text nodes and preserves keyboard focus semantics. */
-    $js_path = dirname(__DIR__, 2) . '/js/p2-split-admin.js';
-    $js = file_get_contents($js_path);
+    /* The client delegates keyboard/focus lifecycle to WooCommerce Backbone modal. */
+    $root = dirname(__DIR__, 2);
+    $js = file_get_contents($root . '/js/p2-split-admin.js');
     wcos_p2_adapter_assert(is_string($js) && '' !== $js, 'Unable to read the Split admin client script.');
     wcos_p2_adapter_assert(false === strpos($js, 'innerHTML'), 'Split admin client uses innerHTML for mutation result/UI content.');
     wcos_p2_adapter_assert(false === strpos($js, 'alert('), 'Split admin client uses blocking alert() UI.');
-    foreach (array('textContent', "event.key === 'Escape'", "event.key !== 'Tab'", 'data-child-key', 'returnFocus.focus()') as $needle) {
-        wcos_p2_adapter_assert(false !== strpos($js, $needle), 'Split admin client is missing accessibility/security behavior: ' . $needle);
+    foreach (array('textContent', 'data-child-key', 'window.WCOSBackboneModal.open', "modalClass: 'wcos-split-backbone-modal'", 'removeExternalDescription') as $needle) {
+        wcos_p2_adapter_assert(false !== strpos($js, $needle), 'Split admin client is missing Backbone-modal/security behavior: ' . $needle);
+    }
+    $bridge = file_get_contents($root . '/js/p2-backbone-modal.js');
+    foreach (array('$.fn.WCBackboneModal', '.WCBackboneModal({', 'wc-backbone-modal-content', 'wc-backbone-modal-header', 'wc-backbone-modal-backdrop modal-close', 'wc_backbone_modal_removed') as $needle) {
+        wcos_p2_adapter_assert(is_string($bridge) && false !== strpos($bridge, $needle), 'Split Backbone modal bridge is missing native WooCommerce behavior: ' . $needle);
     }
 
     ob_start();
