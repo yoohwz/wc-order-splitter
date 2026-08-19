@@ -119,9 +119,16 @@ final class WCOS_Split_Confirmation_Store {
                 if ('' === $expected || !hash_equals($expected, $actual)) {
                     throw new WCOS_Split_Confirmation_Exception('source_changed', __('The order changed after the Split plan was reviewed. Review the plan again before executing it.', 'wc-order-splitter'));
                 }
-            } elseif (isset($journal['context']['price_precision'])
-                && (int) $journal['context']['price_precision'] !== $precision) {
-                throw new WCOS_Split_Confirmation_Exception('precision_mismatch', __('The Split confirmation precision no longer matches the durable operation journal.', 'wc-order-splitter'));
+            } else {
+                $journal_context = isset($journal['context']) && is_array($journal['context']) ? $journal['context'] : array();
+                if (!array_key_exists('price_precision', $journal_context)
+                    || (int) $journal_context['price_precision'] !== $precision) {
+                    throw new WCOS_Split_Confirmation_Exception('precision_mismatch', __('The Split confirmation precision no longer matches the durable operation journal.', 'wc-order-splitter'));
+                }
+                if (!array_key_exists('policy_version', $journal_context)
+                    || (int) $journal_context['policy_version'] !== (int) $record['policy_version']) {
+                    throw new WCOS_Split_Confirmation_Exception('policy_changed', __('The durable Split operation no longer matches the safety policy that was reviewed.', 'wc-order-splitter'));
+                }
             }
 
             $record['operation_id'] = $operation_id;
@@ -161,8 +168,14 @@ final class WCOS_Split_Confirmation_Store {
         }
 
         $context = isset($journal['context']) && is_array($journal['context']) ? $journal['context'] : array();
-        if (empty($context['plan']) || !is_array($context['plan']) || !array_key_exists('price_precision', $context)) {
+        if (empty($context['plan'])
+            || !is_array($context['plan'])
+            || !array_key_exists('price_precision', $context)
+            || !array_key_exists('policy_version', $context)) {
             throw new WCOS_Split_Confirmation_Exception('journal_incomplete', __('The durable Split operation is missing replay information and requires manual review.', 'wc-order-splitter'));
+        }
+        if ((int) $context['policy_version'] !== (int) WCOS_Split_Preflight::POLICY_VERSION) {
+            throw new WCOS_Split_Confirmation_Exception('policy_changed', __('The Split safety policy changed after this durable operation started. Review the operation manually before continuing it.', 'wc-order-splitter'));
         }
 
         return array(
@@ -171,7 +184,7 @@ final class WCOS_Split_Confirmation_Store {
             'source_order_id' => $source->get_id(),
             'plan' => WCOS_Split_Plan::canonicalize_request($context['plan']),
             'price_precision' => WCOS_Price_Precision_Scope::validate($context['price_precision']),
-            'policy_version' => isset($context['policy_version']) ? absint($context['policy_version']) : 0,
+            'policy_version' => (int) $context['policy_version'],
             'replay_authority' => 'journal',
         );
     }
