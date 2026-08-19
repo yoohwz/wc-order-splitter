@@ -83,20 +83,45 @@ wcos_control_assert(!empty($summary_entry['completed_at']), 'Audit summary is mi
 wcos_control_assert(WCOS_Operation_Journal::delete($order, $journal_operation), 'Durable journal cleanup failed.');
 $order->delete(true);
 
-require __DIR__ . '/p2-quantity-split-adapter-smoke.php';
-require __DIR__ . '/p2-manual-reconciliation-smoke.php';
-require __DIR__ . '/p2-manual-reconciliation-crash-window-smoke.php';
-require __DIR__ . '/p2-price-precision-smoke.php';
-require __DIR__ . '/p2-stock-matrix-smoke.php';
-require __DIR__ . '/p2-stock-cancellation-lifecycle-smoke.php';
-require __DIR__ . '/p2-charge-tax-matrix-smoke.php';
-require __DIR__ . '/p2-production-side-effect-smoke.php';
-require __DIR__ . '/p2-metadata-compatibility-smoke.php';
-require __DIR__ . '/p2-journal-retention-smoke.php';
-require __DIR__ . '/p2-admin-transport-smoke.php';
-require __DIR__ . '/p2-admin-client-state-smoke.php';
-require __DIR__ . '/p2-review-confirmation-toctou-smoke.php';
-require __DIR__ . '/p2-policy-replay-smoke.php';
-require __DIR__ . '/p2-durable-replay-smoke.php';
+/*
+ * Preserve the complete hard-off P2 regression suite even after the first
+ * production workflow is enabled. This Reflection scope is test-only: it
+ * temporarily restores the pre-enablement gate map, executes the previously
+ * accepted foundation contracts unchanged, then restores the real release map.
+ */
+$feature_gate_reflection = new ReflectionClass('WCOS_Feature_Gates');
+$feature_gate_states = $feature_gate_reflection->getProperty('states');
+$feature_gate_states->setAccessible(true);
+$release_gate_states = $feature_gate_states->getValue();
+$hard_off_gate_states = $release_gate_states;
+foreach ($hard_off_gate_states as $workflow => $enabled) {
+	$hard_off_gate_states[$workflow] = false;
+}
+$feature_gate_states->setValue(null, $hard_off_gate_states);
+
+try {
+	require __DIR__ . '/p2-quantity-split-adapter-smoke.php';
+	require __DIR__ . '/p2-manual-reconciliation-smoke.php';
+	require __DIR__ . '/p2-manual-reconciliation-crash-window-smoke.php';
+	require __DIR__ . '/p2-price-precision-smoke.php';
+	require __DIR__ . '/p2-stock-matrix-smoke.php';
+	require __DIR__ . '/p2-stock-cancellation-lifecycle-smoke.php';
+	require __DIR__ . '/p2-charge-tax-matrix-smoke.php';
+	require __DIR__ . '/p2-production-side-effect-smoke.php';
+	require __DIR__ . '/p2-metadata-compatibility-smoke.php';
+	require __DIR__ . '/p2-journal-retention-smoke.php';
+	require __DIR__ . '/p2-admin-transport-smoke.php';
+	require __DIR__ . '/p2-admin-client-state-smoke.php';
+	require __DIR__ . '/p2-review-confirmation-toctou-smoke.php';
+	require __DIR__ . '/p2-policy-replay-smoke.php';
+	require __DIR__ . '/p2-durable-replay-smoke.php';
+} finally {
+	$feature_gate_states->setValue(null, $release_gate_states);
+}
+
+wcos_control_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT), 'Release Split gate was not restored after hard-off regression scope.');
+wcos_control_assert(WC_Order_Splitter_Safety_Guard::mutations_enabled(), 'Safety guard did not restore the production-enabled state.');
+
+require __DIR__ . '/p2-production-split-enabled-smoke.php';
 
 echo "operation-lock-and-journal-ok\n";

@@ -19,7 +19,7 @@ function wcos_governance_expect_runtime(callable $callback, $message) {
 	throw new RuntimeException($message);
 }
 
-/* External configuration must never enable the unfinished P1 runtime. */
+/* External configuration must never alter the internally approved gate set. */
 foreach (array(
 	'WC_ORDER_SPLITTER_MUTATIONS_ENABLED',
 	'WC_ORDER_SPLITTER_SPLIT_ENABLED',
@@ -29,8 +29,17 @@ foreach (array(
 		define($constant, true);
 	}
 }
-wcos_governance_assert(!WCOS_Feature_Gates::any_enabled(), 'External constants enabled an unfinished workflow.');
-wcos_governance_assert(!WC_Order_Splitter_Safety_Guard::mutations_enabled(), 'Safety mode was externally overridden.');
+wcos_governance_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT), 'Approved manual quantity Split gate is not enabled.');
+wcos_governance_assert(WCOS_Feature_Gates::any_enabled(), 'Approved production workflow set was reported as entirely disabled.');
+wcos_governance_assert(WC_Order_Splitter_Safety_Guard::mutations_enabled(), 'Safety guard did not reflect the approved production gate set.');
+foreach (array(
+	WCOS_Feature_Gates::DUPLICATE,
+	WCOS_Feature_Gates::MERGE,
+	WCOS_Feature_Gates::RETURN_ORDER,
+	WCOS_Feature_Gates::BULK_RETURN,
+) as $disabled_workflow) {
+	wcos_governance_assert(!WCOS_Feature_Gates::enabled($disabled_workflow), 'An unapproved mutation workflow became production-enabled.');
+}
 
 $order = wc_create_order();
 $order->set_status('pending');
@@ -90,7 +99,7 @@ wcos_governance_expect_runtime(
 	static function() use ($gateway, $order) {
 		$gateway->duplicate($order, 'governance-disabled-' . wp_generate_uuid4());
 	},
-	'The mandatory gateway did not enforce the hard-off feature gate.'
+	'The mandatory gateway did not keep Duplicate hard-off.'
 );
 
 /* Public business metadata is copied; private metadata needs an explicit adapter. */
