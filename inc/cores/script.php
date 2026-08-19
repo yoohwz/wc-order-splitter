@@ -57,6 +57,8 @@ class WC_Order_Splitter_Script {
 		WCOS_Mutation_Recovery_Coordinator::bootstrap();
 		include_once $root . 'domain/class-wcos-split-preflight.php';
 		include_once $root . 'domain/class-wcos-split-woocommerce-adapter.php';
+		include_once $root . 'domain/class-wcos-duplicate-preflight.php';
+		include_once $root . 'domain/class-wcos-duplicate-woocommerce-adapter.php';
 		include_once $root . 'domain/class-wcos-mutation-gateway.php';
 
 		include_once $root . 'backend/class-wcos-split-request-parser.php';
@@ -64,15 +66,19 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'backend/class-wcos-split-admin-controller.php';
 		new WCOS_Split_Admin_Controller();
 
+		include_once $root . 'backend/class-wcos-duplicate-confirmation-store.php';
+		include_once $root . 'backend/class-wcos-duplicate-admin-controller.php';
+		new WCOS_Duplicate_Admin_Controller();
+
 		include_once $root . 'backend/settings.php';
 		include_once $root . 'backend/orders.php';
 		include_once $root . 'backend/yoohw-woo-settings-tabs-reorder.php';
 		include_once plugin_dir_path(__FILE__) . 'safety.php';
 
 		/*
-		 * Legacy mutation handlers are deliberately never loaded here. Production
-		 * Split transport is isolated behind WCOS_Mutation_Gateway and remains
-		 * non-runnable while WCOS_Feature_Gates::SPLIT is hard-off.
+		 * Legacy mutation handlers are deliberately never loaded here. Hardened
+		 * production transports must enter through WCOS_Mutation_Gateway; their
+		 * individual workflow gates remain the only execution authority.
 		 */
 	}
 }

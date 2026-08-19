@@ -9,7 +9,7 @@ defined('ABSPATH') || exit;
 final class WCOS_Duplicate_Order_Service {
 
 	const TYPE = 'duplicate';
-	const POLICY_VERSION = 3;
+	const POLICY_VERSION = 4;
 
 	public function duplicate(WC_Order $source, $operation_id) {
 		$operation_id = sanitize_key($operation_id);
@@ -89,6 +89,7 @@ final class WCOS_Duplicate_Order_Service {
 					'source_signature' => WCOS_Order_Contract_Snapshot::source_signature($source),
 					'source_copy_context_signature' => WCOS_Order_Copy_Context::signature($source),
 					'source_contract' => $source_contract,
+					'policy_version' => class_exists('WCOS_Duplicate_Preflight') ? (int) WCOS_Duplicate_Preflight::POLICY_VERSION : 0,
 				);
 				if (!WCOS_Operation_Journal::start($source, $operation_id, self::TYPE, $context, $fingerprint)) {
 					throw new RuntimeException(__('Unable to start the duplicate operation journal.', 'wc-order-splitter'));
@@ -101,7 +102,7 @@ final class WCOS_Duplicate_Order_Service {
 			}
 			$this->assert_source_matches_record($source, $record);
 
-			if (!WCOS_Operation_Lock::is_owned($source_id, $lease_token)) {
+			if (!WCOS_Operation_Lock::is_owned($source_id, $lease_token, $operation_id)) {
 				throw new RuntimeException(__('The duplicate operation lease was lost before target creation.', 'wc-order-splitter'));
 			}
 
@@ -114,12 +115,12 @@ final class WCOS_Duplicate_Order_Service {
 				: '';
 
 			$target = $this->build_target($source, $operation_id);
-			$this->assert_target_policy($target, $source_contract, $copy_context_signature);
+			$this->assert_target_policy($source, $target, $source_contract, $copy_context_signature);
 
 			do_action('wcos_duplicate_mutation_checkpoint', 'before_target_save', $source, $target, $operation_id);
-			$this->assert_target_policy($target, $source_contract, $copy_context_signature);
+			$this->assert_target_policy($source, $target, $source_contract, $copy_context_signature);
 			$this->assert_source_snapshot_current($source_id, $record);
-			if (!WCOS_Operation_Lock::refresh($source_id, $lease_token)) {
+			if (!WCOS_Operation_Lock::refresh($source_id, $lease_token, WCOS_Operation_Lock::DEFAULT_TTL, $operation_id)) {
 				throw new RuntimeException(__('The duplicate operation lease could not be refreshed before target commit.', 'wc-order-splitter'));
 			}
 
@@ -282,7 +283,7 @@ final class WCOS_Duplicate_Order_Service {
 		return !empty($orders) ? reset($orders) : false;
 	}
 
-	private function assert_target_policy(WC_Order $target, array $source_contract, $copy_context_signature) {
+	private function assert_target_policy(WC_Order $source, WC_Order $target, array $source_contract, $copy_context_signature) {
 		if ('pending' !== $target->get_status()) {
 			throw new RuntimeException(__('The hardened duplicate target must remain in pending status.', 'wc-order-splitter'));
 		}
@@ -302,6 +303,7 @@ final class WCOS_Duplicate_Order_Service {
 		$target_contract = WCOS_Order_Contract_Snapshot::aggregate(array($target));
 		unset($target_contract['stock_reduced']);
 		WCOS_Mutation_Contract::assert_conserved($source_contract, $target_contract, wc_get_price_decimals());
+		$this->assert_item_clone_equivalence($source, $target);
 	}
 
 	private function verify_target(WC_Order $source, WC_Order $target, array $record) {
@@ -321,7 +323,7 @@ final class WCOS_Duplicate_Order_Service {
 		$copy_context_signature = isset($record['context']['source_copy_context_signature'])
 			? (string) $record['context']['source_copy_context_signature']
 			: '';
-		$this->assert_target_policy($target, $source_contract, $copy_context_signature);
+		$this->assert_target_policy($source, $target, $source_contract, $copy_context_signature);
 
 		$source_item_ids = array();
 		foreach (array('line_item', 'shipping', 'fee', 'tax', 'coupon') as $item_type) {
@@ -332,6 +334,87 @@ final class WCOS_Duplicate_Order_Service {
 				}
 			}
 		}
+	}
+
+	private function assert_item_clone_equivalence(WC_Order $source, WC_Order $target) {
+		foreach (array('line_item', 'shipping', 'fee', 'tax', 'coupon') as $item_type) {
+			$source_signatures = array();
+			foreach ($source->get_items($item_type) as $item) {
+				$source_signatures[] = $this->item_signature($item);
+			}
+			$target_signatures = array();
+			foreach ($target->get_items($item_type) as $item) {
+				$target_signatures[] = $this->item_signature($item);
+			}
+			sort($source_signatures, SORT_STRING);
+			sort($target_signatures, SORT_STRING);
+			if ($source_signatures !== $target_signatures) {
+				throw new RuntimeException(
+					sprintf(
+						/* translators: %s: WooCommerce order item type. */
+						__('Duplicate target did not preserve exact %s item semantics.', 'wc-order-splitter'),
+						$item_type
+					)
+				);
+			}
+		}
+	}
+
+	private function item_signature(WC_Order_Item $item) {
+		$state = array(
+			'type' => $item->get_type(),
+			'name' => $item->get_name(),
+			'meta' => WCOS_Order_Item_Meta_Policy::business_metadata($item),
+		);
+
+		if ($item instanceof WC_Order_Item_Product) {
+			$state += array(
+				'product_id' => $item->get_product_id(),
+				'variation_id' => $item->get_variation_id(),
+				'quantity' => WCOS_Decimal::normalize($item->get_quantity(), 6),
+				'tax_class' => $item->get_tax_class(),
+				'subtotal' => (string) $item->get_subtotal(),
+				'total' => (string) $item->get_total(),
+				'subtotal_tax' => (string) $item->get_subtotal_tax(),
+				'total_tax' => (string) $item->get_total_tax(),
+				'taxes' => $item->get_taxes(),
+			);
+		} elseif ($item instanceof WC_Order_Item_Shipping) {
+			$state += array(
+				'method_title' => $item->get_method_title(),
+				'method_id' => $item->get_method_id(),
+				'instance_id' => $item->get_instance_id(),
+				'total' => (string) $item->get_total(),
+				'total_tax' => (string) $item->get_total_tax(),
+				'taxes' => $item->get_taxes(),
+			);
+		} elseif ($item instanceof WC_Order_Item_Fee) {
+			$state += array(
+				'tax_class' => $item->get_tax_class(),
+				'tax_status' => $item->get_tax_status(),
+				'amount' => (string) $item->get_amount(),
+				'total' => (string) $item->get_total(),
+				'total_tax' => (string) $item->get_total_tax(),
+				'taxes' => $item->get_taxes(),
+			);
+		} elseif ($item instanceof WC_Order_Item_Tax) {
+			$state += array(
+				'rate_id' => $item->get_rate_id(),
+				'label' => $item->get_label(),
+				'compound' => (bool) $item->get_compound(),
+				'tax_total' => (string) $item->get_tax_total(),
+				'shipping_tax_total' => (string) $item->get_shipping_tax_total(),
+				'rate_percent' => (string) $item->get_rate_percent(),
+			);
+		} elseif ($item instanceof WC_Order_Item_Coupon) {
+			$state += array(
+				'code' => $item->get_code(),
+				'discount' => (string) $item->get_discount(),
+				'discount_tax' => (string) $item->get_discount_tax(),
+			);
+		}
+
+		return WCOS_Mutation_Fingerprint::create('duplicate_item', 0, $state);
 	}
 
 	private function add_notes_best_effort(WC_Order $source, WC_Order $target) {

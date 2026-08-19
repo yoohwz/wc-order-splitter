@@ -22,10 +22,15 @@ final class WCOS_Mutation_Gateway {
 		return (new WCOS_Split_WooCommerce_Adapter())->preflight($source, $operation_id, $confirmed_precision);
 	}
 
-	public function duplicate(WC_Order $source, $operation_id) {
+	public function duplicate(WC_Order $source, $operation_id, $confirmed_precision = null) {
 		WCOS_Feature_Gates::assert_enabled(WCOS_Feature_Gates::DUPLICATE);
 		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::DUPLICATE, $source);
-		return (new WCOS_Duplicate_Order_Service())->duplicate($source, $operation_id);
+		return (new WCOS_Duplicate_WooCommerce_Adapter())->duplicate($source, $operation_id, $confirmed_precision);
+	}
+
+	public function duplicate_preflight(WC_Order $source, $operation_id = '', $confirmed_precision = null) {
+		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::DUPLICATE, $source);
+		return (new WCOS_Duplicate_WooCommerce_Adapter())->preflight($source, $operation_id, $confirmed_precision);
 	}
 
 	public function merge(WC_Order $source, WC_Order $target, $operation_id) {

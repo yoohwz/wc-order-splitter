@@ -1,0 +1,116 @@
+body.wcos-duplicate-modal-open {
+    overflow: hidden;
+}
+
+.wcos-duplicate-launcher-description {
+    margin-left: 8px;
+}
+
+.wcos-duplicate-dialog[hidden] {
+    display: none;
+}
+
+.wcos-duplicate-dialog {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+
+.wcos-duplicate-dialog__backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+}
+
+.wcos-duplicate-dialog__panel {
+    position: relative;
+    width: min(760px, 100%);
+    max-height: calc(100vh - 48px);
+    overflow: auto;
+    background: #fff;
+    border-radius: 4px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    padding: 24px;
+}
+
+.wcos-duplicate-dialog__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+}
+
+.wcos-duplicate-dialog__header h2 {
+    margin-top: 0;
+}
+
+.wcos-duplicate-close {
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 28px;
+    line-height: 1;
+}
+
+.wcos-duplicate-policy {
+    margin-top: 20px;
+    padding: 12px 16px;
+    border-left: 4px solid #646970;
+    background: #f6f7f7;
+}
+
+.wcos-duplicate-policy h3,
+.wcos-duplicate-review h3 {
+    margin-top: 0;
+}
+
+.wcos-duplicate-confirm-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-weight: 600;
+}
+
+.wcos-duplicate-status,
+.wcos-duplicate-error,
+.wcos-duplicate-result,
+.wcos-duplicate-review {
+    margin-top: 16px;
+}
+
+.wcos-duplicate-error,
+.wcos-duplicate-result {
+    padding: 10px 12px;
+}
+
+.wcos-duplicate-dialog__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid #dcdcde;
+}
+
+@media (max-width: 782px) {
+    .wcos-duplicate-dialog {
+        padding: 12px;
+    }
+
+    .wcos-duplicate-dialog__panel {
+        max-height: calc(100vh - 24px);
+        padding: 16px;
+    }
+
+    .wcos-duplicate-dialog__actions {
+        flex-direction: column-reverse;
+    }
+
+    .wcos-duplicate-dialog__actions .button {
+        width: 100%;
+        min-height: 44px;
+    }
+}
