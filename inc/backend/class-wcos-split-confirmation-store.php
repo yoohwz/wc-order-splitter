@@ -26,6 +26,8 @@ final class WCOS_Split_Confirmation_Store {
     const SCHEMA_VERSION = 1;
     const TTL = 1800;
 
+    private static $verified_source_signatures = array();
+
     public static function create(WC_Order $source, array $plan, array $preflight, $user_id) {
         $user_id = absint($user_id);
         if (!$source->get_id() || !$user_id) {
@@ -103,6 +105,7 @@ final class WCOS_Split_Confirmation_Store {
         $operation_id = sanitize_key((string) $operation_id);
         $token = (string) $token;
         $user_id = absint($user_id);
+        unset(self::$verified_source_signatures[$operation_id]);
         if (!self::is_uuid($operation_id) || !$user_id) {
             throw new WCOS_Split_Confirmation_Exception('invalid_identity', __('The Split confirmation identity is invalid.', 'wc-order-splitter'));
         }
@@ -140,6 +143,7 @@ final class WCOS_Split_Confirmation_Store {
                 if ('' === $expected || !hash_equals($expected, $actual)) {
                     throw new WCOS_Split_Confirmation_Exception('source_changed', __('The order changed after the Split plan was reviewed. Review the plan again before executing it.', 'wc-order-splitter'));
                 }
+                self::$verified_source_signatures[$operation_id] = $expected;
             } else {
                 $journal_context = isset($journal['context']) && is_array($journal['context']) ? $journal['context'] : array();
                 if (!array_key_exists('price_precision', $journal_context)
@@ -162,8 +166,16 @@ final class WCOS_Split_Confirmation_Store {
         }
     }
 
+    public static function verified_source_signature($operation_id) {
+        $operation_id = sanitize_key((string) $operation_id);
+        return isset(self::$verified_source_signatures[$operation_id])
+            ? (string) self::$verified_source_signatures[$operation_id]
+            : '';
+    }
+
     public static function delete($operation_id) {
         $operation_id = sanitize_key((string) $operation_id);
+        unset(self::$verified_source_signatures[$operation_id]);
         if (!self::is_uuid($operation_id)) {
             return false;
         }
@@ -171,6 +183,7 @@ final class WCOS_Split_Confirmation_Store {
     }
 
     private static function durable_replay(WC_Order $source, $operation_id) {
+        unset(self::$verified_source_signatures[$operation_id]);
         $journal = WCOS_Operation_Journal::get($source, $operation_id);
         if (!is_array($journal)) {
             throw new WCOS_Split_Confirmation_Exception('expired', __('The Split confirmation expired. Review the plan again before executing it.', 'wc-order-splitter'));
