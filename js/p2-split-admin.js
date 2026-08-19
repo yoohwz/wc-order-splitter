@@ -7,8 +7,8 @@
         return;
     }
 
-    var dialogId = launcher.getAttribute('aria-controls');
-    var dialog = dialogId ? document.getElementById(dialogId) : null;
+    var quantityDialogId = launcher.getAttribute('aria-controls');
+    var dialog = quantityDialogId ? document.getElementById(quantityDialogId) : null;
     if (!dialog) {
         return;
     }
@@ -25,27 +25,54 @@
     var statusBox = dialog.querySelector('.wcos-split-status');
     var errorBox = dialog.querySelector('.wcos-split-error');
     var resultBox = dialog.querySelector('.wcos-split-result');
+    var table = dialog.querySelector('.wcos-split-table');
+    var tableWrap = dialog.querySelector('.wcos-split-table-wrap');
+    var policyBox = dialog.querySelector('.wcos-split-policy');
+    var actions = dialog.querySelector('.wcos-split-dialog__actions');
+    var strategyLaunchers = Array.prototype.slice.call(document.querySelectorAll('.wcos-strategy-launcher'));
     var state = null;
     var returnFocus = null;
     var busy = false;
     var completed = false;
+    var activeChildren = 1;
+    var maxChildren = 10;
+    var addChildButton = null;
+    var removeChildButton = null;
+    var childCountLabel = null;
+    var editButton = null;
+    var methodDialog = null;
+    var methodReturnFocus = null;
 
     function text(key, fallback) {
         return typeof strings[key] === 'string' && strings[key] ? strings[key] : fallback;
     }
 
-    function focusableElements() {
-        return Array.prototype.slice.call(dialog.querySelectorAll(
+    function humanDecimal(value) {
+        var normalized = String(value == null ? '' : value).trim();
+        if (normalized.indexOf('.') !== -1) {
+            normalized = normalized.replace(/0+$/, '').replace(/\.$/, '');
+        }
+        return normalized === '' ? '0' : normalized;
+    }
+
+    function quantityFocusableElements(targetDialog) {
+        return Array.prototype.slice.call(targetDialog.querySelectorAll(
             'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
         )).filter(function (element) {
             return !element.hidden && element.offsetParent !== null;
         });
     }
 
-    function openDialog() {
+    function syncBodyLock() {
+        var quantityOpen = !dialog.hidden;
+        var methodOpen = methodDialog && !methodDialog.hidden;
+        document.body.classList.toggle('wcos-split-modal-open', !!(quantityOpen || methodOpen));
+    }
+
+    function openQuantityDialog() {
         returnFocus = document.activeElement;
         dialog.hidden = false;
-        document.body.classList.add('wcos-split-modal-open');
+        syncBodyLock();
         window.setTimeout(function () {
             var preferred = completed && !resultBox.hidden
                 ? resultBox
@@ -54,12 +81,12 @@
         }, 0);
     }
 
-    function closeDialog() {
+    function closeQuantityDialog() {
         if (busy) {
             return;
         }
         dialog.hidden = true;
-        document.body.classList.remove('wcos-split-modal-open');
+        syncBodyLock();
         if (returnFocus && typeof returnFocus.focus === 'function') {
             returnFocus.focus();
         }
@@ -85,8 +112,192 @@
         resultBox.textContent = '';
     }
 
+    function childColumnElements(childIndex) {
+        var childKey = 'child-' + String(childIndex);
+        var fields = Array.prototype.slice.call(dialog.querySelectorAll('.wcos-split-quantity[data-child-key="' + childKey + '"]'));
+        var cells = fields.map(function (field) { return field.closest('td'); }).filter(Boolean);
+        var header = table && table.tHead && table.tHead.rows.length
+            ? table.tHead.rows[0].cells[childIndex + 1]
+            : null;
+        return { fields: fields, cells: cells, header: header };
+    }
+
+    function setChildVisible(childIndex, visible) {
+        var column = childColumnElements(childIndex);
+        if (column.header) {
+            column.header.hidden = !visible;
+        }
+        column.cells.forEach(function (cell) {
+            cell.hidden = !visible;
+        });
+    }
+
+    function updateChildToolbar() {
+        if (childCountLabel) {
+            childCountLabel.textContent = String(activeChildren) + (activeChildren === 1 ? ' child order' : ' child orders');
+        }
+        if (addChildButton) {
+            addChildButton.disabled = busy || completed || !!state || activeChildren >= maxChildren;
+        }
+        if (removeChildButton) {
+            removeChildButton.hidden = activeChildren <= 1;
+            removeChildButton.disabled = busy || completed || !!state || activeChildren <= 1;
+        }
+    }
+
+    function enhanceChildColumns() {
+        if (!table || !tableWrap) {
+            return;
+        }
+
+        for (var childIndex = 1; childIndex <= maxChildren; childIndex++) {
+            var column = childColumnElements(childIndex);
+            column.fields.forEach(function (field) {
+                if (field.value === '0') {
+                    field.value = '';
+                }
+                field.placeholder = '0';
+            });
+            setChildVisible(childIndex, childIndex === 1);
+        }
+
+        Array.prototype.forEach.call(table.querySelectorAll('tbody tr[data-item-id]'), function (row) {
+            var sourceQuantity = row.getAttribute('data-source-quantity') || '0';
+            var currentCell = row.cells.length > 1 ? row.cells[1] : null;
+            if (!currentCell) {
+                return;
+            }
+            currentCell.textContent = humanDecimal(sourceQuantity);
+            var remaining = document.createElement('span');
+            remaining.className = 'wcos-split-remaining-hint';
+            var label = document.createElement('span');
+            label.textContent = 'Remaining ';
+            var value = document.createElement('strong');
+            value.className = 'wcos-split-remaining';
+            value.setAttribute('data-item-id', row.getAttribute('data-item-id') || '');
+            value.textContent = humanDecimal(sourceQuantity);
+            remaining.appendChild(label);
+            remaining.appendChild(value);
+            currentCell.appendChild(remaining);
+        });
+
+        var toolbar = document.createElement('div');
+        toolbar.className = 'wcos-split-child-toolbar';
+        childCountLabel = document.createElement('strong');
+        childCountLabel.className = 'wcos-split-child-count';
+        addChildButton = document.createElement('button');
+        addChildButton.type = 'button';
+        addChildButton.className = 'button button-secondary wcos-split-add-child';
+        addChildButton.textContent = 'Add child order';
+        removeChildButton = document.createElement('button');
+        removeChildButton.type = 'button';
+        removeChildButton.className = 'button-link-delete wcos-split-remove-child';
+        removeChildButton.textContent = 'Remove last child';
+        toolbar.appendChild(childCountLabel);
+        toolbar.appendChild(addChildButton);
+        toolbar.appendChild(removeChildButton);
+        tableWrap.parentNode.insertBefore(toolbar, tableWrap);
+
+        addChildButton.addEventListener('click', function () {
+            if (busy || completed || state || activeChildren >= maxChildren) {
+                return;
+            }
+            activeChildren += 1;
+            setChildVisible(activeChildren, true);
+            updateChildToolbar();
+            updateRemaining();
+            updateReviewAvailability();
+            var next = childColumnElements(activeChildren).fields[0];
+            if (next) {
+                next.focus();
+            }
+        });
+
+        removeChildButton.addEventListener('click', function () {
+            if (busy || completed || state || activeChildren <= 1) {
+                return;
+            }
+            var column = childColumnElements(activeChildren);
+            column.fields.forEach(function (field) {
+                field.value = '';
+            });
+            setChildVisible(activeChildren, false);
+            activeChildren -= 1;
+            updateChildToolbar();
+            updateRemaining();
+            invalidateReview();
+            updateReviewAvailability();
+        });
+
+        updateChildToolbar();
+        updateRemaining();
+    }
+
+    function enhancePolicy() {
+        if (!policyBox) {
+            return;
+        }
+        var list = policyBox.querySelector('ul');
+        if (!list) {
+            return;
+        }
+        list.hidden = true;
+        var summary = document.createElement('p');
+        summary.className = 'wcos-split-policy-summary';
+        summary.textContent = 'Child orders are created as Pending payment. Shipping stays on the source order, historical prices and taxes are preserved, and this Split does not change physical product stock.';
+        var toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'button-link wcos-split-policy-toggle';
+        toggle.setAttribute('aria-expanded', 'false');
+        toggle.textContent = 'View safety details';
+        policyBox.insertBefore(summary, list);
+        policyBox.insertBefore(toggle, list);
+        toggle.addEventListener('click', function () {
+            var expanded = toggle.getAttribute('aria-expanded') === 'true';
+            toggle.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+            toggle.textContent = expanded ? 'View safety details' : 'Hide safety details';
+            list.hidden = expanded;
+        });
+    }
+
+    function createEditButton() {
+        if (!actions || !reviewButton) {
+            return;
+        }
+        editButton = document.createElement('button');
+        editButton.type = 'button';
+        editButton.className = 'button wcos-split-edit-button';
+        editButton.textContent = 'Edit quantities';
+        editButton.hidden = true;
+        actions.insertBefore(editButton, reviewButton);
+        executeButton.hidden = true;
+
+        editButton.addEventListener('click', function () {
+            if (busy || completed) {
+                return;
+            }
+            state = null;
+            reviewBox.hidden = true;
+            reviewSummary.textContent = '';
+            confirmCheckbox.checked = false;
+            executeButton.disabled = true;
+            executeButton.hidden = true;
+            editButton.hidden = true;
+            reviewButton.hidden = false;
+            setStatus('');
+            clearError();
+            setBusy(false);
+            updateChildToolbar();
+            updateReviewAvailability();
+            var first = dialog.querySelector('.wcos-split-quantity:not([disabled])');
+            if (first) {
+                first.focus();
+            }
+        });
+    }
+
     function invalidateReview() {
-        if (completed) {
+        if (completed || !state) {
             return;
         }
         state = null;
@@ -94,7 +305,13 @@
         reviewSummary.textContent = '';
         confirmCheckbox.checked = false;
         executeButton.disabled = true;
+        executeButton.hidden = true;
+        if (editButton) {
+            editButton.hidden = true;
+        }
+        reviewButton.hidden = false;
         clearResult();
+        updateChildToolbar();
     }
 
     function decimalIsPositiveAndLessThan(value, sourceValue) {
@@ -117,6 +334,10 @@
             var movedForLine = 0;
 
             Array.prototype.forEach.call(row.querySelectorAll('.wcos-split-quantity[data-child-key]'), function (quantityInput) {
+                var cell = quantityInput.closest('td');
+                if (cell && cell.hidden) {
+                    return;
+                }
                 var quantity = quantityInput.value.trim();
                 if (quantity === '' || Number(quantity) === 0) {
                     return;
@@ -156,6 +377,45 @@
         return plan;
     }
 
+    function updateRemaining() {
+        Array.prototype.forEach.call(dialog.querySelectorAll('tbody tr[data-item-id]'), function (row) {
+            var source = Number(row.getAttribute('data-source-quantity') || 0);
+            var moved = 0;
+            Array.prototype.forEach.call(row.querySelectorAll('.wcos-split-quantity[data-child-key]'), function (field) {
+                var cell = field.closest('td');
+                if (cell && cell.hidden) {
+                    return;
+                }
+                var value = Number(field.value || 0);
+                if (Number.isFinite(value) && value > 0) {
+                    moved += value;
+                }
+            });
+            var remaining = source - moved;
+            var output = row.querySelector('.wcos-split-remaining');
+            if (output) {
+                output.textContent = humanDecimal(String(Math.max(0, remaining).toFixed(6)));
+                output.classList.toggle('is-invalid', remaining <= 0);
+            }
+        });
+    }
+
+    function canBuildPlan() {
+        try {
+            buildPlan();
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function updateReviewAvailability() {
+        if (!reviewButton || reviewButton.hidden) {
+            return;
+        }
+        reviewButton.disabled = busy || completed || !!state || !canBuildPlan();
+    }
+
     function request(action, data) {
         var body = new URLSearchParams();
         body.set('action', action);
@@ -183,6 +443,11 @@
                 throw error;
             }
             return payload.data || {};
+        }).catch(function (error) {
+            if (typeof error.retryable !== 'boolean') {
+                error.retryable = true;
+            }
+            throw error;
         });
     }
 
@@ -190,17 +455,21 @@
         busy = !!nextBusy;
         form.setAttribute('aria-busy', busy ? 'true' : 'false');
         Array.prototype.forEach.call(dialog.querySelectorAll('.wcos-split-quantity'), function (field) {
-            field.disabled = busy || completed;
+            field.disabled = busy || completed || !!state;
         });
-        reviewButton.disabled = busy || completed;
-        confirmCheckbox.disabled = busy || completed;
+        reviewButton.disabled = busy || completed || !!state || !canBuildPlan();
+        confirmCheckbox.disabled = busy || completed || !state;
         executeButton.disabled = busy || completed || !state || !confirmCheckbox.checked;
         cancelButton.disabled = busy;
         closeButton.disabled = busy;
+        if (editButton) {
+            editButton.disabled = busy || completed;
+        }
+        updateChildToolbar();
     }
 
     function reviewPlan() {
-        if (busy || completed) {
+        if (busy || completed || state) {
             return;
         }
         clearError();
@@ -225,20 +494,34 @@
                 token: data.confirmation_token
             };
             var summary = data.summary || {};
-            reviewSummary.textContent = text('reviewSummary', 'Reviewed children / affected lines / moved quantity:') + ' ' +
-                String(summary.child_count || 0) + ' / ' +
-                String(summary.affected_line_count || 0) + ' / ' +
-                String(summary.moved_quantity || '0');
+            var childCount = Number(summary.child_count || 0);
+            var lineCount = Number(summary.affected_line_count || 0);
+            reviewSummary.textContent = String(childCount) + (childCount === 1 ? ' child order' : ' child orders') +
+                ' · ' + String(lineCount) + (lineCount === 1 ? ' product line' : ' product lines') +
+                ' · ' + humanDecimal(summary.moved_quantity || '0') + ' quantity moving';
             reviewBox.hidden = false;
             confirmCheckbox.checked = false;
+            reviewButton.hidden = true;
+            if (editButton) {
+                editButton.hidden = false;
+            }
+            executeButton.hidden = false;
             setStatus(text('reviewReady', 'The plan passed server review. Confirm the acknowledgement to execute it.'));
+            setBusy(false);
             confirmCheckbox.focus();
         }).catch(function (error) {
-            invalidateReview();
+            state = null;
+            reviewBox.hidden = true;
+            executeButton.hidden = true;
+            if (editButton) {
+                editButton.hidden = true;
+            }
+            reviewButton.hidden = false;
             setStatus('');
             showError(error.message);
         }).finally(function () {
             setBusy(false);
+            updateReviewAvailability();
         });
     }
 
@@ -294,24 +577,193 @@
         }).then(function (data) {
             completed = true;
             setStatus(text('completed', 'Split completed successfully.'));
-            Array.prototype.forEach.call(dialog.querySelectorAll('input, select'), function (field) {
-                field.disabled = true;
+            Array.prototype.forEach.call(dialog.querySelectorAll('input, select, button'), function (field) {
+                if (!field.classList.contains('wcos-split-cancel') && !field.classList.contains('wcos-split-close')) {
+                    field.disabled = true;
+                }
             });
+            if (editButton) {
+                editButton.hidden = true;
+            }
+            reviewButton.hidden = true;
+            executeButton.hidden = true;
             renderSuccess(data);
         }).catch(function (error) {
             if (!error.retryable) {
-                invalidateReview();
+                state = null;
+                reviewBox.hidden = true;
+                executeButton.hidden = true;
+                if (editButton) {
+                    editButton.hidden = true;
+                }
+                reviewButton.hidden = false;
             }
             setStatus('');
             showError(error.message);
         }).finally(function () {
             setBusy(false);
+            updateReviewAvailability();
         });
     }
 
-    launcher.addEventListener('click', openDialog);
-    closeButton.addEventListener('click', closeDialog);
-    cancelButton.addEventListener('click', closeDialog);
+    function trapDialogKeyboard(targetDialog, closeCallback, targetPanel) {
+        targetDialog.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                closeCallback();
+                return;
+            }
+            if (event.key !== 'Tab') {
+                return;
+            }
+            var focusable = quantityFocusableElements(targetDialog);
+            if (!focusable.length) {
+                event.preventDefault();
+                targetPanel.focus();
+                return;
+            }
+            var first = focusable[0];
+            var last = focusable[focusable.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        });
+    }
+
+    function methodLabel(raw) {
+        var label = String(raw || '').trim();
+        return label.replace(/^Split\s+/i, '').replace(/^by\s+/i, 'By ');
+    }
+
+    function createMethodOption(label, description, clickHandler) {
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'wcos-split-method-option';
+        var title = document.createElement('strong');
+        title.textContent = label;
+        var detail = document.createElement('span');
+        detail.textContent = description;
+        button.appendChild(title);
+        button.appendChild(detail);
+        button.addEventListener('click', clickHandler);
+        return button;
+    }
+
+    function createMethodDialog() {
+        if (!strategyLaunchers.length) {
+            return null;
+        }
+        var orderId = dialog.getAttribute('data-order-id') || '';
+        var methodId = 'wcos-split-method-dialog-' + orderId;
+        var root = document.createElement('div');
+        root.id = methodId;
+        root.className = 'wcos-split-method-dialog';
+        root.setAttribute('role', 'dialog');
+        root.setAttribute('aria-modal', 'true');
+        root.setAttribute('aria-labelledby', methodId + '-title');
+        root.hidden = true;
+
+        var backdrop = document.createElement('div');
+        backdrop.className = 'wcos-split-method-dialog__backdrop';
+        backdrop.setAttribute('aria-hidden', 'true');
+        var methodPanel = document.createElement('div');
+        methodPanel.className = 'wcos-split-method-dialog__panel';
+        methodPanel.tabIndex = -1;
+        var header = document.createElement('div');
+        header.className = 'wcos-split-method-dialog__header';
+        var heading = document.createElement('h2');
+        heading.id = methodId + '-title';
+        heading.textContent = 'Split order';
+        var close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'button-link wcos-split-method-close';
+        close.setAttribute('aria-label', 'Close split method chooser');
+        var closeGlyph = document.createElement('span');
+        closeGlyph.setAttribute('aria-hidden', 'true');
+        closeGlyph.textContent = '×';
+        close.appendChild(closeGlyph);
+        header.appendChild(heading);
+        header.appendChild(close);
+
+        var intro = document.createElement('p');
+        intro.className = 'description';
+        intro.textContent = 'Choose how this order should be split. You will review the result before anything is changed.';
+        var options = document.createElement('div');
+        options.className = 'wcos-split-method-options';
+        options.appendChild(createMethodOption(
+            'By quantity',
+            'Move exact quantities from one or more product lines into child orders.',
+            openQuantityDialog
+        ));
+
+        strategyLaunchers.forEach(function (strategyLauncher) {
+            var descriptionId = strategyLauncher.getAttribute('aria-describedby');
+            var descriptionElement = descriptionId ? document.getElementById(descriptionId) : null;
+            var description = descriptionElement ? descriptionElement.textContent.trim() : 'Build child orders from the reviewed product classification.';
+            options.appendChild(createMethodOption(
+                methodLabel(strategyLauncher.textContent),
+                description,
+                function () {
+                    strategyLauncher.click();
+                }
+            ));
+        });
+
+        methodPanel.appendChild(header);
+        methodPanel.appendChild(intro);
+        methodPanel.appendChild(options);
+        root.appendChild(backdrop);
+        root.appendChild(methodPanel);
+        document.body.appendChild(root);
+
+        function openMethodDialog() {
+            methodReturnFocus = document.activeElement;
+            root.hidden = false;
+            syncBodyLock();
+            window.setTimeout(function () {
+                var first = options.querySelector('.wcos-split-method-option');
+                (first || methodPanel).focus();
+            }, 0);
+        }
+
+        function closeMethodDialog() {
+            if (!dialog.hidden) {
+                return;
+            }
+            root.hidden = true;
+            syncBodyLock();
+            if (methodReturnFocus && typeof methodReturnFocus.focus === 'function') {
+                methodReturnFocus.focus();
+            }
+        }
+
+        close.addEventListener('click', closeMethodDialog);
+        backdrop.addEventListener('click', closeMethodDialog);
+        trapDialogKeyboard(root, closeMethodDialog, methodPanel);
+        root.open = openMethodDialog;
+        launcher.setAttribute('aria-controls', methodId);
+        return root;
+    }
+
+    enhanceChildColumns();
+    enhancePolicy();
+    createEditButton();
+    methodDialog = createMethodDialog();
+    updateReviewAvailability();
+
+    launcher.addEventListener('click', function () {
+        if (methodDialog && typeof methodDialog.open === 'function') {
+            methodDialog.open();
+        } else {
+            openQuantityDialog();
+        }
+    });
+    closeButton.addEventListener('click', closeQuantityDialog);
+    cancelButton.addEventListener('click', closeQuantityDialog);
     reviewButton.addEventListener('click', reviewPlan);
     executeButton.addEventListener('click', executePlan);
     confirmCheckbox.addEventListener('change', function () {
@@ -319,38 +771,17 @@
     });
 
     form.addEventListener('input', function (event) {
-        if (completed) {
+        if (completed || !event.target.classList.contains('wcos-split-quantity')) {
             return;
         }
-        if (event.target.classList.contains('wcos-split-quantity')) {
+        if (state) {
             invalidateReview();
-            clearError();
-            setStatus('');
         }
+        clearError();
+        setStatus('');
+        updateRemaining();
+        updateReviewAvailability();
     });
-    dialog.addEventListener('keydown', function (event) {
-        if (event.key === 'Escape') {
-            event.preventDefault();
-            closeDialog();
-            return;
-        }
-        if (event.key !== 'Tab') {
-            return;
-        }
-        var focusable = focusableElements();
-        if (!focusable.length) {
-            event.preventDefault();
-            panel.focus();
-            return;
-        }
-        var first = focusable[0];
-        var last = focusable[focusable.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-            event.preventDefault();
-            last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-            event.preventDefault();
-            first.focus();
-        }
-    });
+
+    trapDialogKeyboard(dialog, closeQuantityDialog, panel);
 })();

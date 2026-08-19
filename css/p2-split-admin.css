@@ -3,78 +3,238 @@ body.wcos-split-modal-open {
 }
 
 .wcos-split-launcher-description {
-    margin-left: 8px;
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
 }
 
-.wcos-split-dialog[hidden] {
-    display: none;
+.wcos-split-launcher {
+    margin-right: 6px;
 }
 
-.wcos-split-dialog {
+.wcos-split-dialog[hidden],
+.wcos-split-method-dialog[hidden],
+.wcos-split-table th[hidden],
+.wcos-split-table td[hidden] {
+    display: none !important;
+}
+
+.wcos-split-dialog,
+.wcos-split-method-dialog {
     position: fixed;
     inset: 0;
-    z-index: 100000;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 24px;
 }
 
-.wcos-split-dialog__backdrop {
+.wcos-split-dialog {
+    z-index: 100000;
+}
+
+.wcos-split-method-dialog {
+    z-index: 99999;
+}
+
+.wcos-split-dialog__backdrop,
+.wcos-split-method-dialog__backdrop {
     position: absolute;
     inset: 0;
     background: rgba(0, 0, 0, 0.55);
 }
 
-.wcos-split-dialog__panel {
+.wcos-split-dialog__panel,
+.wcos-split-method-dialog__panel {
     position: relative;
-    width: min(980px, 100%);
+    width: min(820px, 100%);
     max-height: calc(100vh - 48px);
     overflow: auto;
     background: #fff;
-    border-radius: 4px;
+    border-radius: 6px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
     padding: 24px;
 }
 
-.wcos-split-dialog__header {
+.wcos-split-method-dialog__panel {
+    width: min(560px, 100%);
+}
+
+.wcos-split-dialog__header,
+.wcos-split-method-dialog__header {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     gap: 20px;
 }
 
-.wcos-split-dialog__header h2 {
-    margin-top: 0;
+.wcos-split-dialog__header h2,
+.wcos-split-method-dialog__header h2 {
+    margin: 0 0 6px;
 }
 
-.wcos-split-close {
-    min-width: 44px;
-    min-height: 44px;
+.wcos-split-close,
+.wcos-split-method-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 40px;
+    min-height: 40px;
+    margin: -6px -6px 0 0;
     font-size: 28px;
     line-height: 1;
+    text-decoration: none;
+}
+
+.wcos-split-method-options {
+    display: grid;
+    gap: 10px;
+    margin-top: 18px;
+}
+
+.wcos-split-method-option {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    width: 100%;
+    padding: 14px 16px;
+    border: 1px solid #c3c4c7;
+    border-radius: 5px;
+    background: #fff;
+    color: #1d2327;
+    text-align: left;
+    cursor: pointer;
+}
+
+.wcos-split-method-option:hover,
+.wcos-split-method-option:focus {
+    border-color: #2271b1;
+    box-shadow: 0 0 0 1px #2271b1;
+    outline: none;
+}
+
+.wcos-split-method-option strong {
+    font-size: 14px;
+}
+
+.wcos-split-method-option span {
+    color: #50575e;
+    font-weight: 400;
+}
+
+.wcos-split-child-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 20px 0 10px;
+    padding: 10px 12px;
+    border: 1px solid #dcdcde;
+    border-radius: 5px;
+    background: #f6f7f7;
+}
+
+.wcos-split-child-count {
+    margin-right: auto;
+}
+
+.wcos-split-remove-child {
+    white-space: nowrap;
 }
 
 .wcos-split-table-wrap {
     overflow-x: auto;
-    margin: 20px 0;
+    margin: 0 0 18px;
+    border: 1px solid #dcdcde;
+    border-radius: 5px;
 }
 
-.wcos-split-table select,
-.wcos-split-table input[type="number"] {
+.wcos-split-table {
+    border: 0;
+    box-shadow: none;
+}
+
+.wcos-split-table th,
+.wcos-split-table td {
+    vertical-align: middle;
+}
+
+.wcos-split-table thead th {
+    background: #f6f7f7;
+}
+
+.wcos-split-table th:first-child {
+    min-width: 180px;
+}
+
+.wcos-split-table th:nth-child(2),
+.wcos-split-table td:nth-child(2) {
+    width: 130px;
     min-width: 130px;
+}
+
+.wcos-split-table input[type="number"] {
+    width: 108px;
+    min-width: 108px;
     max-width: 100%;
 }
 
+.wcos-split-remaining-hint {
+    display: block;
+    margin-top: 3px;
+    color: #646970;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.wcos-split-remaining.is-invalid {
+    color: #b32d2e;
+}
+
 .wcos-split-policy {
-    padding: 12px 16px;
-    border-left: 4px solid #646970;
+    margin-top: 16px;
+    padding: 14px 16px;
+    border: 1px solid #dcdcde;
+    border-radius: 5px;
     background: #f6f7f7;
 }
 
 .wcos-split-policy h3,
 .wcos-split-review h3 {
-    margin-top: 0;
+    margin: 0 0 6px;
+}
+
+.wcos-split-policy-summary {
+    max-width: 720px;
+    margin: 0 0 8px;
+    color: #50575e;
+}
+
+.wcos-split-policy-toggle {
+    font-weight: 600;
+}
+
+.wcos-split-policy ul {
+    margin: 12px 0 0 18px;
+}
+
+.wcos-split-review {
+    margin-top: 16px;
+    padding: 14px 16px;
+    border: 1px solid #c3c4c7;
+    border-radius: 5px;
+    background: #fff;
+}
+
+.wcos-split-review-summary {
+    margin: 0 0 10px;
+    color: #50575e;
 }
 
 .wcos-split-confirm-label {
@@ -86,8 +246,7 @@ body.wcos-split-modal-open {
 
 .wcos-split-status,
 .wcos-split-error,
-.wcos-split-result,
-.wcos-split-review {
+.wcos-split-result {
     margin-top: 16px;
 }
 
@@ -110,13 +269,34 @@ body.wcos-split-modal-open {
 }
 
 @media (max-width: 782px) {
-    .wcos-split-dialog {
+    .wcos-split-dialog,
+    .wcos-split-method-dialog {
         padding: 12px;
     }
 
-    .wcos-split-dialog__panel {
+    .wcos-split-dialog__panel,
+    .wcos-split-method-dialog__panel {
         max-height: calc(100vh - 24px);
         padding: 16px;
+    }
+
+    .wcos-split-child-toolbar {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .wcos-split-child-count {
+        margin-right: 0;
+    }
+
+    .wcos-split-child-toolbar .button,
+    .wcos-split-child-toolbar .button-link-delete {
+        min-height: 44px;
+        text-align: center;
+    }
+
+    .wcos-split-table th:first-child {
+        min-width: 140px;
     }
 
     .wcos-split-dialog__actions {
@@ -126,5 +306,9 @@ body.wcos-split-modal-open {
     .wcos-split-dialog__actions .button {
         width: 100%;
         min-height: 44px;
+    }
+
+    .wcos-split-method-option {
+        min-height: 64px;
     }
 }
