@@ -66,6 +66,8 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-duplicate-woocommerce-adapter.php';
 		include_once $root . 'domain/class-wcos-mutation-gateway.php';
 
+		include_once $root . 'backend/class-wcos-admin-backbone-modal-assets.php';
+		WCOS_Admin_Backbone_Modal_Assets::bootstrap();
 		include_once $root . 'backend/class-wcos-split-request-parser.php';
 		include_once $root . 'backend/class-wcos-split-confirmation-store.php';
 		include_once $root . 'backend/class-wcos-split-strategy-review-store.php';
