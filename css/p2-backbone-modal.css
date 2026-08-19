@@ -1,0 +1,33 @@
+/* Shared presentation rules for Order Splitter workflows inside WooCommerce Backbone modals. */
+
+#wc-backbone-modal-dialog .wcos-admin-backbone-modal__footer {
+    display: flex !important;
+    align-items: center;
+    justify-content: flex-end !important;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+#wc-backbone-modal-dialog .wcos-admin-backbone-modal__footer .button,
+#wc-backbone-modal-dialog .wcos-admin-backbone-modal__footer .button-primary,
+#wc-backbone-modal-dialog .wcos-admin-backbone-modal__footer .button-secondary {
+    float: none !important;
+    margin: 0 !important;
+}
+
+#wc-backbone-modal-dialog .wcos-admin-backbone-modal__footer .wcos-split-remove-child {
+    color: #b32d2e;
+}
+
+@media (max-width: 782px) {
+    #wc-backbone-modal-dialog .wcos-admin-backbone-modal__footer {
+        align-items: stretch;
+        flex-direction: column-reverse;
+    }
+
+    #wc-backbone-modal-dialog .wcos-admin-backbone-modal__footer .button {
+        width: 100%;
+        min-height: 44px;
+        text-align: center;
+    }
+}
