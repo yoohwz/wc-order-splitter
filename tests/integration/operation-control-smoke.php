@@ -95,6 +95,7 @@ require __DIR__ . '/p2-metadata-compatibility-smoke.php';
 require __DIR__ . '/p2-journal-retention-smoke.php';
 require __DIR__ . '/p2-admin-transport-smoke.php';
 require __DIR__ . '/p2-admin-client-state-smoke.php';
+require __DIR__ . '/p2-review-confirmation-toctou-smoke.php';
 require __DIR__ . '/p2-policy-replay-smoke.php';
 require __DIR__ . '/p2-durable-replay-smoke.php';
 
