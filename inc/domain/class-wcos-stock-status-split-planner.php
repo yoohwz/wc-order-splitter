@@ -136,12 +136,21 @@ final class WCOS_Stock_Status_Split_Planner {
 		if (!isset($review['execution_policy']) || WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER !== $review['execution_policy']) {
 			throw new RuntimeException(__('The Stock-status Split review does not carry the required whole-line execution policy.', 'wc-order-splitter'));
 		}
-		if (empty($review['classification_fingerprint']) || empty($review['source_signature'])) {
+		if (empty($review['order_id']) || empty($review['classification_fingerprint']) || empty($review['source_signature'])) {
 			throw new RuntimeException(__('The Stock-status Split review is missing frozen classification authority.', 'wc-order-splitter'));
 		}
 
-		$source_bucket_key = sanitize_key((string) $source_bucket_key);
 		$buckets = isset($review['buckets']) && is_array($review['buckets']) ? $review['buckets'] : array();
+		$expected_fingerprint = self::classification_fingerprint(
+			absint($review['order_id']),
+			(string) $review['source_signature'],
+			$buckets
+		);
+		if (!hash_equals((string) $review['classification_fingerprint'], $expected_fingerprint)) {
+			throw new RuntimeException(__('The frozen Stock-status Split review evidence failed its integrity fingerprint.', 'wc-order-splitter'));
+		}
+
+		$source_bucket_key = sanitize_key((string) $source_bucket_key);
 		if ('' === $source_bucket_key || !isset($buckets[$source_bucket_key])) {
 			throw new InvalidArgumentException(__('Choose one reviewed stock-status bucket to remain on the source order.', 'wc-order-splitter'));
 		}
