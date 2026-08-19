@@ -88,15 +88,7 @@ final class WCOS_Manual_Reconciliation_Blocker {
             $journal = class_exists('WCOS_Operation_Journal')
                 ? WCOS_Operation_Journal::get($order, $operation_id)
                 : null;
-            $status = is_array($journal) && isset($journal['status'])
-                ? sanitize_key((string) $journal['status'])
-                : '';
-            $journal_revision = is_array($journal) && isset($journal['revision']) ? (int) $journal['revision'] : 0;
-            $blocked_revision = is_array($incident) && isset($incident['journal_revision_at_block'])
-                ? (int) $incident['journal_revision_at_block']
-                : PHP_INT_MAX;
-
-            if ('manual_reconciled' === $status && $journal_revision > $blocked_revision) {
+            if (self::journal_resolves_incident($journal, $incident)) {
                 $resolved[] = $operation_id;
                 continue;
             }
@@ -105,7 +97,7 @@ final class WCOS_Manual_Reconciliation_Blocker {
         }
 
         foreach ($resolved as $operation_id) {
-            self::clear_resolved($order, $operation_id);
+            self::clear($order, $operation_id);
         }
 
         $active = array_values(array_unique($active));
@@ -115,6 +107,47 @@ final class WCOS_Manual_Reconciliation_Blocker {
 
     public static function has_active(WC_Order $order) {
         return !empty(self::active_operation_ids($order));
+    }
+
+    /**
+     * Eagerly clear one blocker only after the authoritative journal proves that
+     * this exact incident has a newer manual_reconciled transition.
+     */
+    public static function resolve_if_reconciled(WC_Order $order, $operation_id) {
+        $operation_id = sanitize_key((string) $operation_id);
+        if (!$order->get_id() || '' === $operation_id) {
+            return false;
+        }
+
+        $record = get_option(self::key($order->get_id()), null);
+        if (!is_array($record) || empty($record['operations']) || !is_array($record['operations'])) {
+            return true;
+        }
+        if (!isset($record['operations'][$operation_id])) {
+            return true;
+        }
+
+        $journal = class_exists('WCOS_Operation_Journal')
+            ? WCOS_Operation_Journal::get($order, $operation_id)
+            : null;
+        if (!self::journal_resolves_incident($journal, $record['operations'][$operation_id])) {
+            return false;
+        }
+
+        return self::clear($order, $operation_id);
+    }
+
+    /**
+     * Retention uses this to avoid deleting the authoritative resolution proof
+     * while a blocker record still exists because an eager clear failed.
+     */
+    public static function contains_operation($source_order_id, $operation_id) {
+        $source_order_id = absint($source_order_id);
+        $operation_id = sanitize_key((string) $operation_id);
+        if (!$source_order_id || '' === $operation_id) {
+            return false;
+        }
+        return self::contains($source_order_id, $operation_id);
     }
 
     private static function incident(WC_Order $order, $operation_id) {
@@ -129,7 +162,20 @@ final class WCOS_Manual_Reconciliation_Blocker {
         );
     }
 
-    private static function clear_resolved(WC_Order $order, $operation_id) {
+    private static function journal_resolves_incident($journal, $incident) {
+        if (!is_array($journal) || !isset($journal['status']) || !isset($journal['revision'])) {
+            return false;
+        }
+        $status = sanitize_key((string) $journal['status']);
+        $journal_revision = (int) $journal['revision'];
+        $blocked_revision = is_array($incident) && isset($incident['journal_revision_at_block'])
+            ? (int) $incident['journal_revision_at_block']
+            : PHP_INT_MAX;
+
+        return 'manual_reconciled' === $status && $journal_revision > $blocked_revision;
+    }
+
+    private static function clear(WC_Order $order, $operation_id) {
         $operation_id = sanitize_key((string) $operation_id);
         $key = self::key($order->get_id());
 
