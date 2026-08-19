@@ -3,20 +3,22 @@
 defined('ABSPATH') || exit;
 
 /**
- * WooCommerce-facing adapter for the first P2 manual quantity-split workflow.
+ * WooCommerce-facing adapter for hardened Split execution.
  *
  * The production gateway owns authorization/gating; this adapter owns
- * WooCommerce compatibility preflight and request-local side-effect evidence.
- * Integration tests may instantiate it directly while the production gate is
- * still hard-off.
+ * WooCommerce compatibility preflight, operation-scoped price precision, and
+ * request-local physical-stock side-effect evidence. Manual quantity Split uses
+ * the default partial-line policy; reviewed server-built strategies may pass the
+ * explicit whole-line policy through their dedicated strategy adapter.
  */
 final class WCOS_Split_WooCommerce_Adapter {
 
-    public function split(WC_Order $source, array $plan, $operation_id, $confirmed_precision = null) {
+    public function split(WC_Order $source, array $plan, $operation_id, $confirmed_precision = null, $execution_policy = WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY) {
         $operation_id = sanitize_key((string) $operation_id);
         if ('' === $operation_id) {
             throw new InvalidArgumentException(__('A split operation ID is required.', 'wc-order-splitter'));
         }
+        $execution_policy = WCOS_Split_Execution_Policy::normalize($execution_policy);
 
         $source_id = $source->get_id();
         $precision = WCOS_Price_Precision_Scope::for_operation($source, $operation_id, $confirmed_precision);
@@ -61,7 +63,12 @@ final class WCOS_Split_WooCommerce_Adapter {
             add_action('woocommerce_order_note_added', $boundary_guard, PHP_INT_MAX, 2);
 
             try {
-                $children = (new WCOS_Split_Order_Service())->split($source, $plan, $operation_id);
+                $children = (new WCOS_Split_Order_Service())->split(
+                    $source,
+                    $plan,
+                    $operation_id,
+                    $execution_policy
+                );
                 WCOS_Stock_Side_Effect_Guard::assert_clean($stock_token);
                 return $children;
             } catch (Throwable $throwable) {
