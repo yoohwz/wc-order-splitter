@@ -44,6 +44,8 @@ final class WCOS_Split_Strategy_Admin_Controller {
 			$stored = WCOS_Split_Strategy_Review_Store::create($order, $strategy, $review, get_current_user_id());
 		} catch (WCOS_Split_Strategy_Review_Exception $exception) {
 			throw $this->review_transport_exception($exception);
+		} catch (RuntimeException $exception) {
+			throw new WCOS_Split_Transport_Exception('review_store_failed', $exception->getMessage(), 500, true);
 		}
 
 		return array(
@@ -92,10 +94,25 @@ final class WCOS_Split_Strategy_Admin_Controller {
 			throw $this->confirmation_transport_exception($exception);
 		} catch (InvalidArgumentException $exception) {
 			throw new WCOS_Split_Transport_Exception('invalid_confirmation', $exception->getMessage(), 422, false);
+		} catch (RuntimeException $exception) {
+			throw new WCOS_Split_Transport_Exception('confirmation_store_failed', $exception->getMessage(), 500, true);
 		}
 
-		/* Confirmation has copied the authoritative server-side Review. */
-		WCOS_Split_Strategy_Review_Store::consume($review_id);
+		/*
+		 * The server-side Review is single-use confirmation authority. Two
+		 * concurrent Confirm requests may both pass verify(), but only the request
+		 * that consumes the Review may keep and return its new confirmation. The
+		 * loser deletes its unexposed confirmation token and fails closed.
+		 */
+		if (!WCOS_Split_Strategy_Review_Store::consume($review_id)) {
+			WCOS_Split_Strategy_Confirmation_Store::delete($confirmation['operation_id']);
+			throw new WCOS_Split_Transport_Exception(
+				'review_already_consumed',
+				__('This Split strategy Review was already consumed by another confirmation request. Review the order again.', 'wc-order-splitter'),
+				409,
+				false
+			);
+		}
 
 		return array(
 			'operation_id' => $confirmation['operation_id'],
@@ -124,6 +141,22 @@ final class WCOS_Split_Strategy_Admin_Controller {
 			);
 		} catch (WCOS_Split_Strategy_Confirmation_Exception $exception) {
 			throw $this->confirmation_transport_exception($exception);
+		}
+
+		try {
+			$confirmed_strategy = WCOS_Split_Strategy_WooCommerce_Adapter::normalize_strategy(
+				isset($confirmation['strategy']) ? $confirmation['strategy'] : ''
+			);
+		} catch (InvalidArgumentException $exception) {
+			throw new WCOS_Split_Transport_Exception('confirmation_strategy_mismatch', __('The Split strategy confirmation has invalid semantic strategy authority.', 'wc-order-splitter'), 409, false);
+		}
+		if ($confirmed_strategy !== $strategy) {
+			throw new WCOS_Split_Transport_Exception(
+				'confirmation_strategy_mismatch',
+				__('The confirmed Split strategy does not match the requested strategy.', 'wc-order-splitter'),
+				409,
+				false
+			);
 		}
 
 		try {
@@ -194,6 +227,14 @@ final class WCOS_Split_Strategy_Admin_Controller {
 	}
 
 	private function assert_strategy_enabled($strategy) {
+		if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT)) {
+			throw new WCOS_Split_Transport_Exception(
+				'workflow_disabled',
+				__('Split is not enabled for production use.', 'wc-order-splitter'),
+				503,
+				false
+			);
+		}
 		if (!WCOS_Split_Strategy_Gates::enabled($strategy)) {
 			throw new WCOS_Split_Transport_Exception(
 				'strategy_disabled',
