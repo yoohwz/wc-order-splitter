@@ -1,0 +1,14 @@
+Order Splitter for WooCommerce — sandbox testing only
+
+Candidate: UI4
+Production release: NO
+Plugin header version: 1.4.14
+Runtime asset suffix: 1.4.14-sandbox-ui4
+
+Enabled for sandbox testing only:
+- manual_quantity = true
+- category = true
+- stock_status = true
+
+This candidate includes WooCommerce native Backbone modals plus the post-UI3 runtime fixes for deferred modal readiness, cloned strategy-control binding, and standard right-aligned modal footer actions.
+Do not deploy this candidate to production.
