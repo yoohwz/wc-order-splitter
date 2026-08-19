@@ -9,11 +9,19 @@ defined('ABSPATH') || exit;
  * WooCommerce compatibility preflight, operation-scoped price precision, and
  * request-local physical-stock side-effect evidence. Manual quantity Split uses
  * the default partial-line policy; reviewed server-built strategies may pass the
- * explicit whole-line policy through their dedicated strategy adapter.
+ * explicit whole-line policy and immutable strategy authority through their
+ * dedicated strategy adapter.
  */
 final class WCOS_Split_WooCommerce_Adapter {
 
-    public function split(WC_Order $source, array $plan, $operation_id, $confirmed_precision = null, $execution_policy = WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY) {
+    public function split(
+        WC_Order $source,
+        array $plan,
+        $operation_id,
+        $confirmed_precision = null,
+        $execution_policy = WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY,
+        array $strategy_authority = array()
+    ) {
         $operation_id = sanitize_key((string) $operation_id);
         if ('' === $operation_id) {
             throw new InvalidArgumentException(__('A split operation ID is required.', 'wc-order-splitter'));
@@ -67,7 +75,8 @@ final class WCOS_Split_WooCommerce_Adapter {
                     $source,
                     $plan,
                     $operation_id,
-                    $execution_policy
+                    $execution_policy,
+                    $strategy_authority
                 );
                 WCOS_Stock_Side_Effect_Guard::assert_clean($stock_token);
                 return $children;
