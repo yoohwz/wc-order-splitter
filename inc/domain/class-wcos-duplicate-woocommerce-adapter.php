@@ -26,6 +26,7 @@ final class WCOS_Duplicate_WooCommerce_Adapter {
                 throw new RuntimeException(__('The source order is no longer available.', 'wc-order-splitter'));
             }
 
+            $this->assert_verified_confirmation_source($source, $operation_id);
             WCOS_Duplicate_Preflight::assert_supported($source, $precision);
             $stock_token = WCOS_Stock_Side_Effect_Guard::begin($operation_id);
 
@@ -79,6 +80,28 @@ final class WCOS_Duplicate_WooCommerce_Adapter {
             return WCOS_Duplicate_Preflight::report($source, $precision);
         } finally {
             WCOS_Price_Precision_Scope::end($precision_token);
+        }
+    }
+
+    private function assert_verified_confirmation_source(WC_Order $source, $operation_id) {
+        if (!class_exists('WCOS_Duplicate_Confirmation_Store')) {
+            return;
+        }
+        $expected = WCOS_Duplicate_Confirmation_Store::verified_source_signature($operation_id);
+        if ('' === $expected) {
+            return;
+        }
+        $actual = WCOS_Order_Contract_Snapshot::source_signature($source);
+        if (!hash_equals($expected, $actual)) {
+            throw new WCOS_Duplicate_Preflight_Exception(
+                'source_changed_after_confirmation',
+                __('The source order changed after Duplicate confirmation verification but before mutation began. Review the order again.', 'wc-order-splitter'),
+                array(
+                    'supported' => false,
+                    'reason' => 'source_changed_after_confirmation',
+                    'order_id' => $source->get_id(),
+                )
+            );
         }
     }
 
