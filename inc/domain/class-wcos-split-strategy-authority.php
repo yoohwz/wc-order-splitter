@@ -22,6 +22,7 @@ final class WCOS_Split_Strategy_Authority {
 			throw new InvalidArgumentException(__('The Split strategy Review policy is not current.', 'wc-order-splitter'));
 		}
 
+		$source_order_id = isset($review['order_id']) ? absint($review['order_id']) : 0;
 		$source_signature = isset($review['source_signature']) ? sanitize_key((string) $review['source_signature']) : '';
 		$classification_fingerprint = isset($review['classification_fingerprint'])
 			? sanitize_key((string) $review['classification_fingerprint'])
@@ -31,7 +32,8 @@ final class WCOS_Split_Strategy_Authority {
 		$split_policy_version = absint($split_policy_version);
 		$canonical_plan = WCOS_Split_Plan::canonicalize_request($plan);
 
-		if (!self::is_sha256($source_signature)
+		if (!$source_order_id
+			|| !self::is_sha256($source_signature)
 			|| !self::is_sha256($classification_fingerprint)
 			|| '' === $source_bucket_key
 			|| !$split_policy_version
@@ -45,6 +47,7 @@ final class WCOS_Split_Strategy_Authority {
 
 		$authority = array(
 			'schema_version' => self::SCHEMA_VERSION,
+			'source_order_id' => $source_order_id,
 			'strategy' => $strategy,
 			'planner_policy_version' => $planner_policy_version,
 			'source_signature' => $source_signature,
@@ -65,6 +68,7 @@ final class WCOS_Split_Strategy_Authority {
 		);
 		$normalized = array(
 			'schema_version' => isset($authority['schema_version']) ? absint($authority['schema_version']) : 0,
+			'source_order_id' => isset($authority['source_order_id']) ? absint($authority['source_order_id']) : 0,
 			'strategy' => $strategy,
 			'planner_policy_version' => isset($authority['planner_policy_version']) ? absint($authority['planner_policy_version']) : 0,
 			'source_signature' => isset($authority['source_signature']) ? sanitize_key((string) $authority['source_signature']) : '',
@@ -77,6 +81,7 @@ final class WCOS_Split_Strategy_Authority {
 		);
 
 		if (self::SCHEMA_VERSION !== $normalized['schema_version']
+			|| !$normalized['source_order_id']
 			|| $normalized['planner_policy_version'] !== self::current_planner_policy_version($strategy)
 			|| !self::is_sha256($normalized['source_signature'])
 			|| !self::is_sha256($normalized['classification_fingerprint'])
@@ -104,6 +109,9 @@ final class WCOS_Split_Strategy_Authority {
 		$execution_policy = WCOS_Split_Execution_Policy::normalize($execution_policy);
 		$current_precision = WCOS_Price_Precision_Scope::current_or_store_precision();
 
+		if ((int) $authority['source_order_id'] !== (int) $source->get_id()) {
+			throw new RuntimeException(__('The confirmed Split strategy authority belongs to a different source order.', 'wc-order-splitter'));
+		}
 		if ($authority['plan'] !== $canonical_plan) {
 			throw new RuntimeException(__('The confirmed Split strategy plan does not match the mutation request.', 'wc-order-splitter'));
 		}
@@ -116,9 +124,6 @@ final class WCOS_Split_Strategy_Authority {
 		if ((int) $authority['split_policy_version'] !== (int) WCOS_Split_Preflight::POLICY_VERSION) {
 			throw new RuntimeException(__('The confirmed Split strategy safety policy is no longer current.', 'wc-order-splitter'));
 		}
-
-		$journal = WCOS_Operation_Journal::get($source, '');
-		unset($journal); // Keep this method side-effect free; journal matching is owned by the service.
 		return $authority;
 	}
 
@@ -138,7 +143,7 @@ final class WCOS_Split_Strategy_Authority {
 		unset($payload['authority_fingerprint']);
 		return WCOS_Mutation_Fingerprint::create(
 			'split_strategy_authority',
-			0,
+			isset($authority['source_order_id']) ? absint($authority['source_order_id']) : 0,
 			$payload
 		);
 	}
