@@ -19,7 +19,6 @@ wcos_p2_adapter_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT), '
 wcos_p2_adapter_assert(WCOS_Feature_Gates::any_enabled(), 'Production gate set was reported as fully disabled.');
 wcos_p2_adapter_assert(WC_Order_Splitter_Safety_Guard::mutations_enabled(), 'Safety guard did not reflect the approved Split gate.');
 foreach (array(
-	WCOS_Feature_Gates::DUPLICATE,
 	WCOS_Feature_Gates::MERGE,
 	WCOS_Feature_Gates::RETURN_ORDER,
 	WCOS_Feature_Gates::BULK_RETURN,
