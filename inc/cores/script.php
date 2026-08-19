@@ -68,9 +68,11 @@ class WC_Order_Splitter_Script {
 
 		include_once $root . 'backend/class-wcos-split-request-parser.php';
 		include_once $root . 'backend/class-wcos-split-confirmation-store.php';
+		include_once $root . 'backend/class-wcos-split-strategy-review-store.php';
 		include_once $root . 'backend/class-wcos-split-strategy-confirmation-store.php';
 		include_once $root . 'backend/class-wcos-split-admin-controller.php';
 		new WCOS_Split_Admin_Controller();
+		include_once $root . 'backend/class-wcos-split-strategy-admin-controller.php';
 
 		include_once $root . 'backend/class-wcos-duplicate-confirmation-store.php';
 		include_once $root . 'backend/class-wcos-duplicate-admin-controller.php';
@@ -84,9 +86,9 @@ class WC_Order_Splitter_Script {
 		/*
 		 * Legacy mutation handlers are deliberately never loaded here. Hardened
 		 * production transports must enter through WCOS_Mutation_Gateway. Category
-		 * and Stock-status planner/adapter/confirmation foundations loaded above
-		 * remain internal; their strategy gates are hard-off and no production
-		 * transport is registered.
+		 * and Stock-status planner/adapter/review/confirmation/controller contracts
+		 * loaded above remain internal; their strategy gates are hard-off and the
+		 * strategy controller is deliberately not instantiated or registered.
 		 */
 	}
 }
