@@ -1,0 +1,411 @@
+name: Sandbox strategy candidate
+
+on:
+  push:
+    branches:
+      - sandbox/order-splitter-strategy-candidate-v2
+  workflow_dispatch:
+
+concurrency:
+  group: sandbox-strategy-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  php-syntax:
+    name: Candidate PHP syntax and unit contracts (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.1', '8.3']
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Lint PHP files
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            php -l "$file"
+          done < <(find . -type f -name '*.php' -print0)
+
+      - name: Run mutation-domain unit tests
+        run: php tests/unit/run.php
+
+  candidate-package:
+    name: Candidate package and exact gate contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          coverage: none
+
+      - name: Validate exact sandbox candidate state
+        shell: bash
+        run: |
+          set -euo pipefail
+          plugin_version=$(sed -n 's/^ \* Version: //p' wc-order-splitter.php | head -n 1)
+          stable_tag=$(sed -n 's/^Stable tag: //p' readme.txt | head -n 1)
+          test -n "$plugin_version"
+          test "$plugin_version" = "$stable_tag"
+          test -f sandbox-candidate.txt
+          grep -Fq 'sandbox testing only' sandbox-candidate.txt
+          grep -Fq 'return WCOS_Feature_Gates::any_enabled();' inc/cores/safety.php
+          grep -Fq 'self::SPLIT => true' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::DUPLICATE => true' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::MERGE => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::RETURN_ORDER => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::MANUAL_QUANTITY => true' inc/domain/class-wcos-split-strategy-gates.php
+          grep -Fq 'self::CATEGORY => true' inc/domain/class-wcos-split-strategy-gates.php
+          grep -Fq 'self::STOCK_STATUS => true' inc/domain/class-wcos-split-strategy-gates.php
+          test ! -d inc/mutation-v2
+
+          telemetry_host='yoexpress''.''top'
+          if grep -R --line-number --fixed-strings "$telemetry_host" \
+            wc-order-splitter.php readme.txt changelog.txt inc js \
+            --include='*.php' --include='*.js' --include='*.txt'; then
+            echo 'Removed telemetry endpoint must not be present in candidate source.' >&2
+            exit 1
+          fi
+
+          if grep -R --line-number -E 'WC_ORDER_SPLITTER_(MUTATIONS|SPLIT|DUPLICATE|MERGE|RETURN|BULK_RETURN)_ENABLED' \
+            wc-order-splitter.php inc/cores inc/domain; then
+            echo 'Externally overrideable mutation gates must not return.' >&2
+            exit 1
+          fi
+
+      - name: Build sandbox candidate package tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_root="$RUNNER_TEMP/package/wc-order-splitter"
+          mkdir -p "$package_root"
+          rsync -a ./ "$package_root/" --exclude-from='.distignore'
+
+          find "$package_root" -type f -name '*.php' -print0 | while IFS= read -r -d '' file; do
+            php -l "$file" >/dev/null
+          done
+
+          for forbidden_path in \
+            'inc/backend/actions' \
+            'inc/backend/orders-bulk-return.php' \
+            'inc/backend/order-split-button.php' \
+            'inc/backend/order-return-option.php' \
+            'inc/backend/order-duplicate-option.php' \
+            'inc/backend/order-merge-option.php' \
+            'js/bulk-return-action.js' \
+            'js/merge-action.js' \
+            'js/post-action-tip.js' \
+            'js/split-table.js' \
+            'inc/mutation-v2' \
+            'tests' \
+            'docs' \
+            'AGENTS.md'; do
+            if test -e "$package_root/$forbidden_path"; then
+              echo "Unsafe or development-only path entered candidate package: $forbidden_path" >&2
+              exit 1
+            fi
+          done
+
+          for required_path in \
+            'sandbox-candidate.txt' \
+            'inc/backend/class-wcos-split-admin-controller.php' \
+            'inc/backend/class-wcos-split-confirmation-store.php' \
+            'inc/domain/class-wcos-split-woocommerce-adapter.php' \
+            'inc/domain/class-wcos-split-order-service.php' \
+            'js/p2-split-admin.js' \
+            'css/p2-split-admin.css' \
+            'inc/backend/class-wcos-duplicate-admin-controller.php' \
+            'inc/backend/class-wcos-duplicate-confirmation-store.php' \
+            'inc/domain/class-wcos-duplicate-woocommerce-adapter.php' \
+            'inc/domain/class-wcos-duplicate-order-service.php' \
+            'js/p2-duplicate-admin.js' \
+            'css/p2-duplicate-admin.css' \
+            'inc/backend/class-wcos-split-strategy-review-store.php' \
+            'inc/backend/class-wcos-split-strategy-confirmation-store.php' \
+            'inc/backend/class-wcos-split-strategy-admin-controller.php' \
+            'inc/domain/class-wcos-split-strategy-gates.php' \
+            'inc/domain/class-wcos-category-split-planner.php' \
+            'inc/domain/class-wcos-stock-status-split-planner.php' \
+            'inc/domain/class-wcos-split-strategy-woocommerce-adapter.php' \
+            'js/p2-split-strategy-admin.js' \
+            'css/p2-split-strategy-admin.css'; do
+            if test ! -e "$package_root/$required_path"; then
+              echo "Required sandbox runtime asset is missing: $required_path" >&2
+              exit 1
+            fi
+          done
+
+          if find "$package_root" -type l | grep -q .; then
+            echo 'Sandbox candidate package must not contain symbolic links.' >&2
+            exit 1
+          fi
+          if grep -R --line-number -E 'yoexpress\.top|WC_Order_Splitter_Push_Subscription' "$package_root"; then
+            echo 'Removed telemetry code entered the candidate package.' >&2
+            exit 1
+          fi
+
+          touch -t 200001010000 "$package_root"
+          find "$package_root" -exec touch -t 200001010000 {} +
+          cd "$RUNNER_TEMP/package"
+          find wc-order-splitter -type f -print | LC_ALL=C sort | zip -X -q "$GITHUB_WORKSPACE/wc-order-splitter-sandbox.zip" -@
+
+      - name: Inspect candidate ZIP and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -t wc-order-splitter-sandbox.zip
+          unzip -p wc-order-splitter-sandbox.zip wc-order-splitter/sandbox-candidate.txt | grep -Fq 'sandbox testing only'
+          unzip -p wc-order-splitter-sandbox.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::MANUAL_QUANTITY => true'
+          unzip -p wc-order-splitter-sandbox.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::CATEGORY => true'
+          unzip -p wc-order-splitter-sandbox.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::STOCK_STATUS => true'
+          unzip -p wc-order-splitter-sandbox.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::SPLIT => true'
+          unzip -p wc-order-splitter-sandbox.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::DUPLICATE => true'
+          unzip -p wc-order-splitter-sandbox.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::MERGE => false'
+          unzip -p wc-order-splitter-sandbox.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::RETURN_ORDER => false'
+          unzip -p wc-order-splitter-sandbox.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::BULK_RETURN => false'
+          for required_archive_path in \
+            'wc-order-splitter/inc/backend/class-wcos-split-strategy-review-store.php' \
+            'wc-order-splitter/inc/backend/class-wcos-split-strategy-confirmation-store.php' \
+            'wc-order-splitter/inc/backend/class-wcos-split-strategy-admin-controller.php' \
+            'wc-order-splitter/inc/domain/class-wcos-category-split-planner.php' \
+            'wc-order-splitter/inc/domain/class-wcos-stock-status-split-planner.php' \
+            'wc-order-splitter/inc/domain/class-wcos-split-strategy-woocommerce-adapter.php' \
+            'wc-order-splitter/js/p2-split-strategy-admin.js' \
+            'wc-order-splitter/css/p2-split-strategy-admin.css'; do
+            unzip -Z1 wc-order-splitter-sandbox.zip | grep -Fxq "$required_archive_path"
+          done
+          if unzip -Z1 wc-order-splitter-sandbox.zip | grep -E '(^|/)(tests|docs|node_modules|inc/mutation-v2)(/|$)|(^|/)AGENTS\.md$'; then
+            echo 'Development-only content entered the candidate ZIP.' >&2
+            exit 1
+          fi
+          sha256sum wc-order-splitter-sandbox.zip > wc-order-splitter-sandbox.zip.sha256
+          cat wc-order-splitter-sandbox.zip.sha256
+
+      - name: Upload sandbox candidate artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wc-order-splitter-sandbox-${{ github.sha }}
+          path: |
+            wc-order-splitter-sandbox.zip
+            wc-order-splitter-sandbox.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  integration:
+    name: Candidate WooCommerce 11.0.1 / ${{ matrix.storage }} storage
+    needs: [php-syntax]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        storage: [legacy, hpos, hpos-sync]
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Install wp-env
+        run: npm install --no-audit --no-fund
+
+      - name: Start WordPress
+        run: npx wp-env start
+
+      - name: Install and activate WooCommerce 11.0.1
+        run: npx wp-env run cli wp plugin install https://downloads.wordpress.org/plugin/woocommerce.11.0.1.zip --activate
+
+      - name: Install early-translation monitor
+        run: |
+          npx wp-env run cli wp eval '
+            wp_mkdir_p(WPMU_PLUGIN_DIR);
+            @unlink(WP_CONTENT_DIR . "/wcos-early-translation.jsonl");
+            $source = WP_PLUGIN_DIR . "/wc-order-splitter/tests/integration/early-translation-monitor.php";
+            $target = WPMU_PLUGIN_DIR . "/wcos-early-translation-monitor.php";
+            if (!copy($source, $target)) { exit(1); }
+          '
+
+      - name: Activate sandbox candidate
+        run: npx wp-env run cli wp plugin activate wc-order-splitter
+
+      - name: Reject early WooCommerce translation loading
+        run: |
+          npx wp-env run cli wp eval '
+            $log = WP_CONTENT_DIR . "/wcos-early-translation.jsonl";
+            if (file_exists($log) && filesize($log) > 0) {
+              fwrite(STDERR, file_get_contents($log));
+              exit(1);
+            }
+            echo "candidate-early-translation-loading-ok\n";
+          '
+
+      - name: Configure legacy order storage
+        if: matrix.storage == 'legacy'
+        run: |
+          npx wp-env run cli wp option update woocommerce_custom_orders_table_enabled no
+          npx wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled no
+
+      - name: Configure HPOS-only order storage
+        if: matrix.storage == 'hpos'
+        run: |
+          npx wp-env run cli wp option update woocommerce_custom_orders_table_enabled yes
+          npx wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled no
+
+      - name: Configure HPOS compatibility mode
+        if: matrix.storage == 'hpos-sync'
+        run: |
+          npx wp-env run cli wp option update woocommerce_custom_orders_table_enabled yes
+          npx wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled yes
+
+      - name: Verify exact enabled sandbox state and routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wp-env run cli wp plugin is-active woocommerce
+          npx wp-env run cli wp plugin is-active wc-order-splitter
+          npx wp-env run cli wp eval '
+            $expected = "${{ matrix.storage }}";
+            $hpos = \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
+            if (("legacy" === $expected && $hpos) || ("legacy" !== $expected && !$hpos)) { exit(1); }
+            if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT)) { exit(1); }
+            if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::DUPLICATE)) { exit(1); }
+            foreach (array(WCOS_Feature_Gates::MERGE, WCOS_Feature_Gates::RETURN_ORDER, WCOS_Feature_Gates::BULK_RETURN) as $disabled) {
+              if (WCOS_Feature_Gates::enabled($disabled)) { exit(1); }
+            }
+            foreach (array(WCOS_Split_Strategy_Gates::MANUAL_QUANTITY, WCOS_Split_Strategy_Gates::CATEGORY, WCOS_Split_Strategy_Gates::STOCK_STATUS) as $enabled_strategy) {
+              if (!WCOS_Split_Strategy_Gates::enabled($enabled_strategy)) { exit(1); }
+            }
+            if (false === has_action("wp_ajax_" . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION)) { exit(1); }
+            if (false === has_action("wp_ajax_" . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION)) { exit(1); }
+            if (false === has_action("wp_ajax_" . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION)) { exit(1); }
+            foreach (array("wp_ajax_split_order_by_category", "wp_ajax_split_order_by_stock_status") as $legacy_hook) {
+              if (false !== has_action($legacy_hook)) { exit(1); }
+            }
+            echo "candidate-enabled-strategy-state-ok\n";
+          '
+
+      - name: Verify mutation lease, foundation, strategy hard-off regressions and candidate E2E
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/operation-control-smoke.php
+
+      - name: Verify mutation leases stay bound to operation IDs
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/lease-operation-binding-smoke.php
+
+      - name: Verify governance, authorization, and metadata policy
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/governance-smoke.php
+
+      - name: Verify Duplicate integrity, idempotency, and recovery
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/duplicate-smoke.php
+
+      - name: Verify manual Split conservation, idempotency, and recovery
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/split-smoke.php
+
+      - name: Verify variation identity and historical tax conservation
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/tax-variation-smoke.php
+
+      - name: Verify mutation side effects remain idempotent
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/side-effects-smoke.php
+
+      - name: Verify compensating rollback and crash resume
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/compensation-smoke.php
+
+      - name: Verify retry idempotency at every persistence boundary
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/failure-matrix-smoke.php
+
+      - name: Verify source-save crash recovery contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/source-save-crash-smoke.php
+
+      - name: Verify authoritative journal durability
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/journal-durability-smoke.php
+
+      - name: Reject corrupted reduced-stock source markers
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/stock-marker-validation-smoke.php
+
+      - name: Verify real concurrent operation lease exclusion
+        if: matrix.storage == 'hpos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw="$(npx wp-env run cli wp eval '$o = wc_create_order(); $o->set_status("pending"); $o->save(); echo "WCOS_ORDER_ID=" . $o->get_id() . "\n";')"
+          order_id="$(printf '%s\n' "$raw" | sed -n 's/.*WCOS_ORDER_ID=\([0-9][0-9]*\).*/\1/p' | tail -n 1)"
+          test -n "$order_id"
+          worker='wp-content/plugins/wc-order-splitter/tests/integration/concurrency-lock-worker.php'
+          npx wp-env run cli wp eval-file "$worker" "$order_id" worker-a 4 > /tmp/wcos-worker-a.log 2>&1 &
+          worker_a_pid=$!
+          sleep 1
+          npx wp-env run cli wp eval-file "$worker" "$order_id" worker-b 0 > /tmp/wcos-worker-b.log 2>&1
+          wait "$worker_a_pid"
+          grep -Fq 'ACQUIRED worker-a' /tmp/wcos-worker-a.log
+          grep -Fq 'BLOCKED worker-b' /tmp/wcos-worker-b.log
+          npx wp-env run cli wp eval '$o = wc_get_order('"$order_id"'); if ($o) { $o->delete(true); }'
+
+      - name: Verify real concurrent strategy Confirm remains single-success
+        if: matrix.storage == 'hpos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture='wp-content/plugins/wc-order-splitter/tests/integration/strategy-confirm-race-fixture.php'
+          worker='wp-content/plugins/wc-order-splitter/tests/integration/strategy-confirm-race-worker.php'
+          cleanup='wp-content/plugins/wc-order-splitter/tests/integration/strategy-confirm-race-cleanup.php'
+          cleanup_race() { npx wp-env run cli wp eval-file "$cleanup" || true; }
+          trap cleanup_race EXIT
+          npx wp-env run cli wp eval-file "$fixture"
+          npx wp-env run cli wp eval-file "$worker" worker-a > /tmp/wcos-confirm-worker-a.log 2>&1 &
+          a=$!
+          npx wp-env run cli wp eval-file "$worker" worker-b > /tmp/wcos-confirm-worker-b.log 2>&1 &
+          b=$!
+          wait "$a"
+          wait "$b"
+          cat /tmp/wcos-confirm-worker-a.log
+          cat /tmp/wcos-confirm-worker-b.log
+          success_count="$(awk '/^CONFIRMED / { count++ } END { print count + 0 }' /tmp/wcos-confirm-worker-a.log /tmp/wcos-confirm-worker-b.log)"
+          rejected_count="$(awk '/^REJECTED / { count++ } END { print count + 0 }' /tmp/wcos-confirm-worker-a.log /tmp/wcos-confirm-worker-b.log)"
+          test "$success_count" -eq 1
+          test "$rejected_count" -eq 1
+          cleanup_race
+          trap - EXIT
+
+      - name: Stop WordPress
+        if: always()
+        run: npx wp-env stop
+
+  required:
+    name: Required Sandbox Candidate
+    if: always()
+    needs:
+      - php-syntax
+      - candidate-package
+      - integration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify every sandbox candidate gate passed
+        env:
+          PHP_RESULT: ${{ needs['php-syntax'].result }}
+          PACKAGE_RESULT: ${{ needs['candidate-package'].result }}
+          INTEGRATION_RESULT: ${{ needs['integration'].result }}
+        run: |
+          set -euo pipefail
+          test "$PHP_RESULT" = success
+          test "$PACKAGE_RESULT" = success
+          test "$INTEGRATION_RESULT" = success
+          echo "required-sandbox-candidate-ok"
