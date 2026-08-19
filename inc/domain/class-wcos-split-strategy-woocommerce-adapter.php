@@ -42,13 +42,18 @@ final class WCOS_Split_Strategy_WooCommerce_Adapter {
 
 	public function split(WC_Order $source, $strategy, array $plan, $operation_id, $confirmed_precision = null) {
 		self::normalize_strategy($strategy);
+		$operation_id = sanitize_key((string) $operation_id);
+		if ('' === $operation_id) {
+			throw new InvalidArgumentException(__('A split operation ID is required.', 'wc-order-splitter'));
+		}
+
 		$source_id = $source->get_id();
 		$source = $source_id ? wc_get_order($source_id) : false;
 		if (!$source instanceof WC_Order) {
 			throw new RuntimeException(__('The source order is no longer available.', 'wc-order-splitter'));
 		}
 
-		$normalized_plan = $this->assert_whole_line_bucket_plan($source, $plan);
+		$normalized_plan = $this->assert_whole_line_bucket_plan($source, $plan, $operation_id);
 		return (new WCOS_Split_WooCommerce_Adapter())->split(
 			$source,
 			$normalized_plan,
@@ -73,27 +78,19 @@ final class WCOS_Split_Strategy_WooCommerce_Adapter {
 		return $strategy;
 	}
 
-	private function assert_whole_line_bucket_plan(WC_Order $source, array $plan) {
-		$normalized = WCOS_Split_Plan::normalize(
-			$source,
-			$plan,
-			WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER
-		);
-
-		$assigned_item_ids = array();
-		foreach ($normalized as $items) {
-			foreach ($items as $item_id => $quantity) {
-				$item_id = absint($item_id);
-				if (isset($assigned_item_ids[$item_id])) {
-					throw new InvalidArgumentException(__('A server-built Split strategy may assign each source line to only one child bucket.', 'wc-order-splitter'));
-				}
-				$assigned_item_ids[$item_id] = true;
-			}
+	private function assert_whole_line_bucket_plan(WC_Order $source, array $plan, $operation_id) {
+		$canonical = WCOS_Split_Plan::canonicalize_request($plan);
+		$record = WCOS_Operation_Journal::get($source, $operation_id);
+		if (is_array($record)) {
+			return $this->assert_recorded_bucket_plan($canonical, $record);
 		}
 
-		$assigned_item_ids = array_keys($assigned_item_ids);
-		$assigned_item_ids = array_values(array_map('absint', $assigned_item_ids));
-		sort($assigned_item_ids, SORT_NUMERIC);
+		$normalized = WCOS_Split_Plan::normalize(
+			$source,
+			$canonical,
+			WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER
+		);
+		$assigned_item_ids = $this->assigned_item_ids($normalized);
 		$fully_moved_item_ids = WCOS_Split_Plan::fully_moved_item_ids(
 			$source,
 			$normalized,
@@ -105,5 +102,51 @@ final class WCOS_Split_Strategy_WooCommerce_Adapter {
 		}
 
 		return $normalized;
+	}
+
+	private function assert_recorded_bucket_plan(array $canonical_plan, array $record) {
+		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
+		$record_policy = isset($context['execution_policy'])
+			? WCOS_Split_Execution_Policy::normalize($context['execution_policy'])
+			: WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY;
+		if (WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER !== $record_policy) {
+			throw new RuntimeException(__('The durable Split operation does not carry server-built whole-line execution authority.', 'wc-order-splitter'));
+		}
+		if (!isset($context['plan']) || !is_array($context['plan'])) {
+			throw new RuntimeException(__('The durable Split operation is missing its frozen strategy plan.', 'wc-order-splitter'));
+		}
+
+		$recorded_plan = WCOS_Split_Plan::canonicalize_request($context['plan']);
+		if ($recorded_plan !== $canonical_plan) {
+			throw new RuntimeException(__('The requested strategy plan does not match the durable Split operation.', 'wc-order-splitter'));
+		}
+
+		$assigned_item_ids = $this->assigned_item_ids($recorded_plan);
+		$fully_moved_item_ids = isset($context['fully_moved_item_ids'])
+			? array_values(array_unique(array_filter(array_map('absint', (array) $context['fully_moved_item_ids']))))
+			: array();
+		sort($fully_moved_item_ids, SORT_NUMERIC);
+		if ($assigned_item_ids !== $fully_moved_item_ids) {
+			throw new RuntimeException(__('The durable Split operation does not prove whole-line bucket semantics for every assigned source line.', 'wc-order-splitter'));
+		}
+
+		return $recorded_plan;
+	}
+
+	private function assigned_item_ids(array $normalized_plan) {
+		$assigned = array();
+		foreach ($normalized_plan as $items) {
+			foreach ($items as $item_id => $quantity) {
+				$item_id = absint($item_id);
+				if (isset($assigned[$item_id])) {
+					throw new InvalidArgumentException(__('A server-built Split strategy may assign each source line to only one child bucket.', 'wc-order-splitter'));
+				}
+				$assigned[$item_id] = true;
+			}
+		}
+
+		$assigned = array_values(array_map('absint', array_keys($assigned)));
+		sort($assigned, SORT_NUMERIC);
+		return $assigned;
 	}
 }
