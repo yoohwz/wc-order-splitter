@@ -61,10 +61,20 @@ foreach (array(
     'wcos-admin-backbone-modal__body',
     'wcos-admin-backbone-modal__footer',
     'wc_backbone_modal_removed',
+    'function remapClonedIds',
+    "container.querySelectorAll('[id]')",
+    "container.querySelectorAll('[for]')",
+    "['aria-labelledby', 'aria-describedby', 'aria-controls', 'aria-owns']",
+    'remapClonedIds(body, instanceId);',
 ) as $needle) {
-    wcos_p2_adapter_assert(false !== strpos($bridge, $needle), 'Shared modal bridge is missing WooCommerce Backbone contract: ' . $needle);
+    wcos_p2_adapter_assert(false !== strpos($bridge, $needle), 'Shared modal bridge is missing WooCommerce Backbone/ID-remap contract: ' . $needle);
 }
 wcos_p2_adapter_assert(false === strpos($bridge, '.innerHTML'), 'Shared Backbone modal bridge uses innerHTML.');
+
+$asset_contract = file_get_contents($root . '/inc/backend/class-wcos-admin-backbone-modal-assets.php');
+wcos_p2_adapter_assert(is_string($asset_contract) && false !== strpos($asset_contract, "wp_enqueue_script('wc-backbone-modal')"), 'Backbone modal asset contract does not require the WooCommerce native handle.');
+wcos_p2_adapter_assert(false !== strpos($asset_contract, "array('jquery', 'wc-backbone-modal')"), 'Shared modal bridge does not declare the WooCommerce Backbone dependency.');
+wcos_p2_adapter_assert(false !== strpos($asset_contract, "'wcos-split-admin', 'wcos-duplicate-admin', 'wcos-split-strategy-admin'"), 'Workflow modal clients are not dependency-bound to the shared bridge.');
 
 $css = file_get_contents($root . '/css/p2-split-admin.css');
 wcos_p2_adapter_assert(is_string($css) && false !== strpos($css, '.wcos-split-backbone-modal .wc-backbone-modal-content'), 'Split CSS does not target the WooCommerce Backbone shell.');
