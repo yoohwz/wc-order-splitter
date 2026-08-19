@@ -1,0 +1,14 @@
+Order Splitter for WooCommerce — Sandbox Strategy Candidate
+
+This package is intended for sandbox testing only.
+
+Candidate-only strategy gate state:
+- manual_quantity = true
+- category = true
+- stock_status = true
+
+This candidate includes the post-#29 streamlined admin UI and uses a candidate-only asset version suffix so the refreshed JavaScript and CSS are requested even though the plugin header remains 1.4.14.
+
+The hardened Split and Duplicate workflows remain enabled. Merge, Return Order, and Bulk Return remain disabled.
+
+This candidate is not a production release and must not be deployed to a live store until separate production enablement review and Human Gate approval are completed.
