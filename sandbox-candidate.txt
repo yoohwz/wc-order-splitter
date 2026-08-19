@@ -1,0 +1,15 @@
+Order Splitter sandbox testing only
+
+Candidate: UI5
+Source baseline: main after PR #35 (f0e553a2140c126a6b9eb6577271c7f179bed02e)
+Plugin header: 1.4.14
+Runtime asset suffix: 1.4.14-sandbox-ui5
+
+Sandbox strategy state:
+- manual quantity: enabled
+- category: enabled
+- stock status: enabled
+
+UI5 specifically keeps Category / Stock-status Review, Confirm and Execute actions in the WooCommerce Backbone modal footer by phase, and surfaces server status/error/success feedback directly below the modal description.
+
+Do not deploy this sandbox candidate to production.
