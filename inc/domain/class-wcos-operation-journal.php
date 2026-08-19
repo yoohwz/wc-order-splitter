@@ -440,7 +440,7 @@ final class WCOS_Operation_Journal {
             }
         }
 
-        foreach (array('execution_policy', 'fully_moved_item_ids') as $field) {
+        foreach (array('execution_policy', 'fully_moved_item_ids', 'strategy_authority') as $field) {
             if (array_key_exists($field, $current_context)) {
                 if (!array_key_exists($field, $replacement_context)
                     || $current_context[$field] !== $replacement_context[$field]) {
