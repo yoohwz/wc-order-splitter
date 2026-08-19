@@ -37,6 +37,14 @@ final class WCOS_Category_Split_Planner {
 			);
 		}
 
+		/*
+		 * WooCommerce guarantees a default product category and normally assigns
+		 * it when a persisted product has no explicit category. Treat the stable
+		 * default term ID as the semantic Uncategorized bucket when it is the
+		 * product's only leaf category. Never depend on the mutable term name or
+		 * slug for this classification.
+		 */
+		$default_category_id = absint(get_option('default_product_cat', 0));
 		$buckets = array();
 		foreach ($source->get_items('line_item') as $item_id => $item) {
 			if (!$item instanceof WC_Order_Item_Product) {
@@ -76,17 +84,21 @@ final class WCOS_Category_Split_Planner {
 				);
 			}
 
-			if (empty($leaf_terms)) {
+			$term = empty($leaf_terms) ? null : reset($leaf_terms);
+			$is_default_category = $term instanceof WP_Term
+				&& $default_category_id > 0
+				&& $default_category_id === absint($term->term_id);
+
+			if (!$term instanceof WP_Term || $is_default_category) {
 				$bucket_key = self::UNCATEGORIZED_BUCKET;
 				$bucket = array(
 					'key' => $bucket_key,
-					'term_id' => 0,
-					'term_slug' => '',
-					'label' => __('Uncategorized', 'wc-order-splitter'),
+					'term_id' => $is_default_category ? absint($term->term_id) : 0,
+					'term_slug' => $is_default_category ? sanitize_title((string) $term->slug) : '',
+					'label' => $is_default_category ? (string) $term->name : __('Uncategorized', 'wc-order-splitter'),
 					'items' => array(),
 				);
 			} else {
-				$term = reset($leaf_terms);
 				$bucket_key = 'category-' . absint($term->term_id);
 				$bucket = array(
 					'key' => $bucket_key,
