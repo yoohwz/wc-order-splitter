@@ -173,7 +173,7 @@ $forward_suites = array(
 	'forward_after_verification_before_commit' => 'after_verification_before_commit',
 	'forward_after_commit_before_complete' => 'after_commit_before_complete',
 );
-wcos_merge_service_assert(in_array($suite, array_merge(array('all', 'core', 'crash_pre', 'response_loss', 'lease_loss', 'stock_guard_before', 'stock_guard_after', 'drift_stock'), array_keys($forward_suites)), true), 'Unknown Merge service smoke suite.');
+wcos_merge_service_assert(in_array($suite, array_merge(array('all', 'core', 'crash_pre', 'response_loss', 'lease_loss', 'stock_guard_before', 'stock_guard_after', 'drift_stock', 'checkpoint_drift'), array_keys($forward_suites)), true), 'Unknown Merge service smoke suite.');
 
 try {
 	$managed = wcos_merge_service_product('Merge managed fixture');
@@ -204,6 +204,41 @@ try {
 	$result = (new WCOS_Merge_WooCommerce_Adapter())->merge($source, $target, $operation_id, 2);
 	$retry = (new WCOS_Merge_WooCommerce_Adapter())->merge(wc_get_order($source->get_id()), wc_get_order($target->get_id()), $operation_id, 2);
 	wcos_merge_service_assert($result === $retry, 'Completed Merge retry did not return the stable result.');
+	$target_before_lifecycle = wc_get_order($target->get_id());
+	$item_ids_before_lifecycle = array_map('intval', array_keys($target_before_lifecycle->get_items('line_item')));
+	$tax_ids_before_lifecycle = array_map('intval', array_keys($target_before_lifecycle->get_items('tax')));
+	$completed_record = WCOS_Operation_Journal::get(wc_get_order($source->get_id()), $operation_id);
+	$completed_pair = WCOS_Merge_Journal_Context::assert_executable_policy($completed_record);
+	$terminal_authority = WCOS_Merge_Journal_Context::terminal_result_from_record($completed_record);
+	wcos_merge_service_assert($result['target_item_ids'] === $terminal_authority['target_item_ids'], 'Terminal result did not bind the operation-owned target lines.');
+	wcos_merge_service_assert(false === strpos(wp_json_encode($completed_record['context']['merge_terminal_result']), '@example.test'), 'Terminal result persisted fixture PII.');
+	$tampered_terminal_record = $completed_record;
+	$tampered_terminal_record['context']['merge_terminal_result']['target_order_id']++;
+	$terminal_tamper_rejected = false;
+	try {
+		WCOS_Merge_Journal_Context::terminal_result_from_record($tampered_terminal_record);
+	} catch (RuntimeException $exception) {
+		$terminal_tamper_rejected = true;
+	}
+	wcos_merge_service_assert($terminal_tamper_rejected, 'Tampered Merge terminal result did not fail self-verification.');
+	$relation_before_lifecycle = WCOS_Merge_Participation::state_for_pair(wc_get_order($source->get_id()), $target_before_lifecycle, $operation_id, $completed_pair['pair_fingerprint']);
+	$ownership_before_lifecycle = array();
+	foreach ($target_before_lifecycle->get_items('line_item') as $item) {
+		$ownership_before_lifecycle[(int) $item->get_id()] = (string) $item->get_meta('_reduced_stock', true);
+	}
+	$target_before_lifecycle->set_status('processing');
+	$target_before_lifecycle->save();
+	$lifecycle_retry = (new WCOS_Merge_WooCommerce_Adapter())->merge(wc_get_order($source->get_id()), wc_get_order($target->get_id()), $operation_id, 2);
+	$target_after_lifecycle = wc_get_order($target->get_id());
+	$ownership_after_lifecycle = array();
+	foreach ($target_after_lifecycle->get_items('line_item') as $item) {
+		$ownership_after_lifecycle[(int) $item->get_id()] = (string) $item->get_meta('_reduced_stock', true);
+	}
+	wcos_merge_service_assert($result === $lifecycle_retry, 'Post-completion target lifecycle progression lost the stable terminal result.');
+	wcos_merge_service_assert($item_ids_before_lifecycle === array_map('intval', array_keys($target_after_lifecycle->get_items('line_item'))), 'Terminal replay added target lines after lifecycle progression.');
+	wcos_merge_service_assert($tax_ids_before_lifecycle === array_map('intval', array_keys($target_after_lifecycle->get_items('tax'))), 'Terminal replay added target tax rows after lifecycle progression.');
+	wcos_merge_service_assert($relation_before_lifecycle === WCOS_Merge_Participation::state_for_pair(wc_get_order($source->get_id()), $target_after_lifecycle, $operation_id, $completed_pair['pair_fingerprint']), 'Terminal replay changed reciprocal relations after lifecycle progression.');
+	wcos_merge_service_assert($ownership_before_lifecycle === $ownership_after_lifecycle, 'Terminal replay changed stock ownership after lifecycle progression.');
 	wcos_merge_service_assert('completed' === $result['status'], 'Merge service did not complete.');
 	wcos_merge_service_assert('non_force_trash_archive' === $result['retirement_policy'], 'Result lost the binding retirement policy.');
 	wcos_merge_service_assert(2 === count($result['target_item_ids']), 'Merge did not create one fresh target line per source line.');
@@ -477,6 +512,53 @@ try {
 	}
 	wcos_merge_service_assert($retry_failed_closed, 'Compensated operation retry did not fail closed with a stable code.');
 	wcos_merge_service_cleanup($source, $target, $operation_id);
+	}
+
+	if (in_array($suite, array('all', 'drift_stock', 'checkpoint_drift'), true)) {
+	/* Persisted checkpoint-owned drift is rejected at the next service boundary before another commercial write. */
+	list($source, $target) = wcos_merge_service_pair($managed, 'checkpoint-economic-drift', array('1'));
+	$operation_id = 'merge-service-checkpoint-drift-' . wp_generate_uuid4();
+	$preexisting_target_ids = array_map('intval', array_keys($target->get_items('line_item')));
+	$drifted_total = '';
+	$drifted_checkpoint = array();
+	$tax_count_at_drift = 0;
+	$checkpoint_drift_hit = false;
+	$checkpoint_drift = static function($stage, $event_source, $event_target) use (&$checkpoint_drift_hit, &$drifted_total, &$drifted_checkpoint, &$tax_count_at_drift, $preexisting_target_ids) {
+		if ($checkpoint_drift_hit || 'after_target_line_checkpoint' !== $stage) {
+			return;
+		}
+		$checkpoint_drift_hit = true;
+		$fresh_target = wc_get_order($event_target->get_id());
+		$line = $fresh_target->get_item($preexisting_target_ids[0]);
+		$line->set_quantity(7);
+		$line->set_subtotal('70.00');
+		$line->set_total('70.00');
+		$line->save();
+		WCOS_Order_Totals_Rebuilder::rebuild($fresh_target, 2);
+		$fresh_target->save();
+		$fresh_target = wc_get_order($event_target->get_id());
+		$drifted_total = (string) $fresh_target->get_total();
+		$drifted_checkpoint = WCOS_Merge_Recovery_Snapshot::participant_checkpoint($fresh_target);
+		$tax_count_at_drift = count($fresh_target->get_items('tax'));
+	};
+	add_action('wcos_merge_mutation_checkpoint', $checkpoint_drift, 10, 4);
+	try {
+		(new WCOS_Merge_WooCommerce_Adapter())->merge($source, $target, $operation_id, 2);
+	} catch (Throwable $throwable) {
+		/* Pair-wide manual authority and untouched drift are asserted below. */
+	}
+	remove_action('wcos_merge_mutation_checkpoint', $checkpoint_drift, 10);
+	wcos_merge_service_assert($checkpoint_drift_hit, 'Persisted checkpoint-owned drift boundary did not execute.');
+	wcos_merge_service_assert_manual_pair($source, $target, $operation_id);
+	$fresh_target = wc_get_order($target->get_id());
+	$fresh_line = $fresh_target->get_item($preexisting_target_ids[0]);
+	$checkpoint_after_rejection = WCOS_Merge_Recovery_Snapshot::participant_checkpoint($fresh_target);
+	unset($drifted_checkpoint['relation_meta'], $checkpoint_after_rejection['relation_meta']);
+	wcos_merge_service_assert('7' === (string) $fresh_line->get_quantity(), 'Recovery overwrote persisted target quantity drift.');
+	wcos_merge_service_assert($drifted_total === (string) $fresh_target->get_total(), 'Recovery overwrote persisted target amount drift.');
+	wcos_merge_service_assert($drifted_checkpoint === $checkpoint_after_rejection, 'Recovery changed checkpoint-owned target commercial state after rejecting drift.');
+	wcos_merge_service_assert($tax_count_at_drift === count($fresh_target->get_items('tax')), 'The rejected boundary persisted new tax rows.');
+	wcos_merge_service_cleanup(wc_get_order($source->get_id()), $fresh_target, $operation_id);
 	}
 
 	if (in_array($suite, array('all', 'drift_stock'), true)) {

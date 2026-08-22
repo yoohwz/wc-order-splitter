@@ -284,9 +284,14 @@ final class WCOS_Merge_Compensator {
 				'complete',
 				'after_commit_before_complete'
 		);
+		$terminal_record = WCOS_Operation_Journal::get(wc_get_order($source->get_id()), $operation_id);
+		if (!is_array($terminal_record)) {
+			throw new RuntimeException(__('Forward-repaired Merge terminal authority could not be reloaded.', 'wc-order-splitter'));
+		}
 		if (!WCOS_Operation_Journal::complete($source, $operation_id, array(
 				'merge_verified' => true,
 				'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::COMPLETED,
+				'merge_terminal_result' => WCOS_Merge_Journal_Context::create_terminal_result($terminal_record),
 			))) {
 			throw new RuntimeException(__('Forward-repaired Merge state could not be finalized.', 'wc-order-splitter'));
 		}

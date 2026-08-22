@@ -8,6 +8,7 @@ defined('ABSPATH') || exit;
 final class WCOS_Merge_Journal_Context {
 
 	const SCHEMA_VERSION = 3;
+	const TERMINAL_RESULT_SCHEMA_VERSION = 1;
 
 	public static function create(WC_Order $source, WC_Order $target, array $plan, array $context_authority, $price_precision, array $evidence = array(), $selected_retirement_policy = '') {
 		$source_id = absint($source->get_id());
@@ -156,6 +157,87 @@ final class WCOS_Merge_Journal_Context {
 		}
 		$status = sanitize_key(isset($record['status']) ? (string) $record['status'] : '');
 		return !in_array($status, array('completed', 'compensated', 'manual_reconciled'), true);
+	}
+
+	public static function create_terminal_result(array $record) {
+		$pair = self::assert_executable_policy($record);
+		if ('committed' !== sanitize_key(isset($record['status']) ? (string) $record['status'] : '')
+			|| WCOS_Merge_Recovery_State_Graph::COMMITTED !== WCOS_Merge_Recovery_State_Graph::assert_record($record)) {
+			throw new RuntimeException(__('The Merge terminal result requires durable committed authority.', 'wc-order-splitter'));
+		}
+		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
+		$result = array(
+			'schema_version' => self::TERMINAL_RESULT_SCHEMA_VERSION,
+			'status' => 'completed',
+			'operation_id' => sanitize_key(isset($record['operation_id']) ? (string) $record['operation_id'] : ''),
+			'source_order_id' => (int) $pair['source_order_id'],
+			'target_order_id' => (int) $pair['target_order_id'],
+			'retirement_policy' => (string) $pair['retirement_policy_identifier'],
+			'target_item_ids' => self::canonical_ids(isset($context['merge_target_item_ids']) ? (array) $context['merge_target_item_ids'] : array()),
+			'target_tax_item_ids' => self::canonical_ids(isset($context['merge_target_tax_item_ids']) ? (array) $context['merge_target_tax_item_ids'] : array()),
+		);
+		if ('' === $result['operation_id']) {
+			throw new RuntimeException(__('The Merge terminal result is missing its operation authority.', 'wc-order-splitter'));
+		}
+		$result['result_fingerprint'] = self::terminal_result_fingerprint($result);
+		return $result;
+	}
+
+	public static function terminal_result_from_record(array $record) {
+		$pair = self::assert_executable_policy($record);
+		if ('completed' !== sanitize_key(isset($record['status']) ? (string) $record['status'] : '')
+			|| WCOS_Merge_Recovery_State_Graph::COMPLETED !== WCOS_Merge_Recovery_State_Graph::assert_record($record)) {
+			throw new RuntimeException(__('The Merge terminal result requires durable completed authority.', 'wc-order-splitter'));
+		}
+		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
+		$stored = isset($context['merge_terminal_result']) && is_array($context['merge_terminal_result']) ? $context['merge_terminal_result'] : array();
+		$expected_keys = array(
+			'operation_id', 'result_fingerprint', 'retirement_policy', 'schema_version', 'source_order_id',
+			'status', 'target_item_ids', 'target_order_id', 'target_tax_item_ids',
+		);
+		$actual_keys = array_keys($stored);
+		sort($actual_keys, SORT_STRING);
+		sort($expected_keys, SORT_STRING);
+		if ($actual_keys !== $expected_keys || !is_array($stored['target_item_ids']) || !is_array($stored['target_tax_item_ids'])) {
+			throw new RuntimeException(__('Completed Merge authority is missing its bounded terminal result.', 'wc-order-splitter'));
+		}
+		$result = array(
+			'schema_version' => (int) $stored['schema_version'],
+			'status' => sanitize_key((string) $stored['status']),
+			'operation_id' => sanitize_key((string) $stored['operation_id']),
+			'source_order_id' => absint($stored['source_order_id']),
+			'target_order_id' => absint($stored['target_order_id']),
+			'retirement_policy' => sanitize_key((string) $stored['retirement_policy']),
+			'target_item_ids' => self::canonical_ids($stored['target_item_ids']),
+			'target_tax_item_ids' => self::canonical_ids($stored['target_tax_item_ids']),
+		);
+		$fingerprint = self::normalized_fingerprint($stored['result_fingerprint']);
+		$expected_item_ids = self::canonical_ids(isset($context['merge_target_item_ids']) ? (array) $context['merge_target_item_ids'] : array());
+		$expected_tax_ids = self::canonical_ids(isset($context['merge_target_tax_item_ids']) ? (array) $context['merge_target_tax_item_ids'] : array());
+		if (self::TERMINAL_RESULT_SCHEMA_VERSION !== $result['schema_version']
+			|| 'completed' !== $result['status']
+			|| sanitize_key((string) $record['operation_id']) !== $result['operation_id']
+			|| (int) $pair['source_order_id'] !== $result['source_order_id']
+			|| (int) $pair['target_order_id'] !== $result['target_order_id']
+			|| (string) $pair['retirement_policy_identifier'] !== $result['retirement_policy']
+			|| $expected_item_ids !== $result['target_item_ids']
+			|| $expected_tax_ids !== $result['target_tax_item_ids']
+			|| '' === $fingerprint
+			|| !hash_equals($fingerprint, self::terminal_result_fingerprint($result))) {
+			throw new RuntimeException(__('Completed Merge terminal result failed authority verification.', 'wc-order-splitter'));
+		}
+		return $result;
+	}
+
+	private static function terminal_result_fingerprint(array $result) {
+		unset($result['result_fingerprint']);
+		return WCOS_Mutation_Fingerprint::create('merge_terminal_result_v1', absint(isset($result['source_order_id']) ? $result['source_order_id'] : 0), $result);
+	}
+
+	private static function canonical_ids(array $ids) {
+		$ids = array_values(array_unique(array_filter(array_map('absint', $ids))));
+		sort($ids, SORT_NUMERIC);
+		return $ids;
 	}
 
 	private static function authority_fingerprint(array $authority) {

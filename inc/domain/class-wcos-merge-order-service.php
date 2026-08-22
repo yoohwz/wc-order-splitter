@@ -109,6 +109,7 @@ final class WCOS_Merge_Order_Service {
 					array(),
 					false
 				);
+				$this->event('after_target_line_checkpoint', $source, $target, $operation_id);
 			}
 
 			$source = $this->load_order($source_id, 'source');
@@ -245,47 +246,17 @@ final class WCOS_Merge_Order_Service {
 
 	private function completed_result($source_id, $target_id, $operation_id) {
 		$source = $this->load_order($source_id, 'source');
-		$target = $this->load_order($target_id, 'target');
 		$record = WCOS_Operation_Journal::get($source, $operation_id);
 		$pair = is_array($record) ? WCOS_Merge_Journal_Context::assert_executable_policy($record) : null;
 		if (!is_array($record) || !is_array($pair) || 'completed' !== sanitize_key((string) $record['status'])
 			|| WCOS_Merge_Recovery_State_Graph::COMPLETED !== WCOS_Merge_Recovery_State_Graph::assert_record($record)
-			|| 'trash' !== $source->get_status()) {
+			|| (int) $pair['source_order_id'] !== (int) $source_id
+			|| (int) $pair['target_order_id'] !== (int) $target_id) {
 			throw new RuntimeException(__('Completed Merge authority failed replay verification.', 'wc-order-splitter'));
 		}
-		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
-		$snapshot = isset($context['merge_recovery_snapshot']) && is_array($context['merge_recovery_snapshot']) ? $context['merge_recovery_snapshot'] : array();
-		$source_after = isset($context['merge_source_signature_after']) ? (string) $context['merge_source_signature_after'] : '';
-		$target_after = isset($context['merge_target_signature_after']) ? (string) $context['merge_target_signature_after'] : '';
-		if ('' === $source_after || '' === $target_after
-			|| !hash_equals($source_after, WCOS_Merge_Recovery_Snapshot::participant_signature($source))
-			|| !hash_equals($target_after, WCOS_Merge_Recovery_Snapshot::participant_signature($target))) {
-			throw new RuntimeException(__('Completed Merge participants changed after commit.', 'wc-order-splitter'));
-		}
-		WCOS_Merge_Recovery_Snapshot::assert_immutable_pair(
-			$snapshot,
-			$record,
-			$source,
-			$target,
-			isset($context['merge_target_item_ids']) ? (array) $context['merge_target_item_ids'] : array(),
-			isset($context['merge_target_tax_item_ids']) ? (array) $context['merge_target_tax_item_ids'] : array()
-		);
-		WCOS_Merge_Recovery_Snapshot::assert_archive_preserved($snapshot, $source);
-		WCOS_Merge_Recovery_Snapshot::assert_active_economic_conserved($snapshot, $target);
-		if (array('source' => true, 'target' => true) !== WCOS_Merge_Participation::state_for_pair($source, $target, $operation_id, $pair['pair_fingerprint'])) {
-			throw new RuntimeException(__('Completed Merge reciprocal relations are incomplete.', 'wc-order-splitter'));
-		}
-		$target_item_ids = $this->ids(isset($context['merge_target_item_ids']) ? (array) $context['merge_target_item_ids'] : array());
-		$target_tax_item_ids = $this->ids(isset($context['merge_target_tax_item_ids']) ? (array) $context['merge_target_tax_item_ids'] : array());
-		return array(
-			'status' => 'completed',
-			'operation_id' => sanitize_key((string) $operation_id),
-			'source_order_id' => (int) $source_id,
-			'target_order_id' => (int) $target_id,
-			'retirement_policy' => WCOS_Merge_Retirement_Policy::approved_identifier(),
-			'target_item_ids' => $target_item_ids,
-			'target_tax_item_ids' => $target_tax_item_ids,
-		);
+		$result = WCOS_Merge_Journal_Context::terminal_result_from_record($record);
+		unset($result['schema_version'], $result['result_fingerprint']);
+		return $result;
 	}
 
 	private function checkpoint_state($source_id, $target_id, $operation_id, $state, array $target_item_ids, array $target_tax_item_ids, $forward) {
@@ -322,14 +293,28 @@ final class WCOS_Merge_Order_Service {
 			throw new RuntimeException(__('The Merge journal disappeared before a commercial write.', 'wc-order-splitter'));
 		}
 		$this->event($stage, $source, $target, $operation_id);
+		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
+		$expected_source_signature = isset($context['merge_source_signature_after']) ? (string) $context['merge_source_signature_after'] : '';
+		$expected_target_signature = isset($context['merge_target_signature_after']) ? (string) $context['merge_target_signature_after'] : '';
+		$recovery_state = WCOS_Merge_Recovery_State_Graph::assert_record($record);
+		$service_states = array(
+			WCOS_Merge_Recovery_State_Graph::NO_WRITE,
+			WCOS_Merge_Recovery_State_Graph::TARGET_STAGING,
+			WCOS_Merge_Recovery_State_Graph::TARGET_PERSISTED,
+			WCOS_Merge_Recovery_State_Graph::SOURCE_OWNERSHIP_MIGRATING,
+			WCOS_Merge_Recovery_State_Graph::SOURCE_OWNERSHIP_MIGRATED,
+		);
+		if (!in_array($recovery_state, $service_states, true)) {
+			throw new RuntimeException(__('The Merge service reached a write boundary outside its durable commercial stages.', 'wc-order-splitter'));
+		}
 		return WCOS_Merge_Commit_Guard::assert_boundary(
 			$lease,
 			$source,
 			$target,
 			$record,
-			WCOS_Merge_Recovery_Snapshot::participant_signature($source),
-			WCOS_Merge_Recovery_Snapshot::participant_signature($target),
-			'any'
+			$expected_source_signature,
+			$expected_target_signature,
+			'none'
 		);
 	}
 
