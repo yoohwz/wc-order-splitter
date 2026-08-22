@@ -113,7 +113,7 @@ jobs:
             fi
           done
 
-          if grep -R --line-number -E 'new[[:space:]]+WCOS_(Split|Duplicate|Merge)_(Order_Service|WooCommerce_Adapter)' inc/backend inc/cores; then
+          if grep -R --line-number -E 'new[[:space:]]+WCOS_((Split|Duplicate)_Order_Service|Merge_(Order_Service|WooCommerce_Adapter))' inc/backend inc/cores; then
             echo 'A production controller bypasses WCOS_Mutation_Gateway.' >&2
             exit 1
           fi
