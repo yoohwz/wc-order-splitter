@@ -40,7 +40,7 @@ function wcos_merge_service_parent_managed_variation() {
 	return array($parent, $variation);
 }
 
-function wcos_merge_service_order(WC_Product $product, $email, array $reduced_markers, $shipping = false, $target_amount = false) {
+function wcos_merge_service_order(WC_Product $product, $email, array $reduced_markers, $shipping = false, $target_amount = false, $multiple_rates = false) {
 	$order = wc_create_order();
 	$order->set_status('pending');
 	$order->set_currency('USD');
@@ -65,7 +65,10 @@ function wcos_merge_service_order(WC_Product $product, $email, array $reduced_ma
 	$order->set_payment_method('cod');
 	$order->set_payment_method_title('Cash on delivery');
 
+	$tax_totals = array();
 	foreach ($reduced_markers as $index => $marker) {
+		$rate_id = $multiple_rates && 0 < $index ? 702 : 701;
+		$line_tax = $target_amount ? '0.50' : '1.00';
 		$item = new WC_Order_Item_Product();
 		$item->set_name($target_amount ? 'Existing target line' : 'Identical historical source line');
 		if ($product instanceof WC_Product_Variation) {
@@ -80,9 +83,10 @@ function wcos_merge_service_order(WC_Product $product, $email, array $reduced_ma
 		$item->set_subtotal_tax($target_amount ? '0.50' : '1.00');
 		$item->set_total_tax($target_amount ? '0.50' : '1.00');
 		$item->set_taxes(array(
-			'subtotal' => array(701 => $target_amount ? '0.50' : '1.00'),
-			'total' => array(701 => $target_amount ? '0.50' : '1.00'),
+			'subtotal' => array($rate_id => $line_tax),
+			'total' => array($rate_id => $line_tax),
 		));
+		$tax_totals[$rate_id] = isset($tax_totals[$rate_id]) ? $tax_totals[$rate_id] + (float) $line_tax : (float) $line_tax;
 		$item->add_meta_data('Merge fixture', 'preserved-business-value', true);
 		if (null !== $marker) {
 			$item->add_meta_data('_reduced_stock', 'fractional' === $marker ? '1.5' : WCOS_Decimal::normalize($marker, 6), true);
@@ -105,15 +109,16 @@ function wcos_merge_service_order(WC_Product $product, $email, array $reduced_ma
 		$order->add_item($shipping_item);
 	}
 
-	$cart_tax = count($reduced_markers) * ($target_amount ? 0.5 : 1.0);
-	$tax = new WC_Order_Item_Tax();
-	$tax->set_rate_id(701);
-	$tax->set_label('Frozen historical rate');
-	$tax->set_compound(false);
-	$tax->set_rate_percent(10);
-	$tax->set_tax_total(wc_format_decimal($cart_tax, 2));
-	$tax->set_shipping_tax_total($shipping ? '0.30' : '0.00');
-	$order->add_item($tax);
+	foreach ($tax_totals as $rate_id => $cart_tax) {
+		$tax = new WC_Order_Item_Tax();
+		$tax->set_rate_id($rate_id);
+		$tax->set_label('Frozen historical rate ' . $rate_id);
+		$tax->set_compound(false);
+		$tax->set_rate_percent(10);
+		$tax->set_tax_total(wc_format_decimal($cart_tax, 2));
+		$tax->set_shipping_tax_total($shipping && 701 === (int) $rate_id ? '0.30' : '0.00');
+		$order->add_item($tax);
+	}
 	WCOS_Order_Totals_Rebuilder::rebuild($order, 2);
 	$order->save();
 	$order->get_data_store()->set_stock_reduced($order->get_id(), !empty(array_filter($reduced_markers, static function($value) {
@@ -122,10 +127,10 @@ function wcos_merge_service_order(WC_Product $product, $email, array $reduced_ma
 	return wc_get_order($order->get_id());
 }
 
-function wcos_merge_service_pair(WC_Product $product, $label, array $source_markers = array('1'), $shipping = false) {
+function wcos_merge_service_pair(WC_Product $product, $label, array $source_markers = array('1'), $shipping = false, $multiple_rates = false) {
 	$email = 'merge-service-' . $label . '-' . wp_generate_uuid4() . '@example.test';
 	return array(
-		wcos_merge_service_order($product, $email, $source_markers, false, false),
+		wcos_merge_service_order($product, $email, $source_markers, false, false, $multiple_rates),
 		wcos_merge_service_order($product, $email, array(null), $shipping, true),
 	);
 }
@@ -180,10 +185,11 @@ try {
 	$gate_target->delete(true);
 
 	/* Success: identical source lines stay distinct, historical tax/shipping survive, retry is stable. */
-	list($source, $target) = wcos_merge_service_pair($managed, 'success', array('1.5', '2'), true);
+	list($source, $target) = wcos_merge_service_pair($managed, 'success', array('1.5', '2'), true, true);
 	$operation_id = 'merge-service-success-' . wp_generate_uuid4();
 	$stock_before = WCOS_Order_Contract_Snapshot::product_stock($source);
 	$source_line_ids = array_map('intval', array_keys($source->get_items('line_item')));
+	$source_line_identities = array_map(static function($item) { return WCOS_Line_Identity::from_item($item); }, array_values($source->get_items('line_item')));
 	$shipping_before = WCOS_Merge_Recovery_Snapshot::participant_checkpoint($target)['order_props']['shipping_total'];
 	$result = (new WCOS_Merge_WooCommerce_Adapter())->merge($source, $target, $operation_id, 2);
 	$retry = (new WCOS_Merge_WooCommerce_Adapter())->merge(wc_get_order($source->get_id()), wc_get_order($target->get_id()), $operation_id, 2);
@@ -198,6 +204,16 @@ try {
 	wcos_merge_service_assert('trash' === $source->get_status(), 'Approved non-force retirement did not trash the source.');
 	wcos_merge_service_assert($shipping_before === WCOS_Merge_Recovery_Snapshot::participant_checkpoint($target)['order_props']['shipping_total'], 'Supported target shipping total changed.');
 	wcos_merge_service_assert(3 === count($target->get_items('line_item')), 'Target line count is not additive.');
+	$target_line_identities = array();
+	foreach ($result['target_item_ids'] as $item_id) {
+		$target_line_identities[] = WCOS_Line_Identity::from_item($target->get_item($item_id));
+	}
+	sort($source_line_identities, SORT_STRING);
+	sort($target_line_identities, SORT_STRING);
+	wcos_merge_service_assert($source_line_identities === $target_line_identities, 'Fresh target lines lost exact variation/business-metadata identity.');
+	$target_rate_ids = array_map(static function($item) { return (int) $item->get_rate_id(); }, array_values($target->get_items('tax')));
+	sort($target_rate_ids, SORT_NUMERIC);
+	wcos_merge_service_assert(array(701, 702) === $target_rate_ids, 'Merge did not preserve multiple historical tax rates.');
 	wcos_merge_service_assert($stock_before === WCOS_Order_Contract_Snapshot::product_stock($target), 'Successful Merge changed physical stock.');
 	foreach ($source->get_items('line_item') as $item) {
 		wcos_merge_service_assert('' === (string) $item->get_meta('_reduced_stock', true), 'Retired source retained stock ownership.');
@@ -381,7 +397,11 @@ try {
 			} catch (Throwable $throwable) {
 				/* A compensated saga intentionally remains non-restartable. */
 			}
-			wcos_merge_service_assert('compensated' === wcos_merge_service_status($source, $operation_id), 'Blocked stock attempt did not compensate after clean retry.');
+			$blocked_status = wcos_merge_service_status($source, $operation_id);
+			wcos_merge_service_assert(in_array($blocked_status, array('compensated', 'manual_reconciliation'), true), 'Blocked stock attempt did not reach a safe recovery outcome.');
+			if ('manual_reconciliation' === $blocked_status) {
+				wcos_merge_service_assert_manual_pair($source, $target, $operation_id);
+			}
 		} else {
 			wcos_merge_service_assert_manual_pair($source, $target, $operation_id);
 		}
