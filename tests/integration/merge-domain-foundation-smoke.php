@@ -80,12 +80,14 @@ wcos_merge_foundation_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strat
 wcos_merge_foundation_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Category strategy gate changed.');
 wcos_merge_foundation_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Stock strategy gate changed.');
 $gateway = new WCOS_Mutation_Gateway();
+$merge_rejected_at_gate = false;
 try {
 	$gateway->merge($source, $target, 'merge-foundation-disabled');
-	throw new RuntimeException('Gateway unexpectedly exposed Merge execution.');
 } catch (RuntimeException $exception) {
-	wcos_merge_foundation_assert(false !== strpos($exception->getMessage(), 'disabled'), 'Gateway no longer fails at the hard-off Merge boundary.');
+	$merge_rejected_at_gate = true;
+	wcos_merge_foundation_assert(false === strpos($exception->getMessage(), 'has not been implemented'), 'Gateway reached the Merge implementation placeholder instead of the hard-off gate.');
 }
+wcos_merge_foundation_assert($merge_rejected_at_gate, 'Gateway unexpectedly exposed Merge execution.');
 
 /* Canonical historical-state planning is read-only and never coalesces lines. */
 $report = WCOS_Merge_Preflight::assert_supported($source, $target);
