@@ -315,6 +315,12 @@ $multi_source = wcos_merge_recovery_order($managed, 'merge-multi-' . wp_generate
 $multi_initial_lines = $multi_source->get_items('line_item');
 $extra_source_line = WCOS_Order_Item_Cloner::product(reset($multi_initial_lines), array(), true, WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE);
 $multi_source->add_item($extra_source_line);
+$multi_source_tax_items = $multi_source->get_items('tax');
+$multi_source_tax = reset($multi_source_tax_items);
+$multi_source_tax->set_tax_total('2.46');
+$multi_source_tax->save();
+$multi_source->set_cart_tax('2.46');
+$multi_source->set_total('27.14');
 $multi_source->save();
 $multi_source = wc_get_order($multi_source->get_id());
 $multi_target = wcos_merge_recovery_order($managed, $multi_source->get_billing_email(), 1, null, false);
