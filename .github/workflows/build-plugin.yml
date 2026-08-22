@@ -122,6 +122,13 @@ jobs:
             'inc/domain/class-wcos-category-split-planner.php' \
             'inc/domain/class-wcos-stock-status-split-planner.php' \
             'inc/domain/class-wcos-split-strategy-woocommerce-adapter.php' \
+            'inc/domain/class-wcos-multi-order-lease.php' \
+            'inc/domain/class-wcos-merge-plan.php' \
+            'inc/domain/class-wcos-merge-context-signature.php' \
+            'inc/domain/class-wcos-merge-journal-context.php' \
+            'inc/domain/class-wcos-merge-participation.php' \
+            'inc/domain/class-wcos-merge-preflight.php' \
+            'inc/domain/class-wcos-merge-retirement-policy.php' \
             'css/p2-split-strategy-admin.css' \
             'js/p2-split-strategy-admin.js'; do
             if test ! -e "$package_root/$required_path"; then
@@ -171,6 +178,13 @@ jobs:
             'wc-order-splitter/inc/domain/class-wcos-category-split-planner.php' \
             'wc-order-splitter/inc/domain/class-wcos-stock-status-split-planner.php' \
             'wc-order-splitter/inc/domain/class-wcos-split-strategy-woocommerce-adapter.php' \
+            'wc-order-splitter/inc/domain/class-wcos-multi-order-lease.php' \
+            'wc-order-splitter/inc/domain/class-wcos-merge-plan.php' \
+            'wc-order-splitter/inc/domain/class-wcos-merge-context-signature.php' \
+            'wc-order-splitter/inc/domain/class-wcos-merge-journal-context.php' \
+            'wc-order-splitter/inc/domain/class-wcos-merge-participation.php' \
+            'wc-order-splitter/inc/domain/class-wcos-merge-preflight.php' \
+            'wc-order-splitter/inc/domain/class-wcos-merge-retirement-policy.php' \
             'wc-order-splitter/css/p2-split-strategy-admin.css' \
             'wc-order-splitter/js/p2-split-strategy-admin.js'; do
             if ! unzip -Z1 wc-order-splitter.zip | grep -Fxq "$required_archive_path"; then

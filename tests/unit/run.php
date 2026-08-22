@@ -28,6 +28,8 @@ require_once $root . 'class-wcos-line-identity.php';
 require_once $root . 'class-wcos-mutation-fingerprint.php';
 require_once $root . 'class-wcos-mutation-contract.php';
 require_once $root . 'class-wcos-split-plan.php';
+require_once $root . 'class-wcos-merge-retirement-policy.php';
+require_once $root . 'class-wcos-merge-plan.php';
 
 $tests = array();
 
@@ -219,6 +221,48 @@ $tests['duplicate service and preflight policy versions stay aligned'] = static 
 	assert_true(1 === preg_match('/const POLICY_VERSION = ([0-9]+);/', $service, $service_match), 'Duplicate service policy version is missing.');
 	assert_true(1 === preg_match('/const POLICY_VERSION = ([0-9]+);/', $preflight, $preflight_match), 'Duplicate preflight policy version is missing.');
 	assert_same($service_match[1], $preflight_match[1]);
+};
+
+$tests['merge plan fingerprint is canonical and keeps identical lines distinct'] = static function() {
+	$identity = WCOS_Line_Identity::from_values(10, 20, 'reduced-rate', array('engraving' => 'A'));
+	$first = WCOS_Merge_Plan::canonicalize(101, 202, array(
+		22 => array('source_item_id' => 22, 'line_identity' => $identity, 'quantity' => '1.000000', 'taxes' => array('total' => array(2 => '1.00'))),
+		11 => array('taxes' => array('total' => array(2 => '1.00')), 'quantity' => '1.000000', 'line_identity' => $identity, 'source_item_id' => 11),
+	));
+	$second = WCOS_Merge_Plan::canonicalize(101, 202, array(
+		11 => array('source_item_id' => 11, 'line_identity' => $identity, 'quantity' => '1.000000', 'taxes' => array('total' => array(2 => '1.00'))),
+		22 => array('taxes' => array('total' => array(2 => '1.00')), 'quantity' => '1.000000', 'line_identity' => $identity, 'source_item_id' => 22),
+	));
+	assert_same(WCOS_Merge_Plan::fingerprint($first), WCOS_Merge_Plan::fingerprint($second));
+	assert_same(array(11, 22), array_keys($first['lines']));
+	assert_same(false, $first['coalesce_lines']);
+	assert_same('fresh_target_line_per_source_line', $first['line_policy']);
+};
+
+$tests['merge plan rejects self merge and normalized item collisions'] = static function() {
+	assert_throws(static function() {
+		WCOS_Merge_Plan::canonicalize(10, 10, array(1 => array('source_item_id' => 1, 'line_identity' => str_repeat('a', 64))));
+	}, InvalidArgumentException::class);
+	assert_throws(static function() {
+		WCOS_Merge_Plan::canonicalize(10, 11, array(
+			'01' => array('source_item_id' => 1, 'line_identity' => str_repeat('a', 64)),
+			1 => array('source_item_id' => 1, 'line_identity' => str_repeat('b', 64)),
+		));
+	}, InvalidArgumentException::class);
+};
+
+$tests['merge retirement candidates preserve archive and remain unselected'] = static function() {
+	$candidates = WCOS_Merge_Retirement_Policy::candidates();
+	assert_same(array('dedicated_merged_archive', 'non_force_trash_archive'), WCOS_Merge_Retirement_Policy::identifiers());
+	foreach ($candidates as $candidate) {
+		assert_same(true, $candidate['preserve_commercial_record']);
+		assert_same(false, $candidate['active_economic_owner_after']);
+		assert_same(false, $candidate['normal_active_status_after']);
+		assert_same(false, $candidate['hard_delete']);
+		assert_same(false, $candidate['production_selected']);
+	}
+	WCOS_Merge_Retirement_Policy::assert_archive_preserved(str_repeat('a', 64), str_repeat('a', 64));
+	WCOS_Merge_Retirement_Policy::assert_active_ownership_conserved(str_repeat('b', 64), str_repeat('b', 64));
 };
 
 $failures = 0;
