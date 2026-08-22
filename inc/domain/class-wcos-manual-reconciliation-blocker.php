@@ -14,7 +14,7 @@ defined('ABSPATH') || exit;
  * revisions. No customer, address, payment, or catalog PII is stored here.
  */
 final class WCOS_Manual_Reconciliation_Blocker {
-    const SCHEMA_VERSION = 2;
+    const SCHEMA_VERSION = 3;
     const KEY_PREFIX = 'wcos_manual_reconcile_block_';
     const FALLBACK_META_PREFIX = '_wcos_manual_reconcile_fallback_';
 
@@ -30,6 +30,72 @@ final class WCOS_Manual_Reconciliation_Blocker {
         }
 
         return self::block_fallback($order, $operation_id, $incident);
+    }
+
+    /**
+     * Persist one participant's blocker while keeping the source-keyed journal
+     * as the only reconciliation authority.
+     */
+    public static function block_participant(WC_Order $participant, WC_Order $journal_source, $operation_id, $role, $peer_order_id, $pair_fingerprint) {
+        $operation_id = sanitize_key((string) $operation_id);
+        $role = sanitize_key((string) $role);
+        $peer_order_id = absint($peer_order_id);
+        $pair_fingerprint = sanitize_key((string) $pair_fingerprint);
+        if (!$participant->get_id() || !$journal_source->get_id() || '' === $operation_id
+            || !in_array($role, array('source', 'target'), true) || !$peer_order_id || '' === $pair_fingerprint) {
+            return false;
+        }
+
+        $journal = class_exists('WCOS_Operation_Journal')
+            ? WCOS_Operation_Journal::get($journal_source, $operation_id)
+            : null;
+        if (!is_array($journal) || !class_exists('WCOS_Merge_Journal_Context')
+            || !WCOS_Merge_Journal_Context::validates_participant(
+                $journal,
+                $participant->get_id(),
+                $role,
+                $peer_order_id,
+                $pair_fingerprint,
+                $operation_id
+            )) {
+            return false;
+        }
+
+        $incident = self::incident(
+            $participant,
+            $operation_id,
+            array(
+                'participant_role' => $role,
+                'peer_order_id' => $peer_order_id,
+                'journal_source_order_id' => $journal_source->get_id(),
+                'pair_fingerprint' => $pair_fingerprint,
+            ),
+            $journal
+        );
+        if (self::block_primary($participant, $operation_id, $incident)) {
+            return true;
+        }
+        return self::block_fallback($participant, $operation_id, $incident);
+    }
+
+    public static function block_pair(WC_Order $source, WC_Order $target, $operation_id, $pair_fingerprint) {
+        $source_blocked = self::block_participant(
+            $source,
+            $source,
+            $operation_id,
+            'source',
+            $target->get_id(),
+            $pair_fingerprint
+        );
+        $target_blocked = self::block_participant(
+            $target,
+            $source,
+            $operation_id,
+            'target',
+            $source->get_id(),
+            $pair_fingerprint
+        );
+        return $source_blocked && $target_blocked;
     }
 
     /**
@@ -52,16 +118,10 @@ final class WCOS_Manual_Reconciliation_Blocker {
         }
 
         $incidents = self::all_incidents($fresh);
-        if (empty($incidents)) {
-            return array();
-        }
-
         $active = array();
         foreach ($incidents as $operation_id => $operation_incidents) {
-            $journal = class_exists('WCOS_Operation_Journal')
-                ? WCOS_Operation_Journal::get($fresh, $operation_id)
-                : null;
             $latest_incident = self::latest_incident($operation_incidents);
+            $journal = self::journal_for_incident($fresh, $operation_id, $latest_incident);
             if (self::journal_resolves_incident($journal, $latest_incident)) {
                 $primary_cleared = self::clear_primary($fresh, $operation_id);
                 $fallback_cleared = self::clear_fallback($fresh, $operation_id);
@@ -71,6 +131,10 @@ final class WCOS_Manual_Reconciliation_Blocker {
             }
 
             $active[] = $operation_id;
+        }
+
+        if (class_exists('WCOS_Merge_Participation')) {
+            $active = array_merge($active, WCOS_Merge_Participation::unresolved_operation_ids($fresh));
         }
 
         $active = array_values(array_unique(array_filter(array_map('sanitize_key', $active))));
@@ -102,10 +166,9 @@ final class WCOS_Manual_Reconciliation_Blocker {
             return true;
         }
 
-        $journal = class_exists('WCOS_Operation_Journal')
-            ? WCOS_Operation_Journal::get($fresh, $operation_id)
-            : null;
-        if (!self::journal_resolves_incident($journal, self::latest_incident($incidents))) {
+        $latest_incident = self::latest_incident($incidents);
+        $journal = self::journal_for_incident($fresh, $operation_id, $latest_incident);
+        if (!self::journal_resolves_incident($journal, $latest_incident)) {
             return false;
         }
 
@@ -118,19 +181,49 @@ final class WCOS_Manual_Reconciliation_Blocker {
      * Retention uses this to avoid deleting the authoritative resolution proof
      * while either blocker store still exists because cleanup failed.
      */
-    public static function contains_operation($source_order_id, $operation_id) {
+    public static function contains_operation($source_order_id, $operation_id, $journal_source_order_id = 0) {
         $source_order_id = absint($source_order_id);
         $operation_id = sanitize_key((string) $operation_id);
+        $journal_source_order_id = absint($journal_source_order_id);
         if (!$source_order_id || '' === $operation_id) {
             return false;
         }
 
-        if (self::contains_primary($source_order_id, $operation_id)) {
+        $primary = self::primary_incident($source_order_id, $operation_id);
+        if (is_array($primary) && self::matches_journal_source($primary, $journal_source_order_id, $source_order_id)) {
             return true;
         }
 
         $order = wc_get_order($source_order_id);
-        return $order instanceof WC_Order && self::contains_fallback($order, $operation_id);
+        if (!$order instanceof WC_Order) {
+            return false;
+        }
+        $fallback = $order->get_meta(self::fallback_key($operation_id), true);
+        return is_array($fallback)
+            && self::contains_fallback($order, $operation_id)
+            && self::matches_journal_source($fallback, $journal_source_order_id, $source_order_id);
+    }
+
+    public static function resolve_pair_if_reconciled(WC_Order $journal_source, $operation_id) {
+        $operation_id = sanitize_key((string) $operation_id);
+        $journal = class_exists('WCOS_Operation_Journal')
+            ? WCOS_Operation_Journal::get($journal_source, $operation_id)
+            : null;
+        $pair = is_array($journal) && class_exists('WCOS_Merge_Journal_Context')
+            ? WCOS_Merge_Journal_Context::pair_from_record($journal)
+            : null;
+        if (!is_array($pair)) {
+            return self::resolve_if_reconciled($journal_source, $operation_id);
+        }
+
+        $resolved = true;
+        foreach (array(absint($pair['source_order_id']), absint($pair['target_order_id'])) as $participant_id) {
+            $participant = wc_get_order($participant_id);
+            if (!$participant instanceof WC_Order || !self::resolve_if_reconciled($participant, $operation_id)) {
+                $resolved = false;
+            }
+        }
+        return $resolved;
     }
 
     private static function block_primary(WC_Order $order, $operation_id, array $incident) {
@@ -141,6 +234,7 @@ final class WCOS_Manual_Reconciliation_Blocker {
                 $record = array(
                     'schema_version' => self::SCHEMA_VERSION,
                     'source_order_id' => $order->get_id(),
+                    'participant_order_id' => $order->get_id(),
                     'revision' => 1,
                     'operations' => array(
                         $operation_id => $incident,
@@ -156,6 +250,7 @@ final class WCOS_Manual_Reconciliation_Blocker {
             $replacement = $current;
             $replacement['schema_version'] = self::SCHEMA_VERSION;
             $replacement['source_order_id'] = $order->get_id();
+            $replacement['participant_order_id'] = $order->get_id();
             $replacement['revision'] = isset($current['revision']) ? ((int) $current['revision'] + 1) : 2;
             $replacement['operations'] = isset($current['operations']) && is_array($current['operations'])
                 ? $current['operations']
@@ -189,17 +284,24 @@ final class WCOS_Manual_Reconciliation_Blocker {
         }
     }
 
-    private static function incident(WC_Order $order, $operation_id) {
-        $journal = class_exists('WCOS_Operation_Journal')
-            ? WCOS_Operation_Journal::get($order, $operation_id)
-            : null;
-        return array(
+    private static function incident(WC_Order $order, $operation_id, array $authority = array(), $journal = null) {
+        if (!is_array($journal)) {
+            $journal = class_exists('WCOS_Operation_Journal')
+                ? WCOS_Operation_Journal::get($order, $operation_id)
+                : null;
+        }
+        return array_merge(array(
             'operation_id' => sanitize_key((string) $operation_id),
+            'participant_order_id' => $order->get_id(),
+            'participant_role' => 'source',
+            'peer_order_id' => 0,
+            'journal_source_order_id' => $order->get_id(),
+            'pair_fingerprint' => '',
             'blocked_at' => gmdate('c'),
             'journal_revision_at_block' => is_array($journal) && isset($journal['revision'])
                 ? (int) $journal['revision']
                 : 0,
-        );
+        ), $authority);
     }
 
     private static function all_incidents(WC_Order $order) {
@@ -276,6 +378,36 @@ final class WCOS_Manual_Reconciliation_Blocker {
         if (!is_array($journal) || !isset($journal['status']) || !isset($journal['revision'])) {
             return false;
         }
+
+        $journal_source_id = is_array($incident) && isset($incident['journal_source_order_id'])
+            ? absint($incident['journal_source_order_id'])
+            : 0;
+        $participant_id = is_array($incident) && isset($incident['participant_order_id'])
+            ? absint($incident['participant_order_id'])
+            : $journal_source_id;
+        $role = is_array($incident) && isset($incident['participant_role'])
+            ? sanitize_key((string) $incident['participant_role'])
+            : 'source';
+        $peer_id = is_array($incident) && isset($incident['peer_order_id'])
+            ? absint($incident['peer_order_id'])
+            : 0;
+        $pair_fingerprint = is_array($incident) && isset($incident['pair_fingerprint'])
+            ? sanitize_key((string) $incident['pair_fingerprint'])
+            : '';
+        if ('' !== $pair_fingerprint) {
+            if (!class_exists('WCOS_Merge_Journal_Context')
+                || $journal_source_id !== absint(isset($journal['source_order_id']) ? $journal['source_order_id'] : 0)
+                || !WCOS_Merge_Journal_Context::validates_participant(
+                    $journal,
+                    $participant_id,
+                    $role,
+                    $peer_id,
+                    $pair_fingerprint,
+                    isset($incident['operation_id']) ? $incident['operation_id'] : ''
+                )) {
+                return false;
+            }
+        }
         $status = sanitize_key((string) $journal['status']);
         $journal_revision = (int) $journal['revision'];
         $blocked_revision = is_array($incident) && isset($incident['journal_revision_at_block'])
@@ -304,9 +436,7 @@ final class WCOS_Manual_Reconciliation_Blocker {
              * incident B between the caller's resolution check and this clear.
              * An older reconciliation must never delete that newer blocker.
              */
-            $journal = class_exists('WCOS_Operation_Journal')
-                ? WCOS_Operation_Journal::get($order, $operation_id)
-                : null;
+            $journal = self::journal_for_incident($order, $operation_id, $current['operations'][$operation_id]);
             if (!self::journal_resolves_incident($journal, $current['operations'][$operation_id])) {
                 return false;
             }
@@ -356,9 +486,7 @@ final class WCOS_Manual_Reconciliation_Blocker {
                 return true;
             }
 
-            $journal = class_exists('WCOS_Operation_Journal')
-                ? WCOS_Operation_Journal::get($fresh, $operation_id)
-                : null;
+            $journal = self::journal_for_incident($fresh, $operation_id, $incident);
             if (!self::journal_resolves_incident($journal, $incident)) {
                 return false;
             }
@@ -373,11 +501,18 @@ final class WCOS_Manual_Reconciliation_Blocker {
     }
 
     private static function contains_primary($order_id, $operation_id) {
+        return is_array(self::primary_incident($order_id, $operation_id));
+    }
+
+    private static function primary_incident($order_id, $operation_id) {
         $record = get_option(self::key($order_id), null);
         return is_array($record)
             && isset($record['operations'])
             && is_array($record['operations'])
-            && isset($record['operations'][$operation_id]);
+            && isset($record['operations'][$operation_id])
+            && is_array($record['operations'][$operation_id])
+                ? $record['operations'][$operation_id]
+                : null;
     }
 
     private static function contains_fallback(WC_Order $order, $operation_id) {
@@ -386,6 +521,29 @@ final class WCOS_Manual_Reconciliation_Blocker {
             && !empty($incident)
             && isset($incident['operation_id'])
             && sanitize_key((string) $incident['operation_id']) === sanitize_key((string) $operation_id);
+    }
+
+    private static function journal_for_incident(WC_Order $participant, $operation_id, $incident) {
+        if (!class_exists('WCOS_Operation_Journal')) {
+            return null;
+        }
+        $journal_source_id = is_array($incident) && isset($incident['journal_source_order_id'])
+            ? absint($incident['journal_source_order_id'])
+            : $participant->get_id();
+        $journal_source = wc_get_order($journal_source_id);
+        return $journal_source instanceof WC_Order
+            ? WCOS_Operation_Journal::get($journal_source, $operation_id)
+            : null;
+    }
+
+    private static function matches_journal_source(array $incident, $expected_source_id, $participant_id) {
+        if (!$expected_source_id) {
+            return true;
+        }
+        $actual = isset($incident['journal_source_order_id'])
+            ? absint($incident['journal_source_order_id'])
+            : absint($participant_id);
+        return $actual === $expected_source_id;
     }
 
     private static function compare_and_swap($key, array $current, array $replacement) {

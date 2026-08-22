@@ -113,12 +113,25 @@ final class WCOS_Operation_Journal_Retention {
          */
         if ('manual_reconciled' === $status
             && class_exists('WCOS_Manual_Reconciliation_Blocker')
-            && isset($record['source_order_id'], $record['operation_id'])
-            && WCOS_Manual_Reconciliation_Blocker::contains_operation(
-                absint($record['source_order_id']),
-                sanitize_key((string) $record['operation_id'])
-            )) {
-            return false;
+            && isset($record['source_order_id'], $record['operation_id'])) {
+            $journal_source_id = absint($record['source_order_id']);
+            $operation_id = sanitize_key((string) $record['operation_id']);
+            $participant_ids = array($journal_source_id);
+            if (class_exists('WCOS_Merge_Journal_Context')) {
+                $pair = WCOS_Merge_Journal_Context::pair_from_record($record);
+                if (is_array($pair)) {
+                    $participant_ids = array(absint($pair['source_order_id']), absint($pair['target_order_id']));
+                }
+            }
+            foreach (array_values(array_unique(array_filter($participant_ids))) as $participant_id) {
+                if (WCOS_Manual_Reconciliation_Blocker::contains_operation(
+                    $participant_id,
+                    $operation_id,
+                    $journal_source_id
+                )) {
+                    return false;
+                }
+            }
         }
 
         $completed_at = isset($record['completed_at']) ? (string) $record['completed_at'] : '';
