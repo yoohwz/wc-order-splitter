@@ -332,7 +332,8 @@ $source_lines = $multi_source->get_items('line_item');
 $changed_source_line = end($source_lines);
 $changed_source_line->set_quantity('7');
 $changed_source_line->save();
-$source_tax = reset($multi_source->get_items('tax'));
+$multi_source_tax_rows = $multi_source->get_items('tax');
+$source_tax = reset($multi_source_tax_rows);
 $source_tax->set_tax_total('9.99');
 $source_tax->save();
 $multi_changed_lines = $multi_source->get_items('line_item');
@@ -350,13 +351,17 @@ wcos_merge_recovery_assert(WCOS_Operation_Journal::checkpoint($multi_source, $mu
 )), 'Multi-component recovery checkpoints were not durable.');
 $multi_windows = array('source_line_restored', 'source_tax_restored', 'target_added_line_removed', 'target_tax_restored');
 $executed_multi_windows = array();
-foreach ($multi_windows as $multi_window) {
+foreach ($multi_windows as $multi_window_index => $multi_window) {
 	$hit = false;
 	$multi_fault = static function($stage) use ($multi_window, &$hit) {
 		if (!$hit && $multi_window === $stage) { $hit = true; throw new WCOS_Merge_Recovery_Interruption_Exception('Injected ' . $multi_window); }
 	};
 	add_action('wcos_merge_recovery_checkpoint', $multi_fault, PHP_INT_MAX, 1);
-	WCOS_Operation_Journal::fail($multi_source, $multi_operation);
+	if (0 === $multi_window_index) {
+		WCOS_Operation_Journal::require_recovery($multi_source, $multi_operation);
+	} else {
+		WCOS_Operation_Journal::fail($multi_source, $multi_operation);
+	}
 	remove_action('wcos_merge_recovery_checkpoint', $multi_fault, PHP_INT_MAX);
 	wcos_merge_recovery_assert($hit, 'Internal recovery window did not execute: ' . $multi_window);
 	$executed_multi_windows[] = $multi_window;
