@@ -656,6 +656,8 @@ $failure_windows = array();
 foreach (array('before_target_write', 'after_target_item_before_checkpoint', 'after_target_checkpoint_before_source_ownership', 'during_source_reduced_stock_migration', 'before_source_retirement', 'after_source_retirement') as $stage_under_test) {
 	$window_source = wcos_merge_recovery_order($managed, 'merge-window-' . wp_generate_uuid4() . '@example.test', 1, 1, true);
 	$window_target = wcos_merge_recovery_order($managed, $window_source->get_billing_email(), 1, null, false);
+	$window_source_id = $window_source->get_id();
+	$window_target_id = $window_target->get_id();
 	$window_operation = 'merge-window-' . wp_generate_uuid4();
 	wcos_merge_recovery_start($window_source, $window_target, $window_operation);
 	$hit = false;
@@ -666,8 +668,8 @@ foreach (array('before_target_write', 'after_target_item_before_checkpoint', 'af
 	try { wcos_merge_recovery_stage($window_source, $window_target, $window_operation, true); } catch (WCOS_Merge_Recovery_Interruption_Exception $exception) {}
 	remove_action('wcos_merge_recovery_checkpoint', $window_fault, PHP_INT_MAX);
 	wcos_merge_recovery_assert($hit, 'Pre-authority crash window did not execute: ' . $stage_under_test);
-	$window_source = wc_get_order($window_source->get_id());
-	$window_target = wc_get_order($window_target->get_id());
+	$window_source = wc_get_order($window_source_id);
+	$window_target = wc_get_order($window_target_id);
 	WCOS_Operation_Journal::require_recovery($window_source, $window_operation);
 	$window_source = wc_get_order($window_source->get_id());
 	$window_target = wc_get_order($window_target->get_id());
