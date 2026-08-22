@@ -336,6 +336,8 @@ $multi_source_tax_rows = $multi_source->get_items('tax');
 $source_tax = reset($multi_source_tax_rows);
 $source_tax->set_tax_total('9.99');
 $source_tax->save();
+$multi_source->set_total('88.88');
+$multi_source->save();
 $multi_changed_lines = $multi_source->get_items('line_item');
 $extra_target_line = WCOS_Order_Item_Cloner::product(reset($multi_changed_lines), array(), true, WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE);
 $multi_target->add_item($extra_target_line);
@@ -352,8 +354,12 @@ wcos_merge_recovery_assert(WCOS_Operation_Journal::checkpoint($multi_source, $mu
 $multi_windows = array(
 	'before_source_line_restored_checkpoint',
 	'before_source_tax_restored_checkpoint',
+	'before_source_order_restored_checkpoint',
+	'before_source_stock_marker_restored_checkpoint',
 	'before_target_added_line_removed_checkpoint',
 	'before_target_tax_restored_checkpoint',
+	'before_target_order_restored_checkpoint',
+	'before_target_stock_marker_restored_checkpoint',
 );
 $executed_multi_windows = array();
 foreach ($multi_windows as $multi_window_index => $multi_window) {
