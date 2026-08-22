@@ -129,6 +129,14 @@ jobs:
           grep -Fq 'class-wcos-split-strategy-confirmation-store.php' inc/cores/script.php
           grep -Fq 'class-wcos-split-strategy-admin-controller.php' inc/cores/script.php
           grep -Fq 'WCOS_Split_Strategy_Admin_Controller::bootstrap();' inc/cores/script.php
+          grep -Fq 'class-wcos-multi-order-lease.php' inc/cores/script.php
+          grep -Fq 'class-wcos-merge-plan.php' inc/cores/script.php
+          grep -Fq 'class-wcos-merge-context-signature.php' inc/cores/script.php
+          grep -Fq 'class-wcos-merge-journal-context.php' inc/cores/script.php
+          grep -Fq 'class-wcos-merge-participation.php' inc/cores/script.php
+          grep -Fq 'class-wcos-merge-preflight.php' inc/cores/script.php
+          grep -Fq 'class-wcos-merge-retirement-policy.php' inc/cores/script.php
+          grep -Fq "throw new RuntimeException(__('The hardened merge service has not been implemented.'" inc/domain/class-wcos-mutation-gateway.php
           grep -Fq 'inc/domain/' AGENTS.md
           grep -Fq 'inc/domain/' docs/order-mutation-v2-contract.md
 
@@ -232,6 +240,13 @@ jobs:
             'inc/domain/class-wcos-category-split-planner.php' \
             'inc/domain/class-wcos-stock-status-split-planner.php' \
             'inc/domain/class-wcos-split-strategy-woocommerce-adapter.php' \
+            'inc/domain/class-wcos-multi-order-lease.php' \
+            'inc/domain/class-wcos-merge-plan.php' \
+            'inc/domain/class-wcos-merge-context-signature.php' \
+            'inc/domain/class-wcos-merge-journal-context.php' \
+            'inc/domain/class-wcos-merge-participation.php' \
+            'inc/domain/class-wcos-merge-preflight.php' \
+            'inc/domain/class-wcos-merge-retirement-policy.php' \
             'css/p2-split-strategy-admin.css' \
             'js/p2-split-strategy-admin.js'; do
             if test ! -e "$package_root/$required_path"; then
@@ -284,6 +299,13 @@ jobs:
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-category-split-planner.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-stock-status-split-planner.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-split-strategy-woocommerce-adapter.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-multi-order-lease.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-plan.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-context-signature.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-journal-context.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-participation.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-preflight.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-retirement-policy.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/js/p2-split-strategy-admin.js'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/css/p2-split-strategy-admin.css'
           if unzip -Z1 wc-order-splitter.zip | grep -E '(^|/)(tests|docs|node_modules|inc/mutation-v2)(/|$)|(^|/)AGENTS\.md$'; then
@@ -424,6 +446,9 @@ jobs:
 
       - name: Verify governance, authorization, and metadata policy
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/governance-smoke.php
+
+      - name: Verify hard-off Merge domain foundation contracts
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-domain-foundation-smoke.php
 
       - name: Verify duplicate integrity, idempotency, and recovery
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/duplicate-smoke.php

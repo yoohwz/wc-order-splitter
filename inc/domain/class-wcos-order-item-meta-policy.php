@@ -15,6 +15,7 @@ final class WCOS_Order_Item_Meta_Policy {
 
 	const CONTEXT_DUPLICATE = 'duplicate';
 	const CONTEXT_SPLIT = 'split';
+	const CONTEXT_MERGE = 'merge';
 	const CONTEXT_IDENTITY = 'identity';
 
 	const CLASS_BUSINESS = 'business';
@@ -105,14 +106,15 @@ final class WCOS_Order_Item_Meta_Policy {
 	 * otherwise copy configuration that is absent from identity, making distinct
 	 * configured lines indistinguishable to conservation/recovery contracts.
 	 */
-	public static function inconsistent_private_keys(WC_Order_Item $item) {
+	public static function inconsistent_private_keys(WC_Order_Item $item, $copy_context = self::CONTEXT_SPLIT) {
+		$copy_context = sanitize_key((string) $copy_context);
 		$inconsistent = array();
 		foreach ($item->get_meta_data() as $meta) {
 			$key = (string) $meta->key;
 			if (0 !== strpos($key, '_') || self::is_protected($key)) {
 				continue;
 			}
-			$split = self::classify($key, $meta->value, self::CONTEXT_SPLIT, $item);
+			$split = self::classify($key, $meta->value, $copy_context, $item);
 			$identity = self::classify($key, $meta->value, self::CONTEXT_IDENTITY, $item);
 			if ($split !== $identity) {
 				$inconsistent[] = $key;

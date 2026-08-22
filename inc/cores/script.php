@@ -32,6 +32,7 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-stock-side-effect-guard.php';
 		include_once $root . 'domain/class-wcos-mutation-contract.php';
 		include_once $root . 'domain/class-wcos-operation-lock.php';
+		include_once $root . 'domain/class-wcos-multi-order-lease.php';
 		include_once $root . 'domain/class-wcos-feature-gates.php';
 		include_once $root . 'domain/class-wcos-split-strategy-gates.php';
 		include_once $root . 'domain/class-wcos-order-mutation-authorizer.php';
@@ -44,6 +45,11 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-order-contract-snapshot.php';
 		include_once $root . 'domain/class-wcos-order-copy-context.php';
 		include_once $root . 'domain/class-wcos-order-mutation-snapshot.php';
+		include_once $root . 'domain/class-wcos-merge-retirement-policy.php';
+		include_once $root . 'domain/class-wcos-merge-plan.php';
+		include_once $root . 'domain/class-wcos-merge-context-signature.php';
+		include_once $root . 'domain/class-wcos-merge-journal-context.php';
+		include_once $root . 'domain/class-wcos-merge-participation.php';
 		include_once $root . 'domain/class-wcos-operation-journal.php';
 		include_once $root . 'domain/class-wcos-manual-reconciliation-blocker.php';
 		include_once $root . 'domain/class-wcos-operation-journal-retention.php';
@@ -63,6 +69,7 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-stock-status-split-planner.php';
 		include_once $root . 'domain/class-wcos-split-strategy-woocommerce-adapter.php';
 		include_once $root . 'domain/class-wcos-duplicate-preflight.php';
+		include_once $root . 'domain/class-wcos-merge-preflight.php';
 		include_once $root . 'domain/class-wcos-duplicate-woocommerce-adapter.php';
 		include_once $root . 'domain/class-wcos-mutation-gateway.php';
 
