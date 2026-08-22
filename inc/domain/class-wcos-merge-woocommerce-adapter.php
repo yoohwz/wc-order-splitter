@@ -50,10 +50,19 @@ final class WCOS_Merge_WooCommerce_Adapter {
 			}
 
 			$stock_token = WCOS_Stock_Side_Effect_Guard::begin($operation_id);
-			$boundary_guard = function() use ($source_id, $target_id, $operation_id, $stock_token) {
+			$marking_manual = false;
+			$boundary_guard = function() use ($source_id, $target_id, $operation_id, $stock_token, &$marking_manual) {
+				if ($marking_manual) {
+					return;
+				}
 				$events = WCOS_Stock_Side_Effect_Guard::events($stock_token);
 				if (!empty($events) && WCOS_Stock_Side_Effect_Guard::events_require_manual_reconciliation($events)) {
-					$this->mark_manual_stock_reconciliation($source_id, $target_id, $operation_id);
+					$marking_manual = true;
+					try {
+						$this->mark_manual_stock_reconciliation($source_id, $target_id, $operation_id);
+					} finally {
+						$marking_manual = false;
+					}
 				}
 				WCOS_Stock_Side_Effect_Guard::assert_clean($stock_token);
 			};
@@ -75,7 +84,9 @@ final class WCOS_Merge_WooCommerce_Adapter {
 				);
 			} catch (Throwable $throwable) {
 				$events = WCOS_Stock_Side_Effect_Guard::events($stock_token);
-				if (!empty($events) && WCOS_Stock_Side_Effect_Guard::events_require_manual_reconciliation($events)) {
+				if (!empty($events)
+					&& WCOS_Stock_Side_Effect_Guard::events_require_manual_reconciliation($events)
+					&& 'merge_manual_reconciliation' !== $this->current_error_code($source_id, $operation_id)) {
 					$this->mark_manual_stock_reconciliation($source_id, $target_id, $operation_id);
 				}
 				if ($throwable instanceof WCOS_Unexpected_Stock_Mutation_Exception) {
