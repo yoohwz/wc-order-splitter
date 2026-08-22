@@ -68,6 +68,17 @@ function wcos_merge_foundation_expect_reason(WC_Order $source, WC_Order $target,
 	wcos_merge_foundation_assert($reason === wcos_merge_foundation_reason($source, $target), $message);
 }
 
+function wcos_merge_foundation_meta_values(WC_Order $order, $key) {
+	$values = array();
+	foreach ($order->get_meta_data() as $meta) {
+		$data = $meta->get_data();
+		if (isset($data['key']) && (string) $data['key'] === (string) $key && array_key_exists('value', $data)) {
+			$values[] = $data['value'];
+		}
+	}
+	return $values;
+}
+
 $email = 'merge-' . wp_generate_uuid4() . '@example.test';
 $source = wcos_merge_foundation_order($email, 2);
 $target = wcos_merge_foundation_order($email, 1);
@@ -264,7 +275,7 @@ $target->save_meta_data();
 wcos_merge_foundation_assert(WCOS_Merge_Participation::persist($source, $target, $operation_id, $report['pair_fingerprint']), 'Pair participation did not persist.');
 wcos_merge_foundation_assert(WCOS_Merge_Participation::persist($source, $target, $operation_id, $report['pair_fingerprint']), 'Pair participation was not idempotent.');
 $fresh_target = wc_get_order($target_id);
-wcos_merge_foundation_assert(1 === count(array_filter(array_map('strval', $fresh_target->get_meta(WCOS_Merge_Participation::TARGET_AUTHORITY_META, false)), static function($value) use ($operation_id) {
+wcos_merge_foundation_assert(1 === count(array_filter(array_map('strval', wcos_merge_foundation_meta_values($fresh_target, WCOS_Merge_Participation::TARGET_AUTHORITY_META)), static function($value) use ($operation_id) {
 	return false !== strpos($value, '|' . $operation_id . '|');
 })), 'Idempotent persistence duplicated the atomic target authority pointer.');
 wcos_merge_foundation_assert(in_array($operation_id, WCOS_Manual_Reconciliation_Blocker::active_operation_ids($source), true), 'Source crash window did not fail closed.');
@@ -318,8 +329,8 @@ delete_option('wcos_manual_reconcile_block_' . $target_id);
 
 wcos_merge_foundation_assert(WCOS_Merge_Participation::cleanup($source, $target, $operation_id), 'Participation cleanup failed.');
 $fresh_target = wc_get_order($target_id);
-wcos_merge_foundation_assert(in_array('424242', array_map('strval', $fresh_target->get_meta(WCOS_Merge_Participation::TARGET_SOURCE_META, false)), true), 'Cleanup removed an unrelated source relation.');
-wcos_merge_foundation_assert(in_array('unrelated-operation', array_map('strval', $fresh_target->get_meta(WCOS_Merge_Participation::TARGET_OPERATION_META, false)), true), 'Cleanup removed an unrelated operation relation.');
+wcos_merge_foundation_assert(in_array('424242', array_map('strval', wcos_merge_foundation_meta_values($fresh_target, WCOS_Merge_Participation::TARGET_SOURCE_META)), true), 'Cleanup removed an unrelated source relation.');
+wcos_merge_foundation_assert(in_array('unrelated-operation', array_map('strval', wcos_merge_foundation_meta_values($fresh_target, WCOS_Merge_Participation::TARGET_OPERATION_META)), true), 'Cleanup removed an unrelated operation relation.');
 wcos_merge_foundation_assert($lease->release(), 'Pair lease did not release safely.');
 
 /* Cleanup test records after terminal journal proof is no longer referenced. */

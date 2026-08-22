@@ -89,7 +89,7 @@ final class WCOS_Merge_Participation {
 		if ('' !== $pair_fingerprint) {
 			$fresh_target->delete_meta_data_value(self::TARGET_AUTHORITY_META, self::authority_pointer($source_id, $operation_id, $pair_fingerprint));
 		}
-		foreach ((array) $fresh_target->get_meta(self::TARGET_AUTHORITY_META, false) as $pointer) {
+		foreach (self::meta_values($fresh_target, self::TARGET_AUTHORITY_META) as $pointer) {
 			$authority = self::parse_authority_pointer($pointer);
 			if (!empty($authority)) {
 				$remaining_authorities[] = $authority;
@@ -131,7 +131,7 @@ final class WCOS_Merge_Participation {
 			);
 		}
 
-		foreach ((array) $participant->get_meta(self::TARGET_AUTHORITY_META, false) as $pointer) {
+		foreach (self::meta_values($participant, self::TARGET_AUTHORITY_META) as $pointer) {
 			$parts = self::parse_authority_pointer($pointer);
 			if (empty($parts)) {
 				continue;
@@ -220,7 +220,7 @@ final class WCOS_Merge_Participation {
 	}
 
 	private static function set_exact_scalar(WC_Order $order, $key, $value) {
-		$current = $order->get_meta($key, false);
+		$current = self::meta_values($order, $key);
 		if (count($current) > 1 || (!empty($current) && (string) reset($current) !== (string) $value)) {
 			throw new RuntimeException(__('Conflicting Merge scalar participation metadata already exists.', 'wc-order-splitter'));
 		}
@@ -228,7 +228,7 @@ final class WCOS_Merge_Participation {
 	}
 
 	private static function add_exact_repeatable(WC_Order $order, $key, $value) {
-		foreach ((array) $order->get_meta($key, false) as $current) {
+		foreach (self::meta_values($order, $key) as $current) {
 			if ((string) $current === (string) $value) {
 				return;
 			}
@@ -243,9 +243,9 @@ final class WCOS_Merge_Participation {
 	}
 
 	private static function target_values_contain(WC_Order $target, $source_id, $operation_id, $pair_fingerprint) {
-		return in_array((string) $source_id, array_map('strval', (array) $target->get_meta(self::TARGET_SOURCE_META, false)), true)
-			&& in_array((string) $operation_id, array_map('strval', (array) $target->get_meta(self::TARGET_OPERATION_META, false)), true)
-			&& in_array(self::authority_pointer($source_id, $operation_id, $pair_fingerprint), array_map('strval', (array) $target->get_meta(self::TARGET_AUTHORITY_META, false)), true);
+		return in_array((string) $source_id, array_map('strval', self::meta_values($target, self::TARGET_SOURCE_META)), true)
+			&& in_array((string) $operation_id, array_map('strval', self::meta_values($target, self::TARGET_OPERATION_META)), true)
+			&& in_array(self::authority_pointer($source_id, $operation_id, $pair_fingerprint), array_map('strval', self::meta_values($target, self::TARGET_AUTHORITY_META)), true);
 	}
 
 	private static function authority_pointer($source_order_id, $operation_id, $pair_fingerprint) {
@@ -267,17 +267,19 @@ final class WCOS_Merge_Participation {
 		return compact('source_order_id', 'operation_id', 'pair_fingerprint');
 	}
 
-	private static function normalized_values(WC_Order $order, $key, $normalizer) {
+	private static function meta_values(WC_Order $order, $key) {
 		$values = array();
-		foreach ((array) $order->get_meta($key, false) as $value) {
-			$value = call_user_func($normalizer, $value);
-			if (0 === $value || '' === $value) {
+		$key = (string) $key;
+		foreach ($order->get_meta_data() as $meta) {
+			if (!is_object($meta) || !method_exists($meta, 'get_data')) {
 				continue;
 			}
-			$values[] = $value;
+			$data = $meta->get_data();
+			if (!isset($data['key']) || (string) $data['key'] !== $key || !array_key_exists('value', $data)) {
+				continue;
+			}
+			$values[] = $data['value'];
 		}
-		$values = array_values(array_unique($values));
-		sort($values, SORT_STRING);
 		return $values;
 	}
 
