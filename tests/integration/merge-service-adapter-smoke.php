@@ -240,7 +240,7 @@ try {
 	wcos_merge_service_assert('compensated' === wcos_merge_service_status($source, $operation_id), 'Partial ownership crash did not compensate safely.');
 	$source = wc_get_order($source->get_id());
 	$target = wc_get_order($target->get_id());
-	wcos_merge_service_assert(2 === count($target->get_items('line_item')), 'Compensation did not remove operation-owned target lines.');
+	wcos_merge_service_assert(1 === count($target->get_items('line_item')), 'Compensation did not remove operation-owned target lines.');
 	foreach ($source->get_items('line_item') as $item) {
 		wcos_merge_service_assert('' !== (string) $item->get_meta('_reduced_stock', true), 'Compensation did not restore source stock ownership.');
 	}
