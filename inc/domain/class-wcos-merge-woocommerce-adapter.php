@@ -24,7 +24,7 @@ final class WCOS_Merge_Adapter_Exception extends RuntimeException {
 /** WooCommerce-facing, transport-free adapter for the hardened Merge service. */
 final class WCOS_Merge_WooCommerce_Adapter {
 
-	public function merge(WC_Order $source, WC_Order $target, $operation_id, $confirmed_precision = null) {
+	public function merge(WC_Order $source, WC_Order $target, $operation_id, $confirmed_precision = null, array $confirmation_authority = array()) {
 		$operation_id = sanitize_key((string) $operation_id);
 		if ('' === $operation_id) {
 			throw new WCOS_Merge_Adapter_Exception('invalid_operation_id', __('A Merge operation ID is required.', 'wc-order-splitter'));
@@ -70,7 +70,7 @@ final class WCOS_Merge_WooCommerce_Adapter {
 			add_action('wcos_merge_recovery_checkpoint', $boundary_guard, PHP_INT_MAX, 4);
 
 			try {
-				$result = (new WCOS_Merge_Order_Service())->merge($source, $target, $operation_id, $precision);
+				$result = (new WCOS_Merge_Order_Service())->merge($source, $target, $operation_id, $precision, $confirmation_authority);
 				WCOS_Stock_Side_Effect_Guard::assert_clean($stock_token);
 				return $result;
 			} catch (WCOS_Merge_Adapter_Exception $exception) {

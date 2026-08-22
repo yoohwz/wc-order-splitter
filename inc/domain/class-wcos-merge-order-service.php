@@ -10,7 +10,7 @@ final class WCOS_Merge_Order_Service {
 	const TYPE = 'merge';
 	const POLICY_VERSION = 1;
 
-	public function merge(WC_Order $source, WC_Order $target, $operation_id, $precision) {
+	public function merge(WC_Order $source, WC_Order $target, $operation_id, $precision, array $confirmation_authority = array()) {
 		$operation_id = sanitize_key((string) $operation_id);
 		$source_id = absint($source->get_id());
 		$target_id = absint($target->get_id());
@@ -56,6 +56,18 @@ final class WCOS_Merge_Order_Service {
 				$precision
 			);
 			$fingerprint = (string) $journal_context['merge_pair']['pair_fingerprint'];
+			if (!empty($confirmation_authority)) {
+				$journal_context['merge_confirmation_authority'] = $this->assert_confirmation_authority(
+					$confirmation_authority,
+					$operation_id,
+					$source_id,
+					$target_id,
+					$precision,
+					$plan,
+					$journal_context['merge_pair']
+				);
+				$journal_context['merge_plan'] = $plan;
+			}
 
 			$this->event('before_journal_start', $source, $target, $operation_id);
 			$this->lease_guard($lease);
@@ -343,6 +355,60 @@ final class WCOS_Merge_Order_Service {
 				throw new RuntimeException(__('A Merge source reduced-stock marker changed after planning.', 'wc-order-splitter'));
 			}
 		}
+	}
+
+	private function assert_confirmation_authority(array $authority, $operation_id, $source_id, $target_id, $precision, array $plan, array $pair) {
+		$required = array(
+			'confirmation_schema_version', 'operation_id', 'operator_user_id', 'source_order_id', 'target_order_id',
+			'source_signature', 'target_signature', 'plan', 'plan_fingerprint', 'pair_fingerprint',
+			'context_authority_fingerprint', 'price_precision', 'preflight_policy_version', 'plan_schema_version',
+			'merge_service_policy_version', 'context_signature_version', 'retirement_policy_schema_version', 'retirement_policy',
+		);
+		foreach ($required as $field) {
+			if (!array_key_exists($field, $authority)) {
+				throw new RuntimeException(__('The Merge Confirmation authority is incomplete.', 'wc-order-splitter'));
+			}
+		}
+		$pair_authority = isset($pair['authority']) && is_array($pair['authority']) ? $pair['authority'] : array();
+		if (sanitize_key((string) $authority['operation_id']) !== $operation_id
+			|| !absint($authority['operator_user_id'])
+			|| absint($authority['source_order_id']) !== $source_id
+			|| absint($authority['target_order_id']) !== $target_id
+			|| (int) $authority['price_precision'] !== (int) $precision
+			|| (int) $authority['merge_service_policy_version'] !== self::POLICY_VERSION
+			|| (int) $authority['preflight_policy_version'] !== (int) WCOS_Merge_Preflight::POLICY_VERSION
+			|| (int) $authority['plan_schema_version'] !== (int) WCOS_Merge_Plan::SCHEMA_VERSION
+			|| (int) $authority['context_signature_version'] !== (int) WCOS_Merge_Context_Signature::SCHEMA_VERSION
+			|| (int) $authority['retirement_policy_schema_version'] !== (int) WCOS_Merge_Retirement_Policy::SCHEMA_VERSION
+			|| WCOS_Merge_Retirement_Policy::approved_identifier() !== sanitize_key((string) $authority['retirement_policy'])
+			|| $authority['plan'] !== $plan
+			|| !hash_equals((string) $authority['plan_fingerprint'], WCOS_Merge_Plan::fingerprint($plan))
+			|| !hash_equals((string) $authority['pair_fingerprint'], (string) $pair['pair_fingerprint'])
+			|| !hash_equals((string) $authority['source_signature'], (string) $pair_authority['source_signature'])
+			|| !hash_equals((string) $authority['target_signature'], (string) $pair_authority['target_signature'])
+			|| !hash_equals((string) $authority['context_authority_fingerprint'], (string) $pair_authority['context_authority_fingerprint'])) {
+			throw new RuntimeException(__('The Merge Confirmation no longer matches locked server authority.', 'wc-order-splitter'));
+		}
+		return WCOS_Merge_Journal_Context::create_confirmation_handoff(
+			array(
+				'operation_id' => $operation_id,
+				'operator_user_id' => absint($authority['operator_user_id']),
+				'source_order_id' => $source_id,
+				'target_order_id' => $target_id,
+				'confirmation_schema_version' => absint($authority['confirmation_schema_version']),
+				'merge_service_policy_version' => self::POLICY_VERSION,
+				'preflight_policy_version' => WCOS_Merge_Preflight::POLICY_VERSION,
+				'plan_schema_version' => WCOS_Merge_Plan::SCHEMA_VERSION,
+				'plan_fingerprint' => sanitize_key((string) $authority['plan_fingerprint']),
+				'context_signature_version' => WCOS_Merge_Context_Signature::SCHEMA_VERSION,
+				'context_authority_fingerprint' => sanitize_key((string) $authority['context_authority_fingerprint']),
+				'pair_fingerprint' => sanitize_key((string) $authority['pair_fingerprint']),
+				'price_precision' => $precision,
+				'retirement_policy_schema_version' => WCOS_Merge_Retirement_Policy::SCHEMA_VERSION,
+				'retirement_policy' => WCOS_Merge_Retirement_Policy::approved_identifier(),
+			),
+			$pair
+		);
 	}
 
 	private function lease_guard(WCOS_Multi_Order_Lease $lease) {
