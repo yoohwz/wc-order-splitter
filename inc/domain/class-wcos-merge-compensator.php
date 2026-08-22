@@ -246,7 +246,9 @@ final class WCOS_Merge_Compensator {
 			self::event('after_verification_before_commit', $source, $target, $operation_id);
 			self::lease_guard($lease);
 		}
-		if (WCOS_Merge_Recovery_State_Graph::COMMITTED !== $recovery_state && !WCOS_Operation_Journal::mark_committed($source, $operation_id, array(
+		$journal_status = sanitize_key(isset($record['status']) ? (string) $record['status'] : '');
+		$commit_checkpoint_required = WCOS_Merge_Recovery_State_Graph::COMMITTED !== $recovery_state || 'committed' !== $journal_status;
+		if ($commit_checkpoint_required && !WCOS_Operation_Journal::mark_committed($source, $operation_id, array(
 				'merge_forward_repaired' => true,
 				'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::COMMITTED,
 			))) {
