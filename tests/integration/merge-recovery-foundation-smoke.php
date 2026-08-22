@@ -81,7 +81,7 @@ function wcos_merge_recovery_start(WC_Order $source, WC_Order $target, $operatio
 		$report['price_precision']
 	);
 	wcos_merge_recovery_assert(
-		WCOS_Operation_Journal::start($source, $operation_id, 'merge', $context, $report['pair_fingerprint']),
+		WCOS_Operation_Journal::start($source, $operation_id, 'merge', $context, $context['merge_pair']['pair_fingerprint']),
 		'Unable to start authoritative Merge recovery journal.'
 	);
 	wcos_merge_recovery_assert(
