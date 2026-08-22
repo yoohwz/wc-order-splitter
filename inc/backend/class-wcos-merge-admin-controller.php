@@ -98,7 +98,10 @@ final class WCOS_Merge_Admin_Controller {
 			$authority = WCOS_Merge_Review_Store::claim($source, $target, $review_id, $review_token, get_current_user_id());
 			$claimed = true;
 			$confirmation = WCOS_Merge_Confirmation_Store::create($source, $target, $authority, get_current_user_id());
-			WCOS_Merge_Review_Store::consume($review_id);
+			if (!WCOS_Merge_Review_Store::consume($review_id)) {
+				WCOS_Merge_Confirmation_Store::delete($confirmation['operation_id']);
+				throw new WCOS_Merge_Review_Exception('consume_failed', __('The Merge Review could not be consumed safely. Review the pair again.', 'wc-order-splitter'));
+			}
 			$claimed = false;
 		} catch (WCOS_Merge_Review_Exception $exception) {
 			throw $this->review_exception($exception);

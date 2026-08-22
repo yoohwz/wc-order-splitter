@@ -94,6 +94,7 @@ final class WCOS_Merge_Review_Store {
 			throw new WCOS_Merge_Review_Exception('invalid_token', __('The Merge Review token is invalid.', 'wc-order-splitter'));
 		}
 		$authority = isset($record['authority']) && is_array($record['authority']) ? $record['authority'] : array();
+		self::assert_authority_complete($authority);
 		if (absint(isset($record['user_id']) ? $record['user_id'] : 0) !== $user_id
 			|| absint(isset($authority['source_order_id']) ? $authority['source_order_id'] : 0) !== $source->get_id()
 			|| absint(isset($authority['target_order_id']) ? $authority['target_order_id'] : 0) !== $target->get_id()) {
@@ -161,6 +162,7 @@ final class WCOS_Merge_Review_Store {
 	}
 
 	private static function assert_current(WC_Order $source, WC_Order $target, array $authority) {
+		self::assert_authority_complete($authority);
 		$precision = WCOS_Price_Precision_Scope::validate(isset($authority['price_precision']) ? $authority['price_precision'] : null);
 		$source = wc_get_order($source->get_id());
 		$target = wc_get_order($target->get_id());
@@ -183,6 +185,43 @@ final class WCOS_Merge_Review_Store {
 		}
 	}
 
+	private static function assert_authority_complete(array $authority) {
+		$required = array(
+			'source_order_id', 'target_order_id', 'source_signature', 'target_signature', 'plan', 'plan_fingerprint',
+			'pair_fingerprint', 'context_authority', 'context_authority_fingerprint', 'price_precision',
+			'preflight_policy_version', 'plan_schema_version', 'context_signature_version',
+			'retirement_policy_schema_version', 'retirement_policy',
+		);
+		foreach ($required as $field) {
+			if (!array_key_exists($field, $authority)) {
+				throw new WCOS_Merge_Review_Exception('review_invalid', __('The stored Merge Review authority is incomplete.', 'wc-order-splitter'));
+			}
+		}
+		if (!absint($authority['source_order_id']) || !absint($authority['target_order_id'])
+			|| absint($authority['source_order_id']) === absint($authority['target_order_id'])
+			|| !is_array($authority['plan']) || !is_array($authority['context_authority'])
+			|| !self::is_fingerprint($authority['source_signature']) || !self::is_fingerprint($authority['target_signature'])
+			|| !self::is_fingerprint($authority['plan_fingerprint']) || !self::is_fingerprint($authority['pair_fingerprint'])
+			|| !self::is_fingerprint($authority['context_authority_fingerprint'])) {
+			throw new WCOS_Merge_Review_Exception('review_invalid', __('The stored Merge Review authority is malformed.', 'wc-order-splitter'));
+		}
+		try {
+			$precision = WCOS_Price_Precision_Scope::validate($authority['price_precision']);
+			$plan_fingerprint = WCOS_Merge_Plan::fingerprint($authority['plan']);
+		} catch (Throwable $throwable) {
+			throw new WCOS_Merge_Review_Exception('review_invalid', __('The stored Merge Review plan or precision is malformed.', 'wc-order-splitter'));
+		}
+		if ($precision !== (int) $authority['price_precision']
+			|| !hash_equals((string) $authority['plan_fingerprint'], $plan_fingerprint)
+			|| (int) $authority['preflight_policy_version'] !== (int) WCOS_Merge_Preflight::POLICY_VERSION
+			|| (int) $authority['plan_schema_version'] !== (int) WCOS_Merge_Plan::SCHEMA_VERSION
+			|| (int) $authority['context_signature_version'] !== (int) WCOS_Merge_Context_Signature::SCHEMA_VERSION
+			|| (int) $authority['retirement_policy_schema_version'] !== (int) WCOS_Merge_Retirement_Policy::SCHEMA_VERSION
+			|| WCOS_Merge_Retirement_Policy::approved_identifier() !== sanitize_key((string) $authority['retirement_policy'])) {
+			throw new WCOS_Merge_Review_Exception('authority_changed', __('The stored Merge Review policy or plan authority is no longer current.', 'wc-order-splitter'));
+		}
+	}
+
 	private static function token_hash($token) {
 		return hash_hmac('sha256', (string) $token, wp_salt('auth'));
 	}
@@ -197,5 +236,9 @@ final class WCOS_Merge_Review_Store {
 
 	private static function is_uuid($value) {
 		return 1 === preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/D', (string) $value);
+	}
+
+	private static function is_fingerprint($value) {
+		return 1 === preg_match('/^[0-9a-f]{64}$/D', (string) $value);
 	}
 }

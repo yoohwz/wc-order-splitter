@@ -220,8 +220,24 @@ final class WCOS_Merge_Confirmation_Store {
 				throw new WCOS_Merge_Confirmation_Exception('authority_incomplete', __('The Merge Confirmation is missing frozen server authority.', 'wc-order-splitter'));
 			}
 		}
-		if (!is_array($record['plan'])
-			|| WCOS_Merge_Plan::fingerprint($record['plan']) !== (string) $record['plan_fingerprint']
+		if ((int) (isset($record['schema_version']) ? $record['schema_version'] : 0) !== self::SCHEMA_VERSION
+			|| !self::is_uuid(sanitize_key((string) $record['operation_id']))
+			|| !absint($record['user_id']) || !absint($record['source_order_id']) || !absint($record['target_order_id'])
+			|| absint($record['source_order_id']) === absint($record['target_order_id'])
+			|| !is_array($record['plan'])
+			|| !self::is_fingerprint($record['source_signature']) || !self::is_fingerprint($record['target_signature'])
+			|| !self::is_fingerprint($record['plan_fingerprint']) || !self::is_fingerprint($record['pair_fingerprint'])
+			|| !self::is_fingerprint($record['context_authority_fingerprint'])) {
+			throw new WCOS_Merge_Confirmation_Exception('authority_incomplete', __('The Merge Confirmation identity or fingerprint authority is malformed.', 'wc-order-splitter'));
+		}
+		try {
+			$precision = WCOS_Price_Precision_Scope::validate($record['price_precision']);
+			$plan_fingerprint = WCOS_Merge_Plan::fingerprint($record['plan']);
+		} catch (Throwable $throwable) {
+			throw new WCOS_Merge_Confirmation_Exception('authority_incomplete', __('The Merge Confirmation plan or precision authority is malformed.', 'wc-order-splitter'));
+		}
+		if ($precision !== (int) $record['price_precision']
+			|| !hash_equals((string) $record['plan_fingerprint'], $plan_fingerprint)
 			|| WCOS_Merge_Retirement_Policy::approved_identifier() !== sanitize_key((string) $record['retirement_policy'])
 			|| (int) $record['preflight_policy_version'] !== (int) WCOS_Merge_Preflight::POLICY_VERSION
 			|| (int) $record['plan_schema_version'] !== (int) WCOS_Merge_Plan::SCHEMA_VERSION
@@ -241,5 +257,9 @@ final class WCOS_Merge_Confirmation_Store {
 
 	private static function is_uuid($value) {
 		return 1 === preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/D', (string) $value);
+	}
+
+	private static function is_fingerprint($value) {
+		return 1 === preg_match('/^[0-9a-f]{64}$/D', (string) $value);
 	}
 }
