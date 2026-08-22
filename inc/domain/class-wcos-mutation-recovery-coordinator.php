@@ -103,10 +103,17 @@ final class WCOS_Mutation_Recovery_Coordinator {
 				return;
 			}
 
-			$lease = WCOS_Multi_Order_Lease::acquire(
-				array($pair['source_order_id'], $pair['target_order_id']),
-				$operation_id
-			);
+			$participant_ids = array($pair['source_order_id'], $pair['target_order_id']);
+			$owned_by_operation = array_filter($participant_ids, static function($order_id) use ($operation_id) {
+				return WCOS_Operation_Lock::is_current_owned_for($order_id, $operation_id);
+			});
+			if (count($owned_by_operation) === count($participant_ids)) {
+				$lease = WCOS_Multi_Order_Lease::adopt_current($participant_ids, $operation_id);
+			} elseif (empty($owned_by_operation)) {
+				$lease = WCOS_Multi_Order_Lease::acquire($participant_ids, $operation_id);
+			} else {
+				throw new RuntimeException(__('Merge recovery found an incomplete same-operation participant lease set.', 'wc-order-splitter'));
+			}
 			if (!$lease instanceof WCOS_Multi_Order_Lease) {
 				throw new RuntimeException(__('Merge recovery could not acquire both participant leases.', 'wc-order-splitter'));
 			}

@@ -105,11 +105,13 @@ function wcos_merge_recovery_money_add($left, $right) {
 
 /** Test-only commercial staging; no production Merge service calls this helper. */
 function wcos_merge_recovery_stage(WC_Order $source, WC_Order $target, $operation_id, $forward) {
+	do_action('wcos_merge_recovery_checkpoint', 'before_target_write', $source, $target, $operation_id);
 	$source_lines = $source->get_items('line_item');
 	$source_line = reset($source_lines);
 	$source_reduced = $source_line->get_meta('_reduced_stock', true);
 	$clone = WCOS_Order_Item_Cloner::product($source_line, array(), true, WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE);
 	$target->add_item($clone);
+	do_action('wcos_merge_recovery_checkpoint', 'after_target_item_before_checkpoint', $source, $target, $operation_id);
 	$target_taxes = $target->get_items('tax');
 	$target_tax = reset($target_taxes);
 	wcos_merge_recovery_assert($target_tax instanceof WC_Order_Item_Tax, 'Target historical tax row is unavailable.');
@@ -122,7 +124,9 @@ function wcos_merge_recovery_stage(WC_Order $source, WC_Order $target, $operatio
 	wcos_merge_recovery_assert(WCOS_Operation_Journal::checkpoint($source, $operation_id, 'merge_target_persisted', array(
 		'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::TARGET_PERSISTED,
 	)), 'Target persistence checkpoint failed.');
+	do_action('wcos_merge_recovery_checkpoint', 'after_target_checkpoint_before_source_ownership', $source, $target, $operation_id);
 
+	do_action('wcos_merge_recovery_checkpoint', 'during_source_reduced_stock_migration', $source, $target, $operation_id);
 	$source_line->delete_meta_data('_reduced_stock');
 	$source_line->save();
 	$source->get_data_store()->set_stock_reduced($source->get_id(), false);
@@ -131,14 +135,36 @@ function wcos_merge_recovery_stage(WC_Order $source, WC_Order $target, $operatio
 	}
 	$source = wc_get_order($source->get_id());
 	$target = wc_get_order($target->get_id());
+	wcos_merge_recovery_assert(WCOS_Operation_Journal::checkpoint($source, $operation_id, 'merge_source_ownership_migrated', array(
+		'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::SOURCE_OWNERSHIP_MIGRATED,
+	)), 'Unable to checkpoint source ownership migration.');
+	$retirement_candidate = '';
+	if ($forward) {
+		$retirement_candidate = WCOS_Merge_Retirement_Policy::NON_FORCE_TRASH_ARCHIVE;
+		$snapshot = WCOS_Operation_Journal::get($source, $operation_id)['context']['merge_recovery_snapshot'];
+		do_action('wcos_merge_recovery_checkpoint', 'before_source_retirement', $source, $target, $operation_id);
+		$source->delete(false);
+		$source = wc_get_order($source->get_id());
+		wcos_merge_recovery_assert($source instanceof WC_Order && 'trash' === $source->get_status(), 'Non-force retirement did not archive the staged source.');
+		WCOS_Merge_Recovery_Snapshot::assert_archive_preserved($snapshot, $source);
+		do_action('wcos_merge_recovery_checkpoint', 'after_source_retirement', $source, $target, $operation_id);
+		wcos_merge_recovery_assert(WCOS_Operation_Journal::checkpoint($source, $operation_id, 'merge_source_retired', array(
+			'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::SOURCE_RETIRED,
+			'merge_retirement_candidate' => $retirement_candidate,
+		)), 'Unable to checkpoint the real source retirement.');
+	}
+	$source = wc_get_order($source->get_id());
+	$target = wc_get_order($target->get_id());
 	wcos_merge_recovery_assert(
 		WCOS_Operation_Journal::checkpoint($source, $operation_id, 'merge_commercial_state_planned', array(
-			'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::SOURCE_OWNERSHIP_MIGRATED,
 			'merge_source_signature_after' => WCOS_Merge_Recovery_Snapshot::participant_signature($source),
 			'merge_target_signature_after' => WCOS_Merge_Recovery_Snapshot::participant_signature($target),
+			'merge_source_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($source),
+			'merge_target_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($target),
 			'merge_target_item_ids' => array($target_item_id),
 			'merge_target_tax_item_ids' => array(),
 			'merge_forward_repair_allowed' => (bool) $forward,
+			'merge_retirement_candidate' => $retirement_candidate,
 			'merge_physical_stock_after_write' => false,
 		)),
 		'Unable to checkpoint planned Merge recovery state.'
@@ -168,12 +194,6 @@ function wcos_merge_recovery_run_case($label, WC_Product $product, $quantity, $r
 	wcos_merge_recovery_assert($tamper_rejected, 'Tampered Merge recovery snapshot was accepted.');
 
 	list($source, $target, $target_item_id) = wcos_merge_recovery_stage($source, $target, $operation_id, $forward);
-	if ($forward) {
-		wcos_merge_recovery_assert(WCOS_Operation_Journal::checkpoint($source, $operation_id, 'merge_test_retirement_fixture_verified', array(
-			'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::SOURCE_RETIRED,
-			'retirement_policy_selected' => false,
-		)), 'Test-only retirement boundary could not be checkpointed.');
-	}
 	$source_lines = $source->get_items('line_item');
 	$source_line = reset($source_lines);
 	$target_line = $target->get_item($target_item_id);
@@ -270,6 +290,189 @@ WCOS_Operation_Journal::delete($resume_source, $resume_operation);
 $resume_source->delete(true);
 $resume_target->delete(true);
 
+/* Same-operation recovery adopts both current leases without releasing the owner. */
+$adopt_source = wcos_merge_recovery_order($managed, 'merge-adopt-' . wp_generate_uuid4() . '@example.test', 2, 2, true);
+$adopt_target = wcos_merge_recovery_order($managed, $adopt_source->get_billing_email(), 1, null, false);
+$adopt_operation = 'merge-adopt-' . wp_generate_uuid4();
+wcos_merge_recovery_start($adopt_source, $adopt_target, $adopt_operation);
+list($adopt_source, $adopt_target) = wcos_merge_recovery_stage($adopt_source, $adopt_target, $adopt_operation, false);
+$owning_lease = WCOS_Multi_Order_Lease::acquire(array($adopt_source->get_id(), $adopt_target->get_id()), $adopt_operation);
+wcos_merge_recovery_assert($owning_lease instanceof WCOS_Multi_Order_Lease, 'Same-operation adoption fixture could not acquire leases.');
+wcos_merge_recovery_assert(WCOS_Operation_Journal::require_recovery($adopt_source, $adopt_operation), 'Recovery did not run while its operation already owned both leases.');
+$owning_lease->assert_owned();
+wcos_merge_recovery_assert(false === WCOS_Multi_Order_Lease::acquire(array($adopt_source->get_id(), $adopt_target->get_id()), 'merge-competitor-' . wp_generate_uuid4()), 'A competitor entered an adopted lease set.');
+$owning_lease->release();
+$adopt_source = wc_get_order($adopt_source->get_id());
+$adopt_target = wc_get_order($adopt_target->get_id());
+wcos_merge_recovery_assert('compensated' === WCOS_Operation_Journal::get($adopt_source, $adopt_operation)['status'], 'Adopted same-operation recovery did not compensate.');
+WCOS_Operation_Journal::delete($adopt_source, $adopt_operation);
+$adopt_source->delete(true);
+$adopt_target->delete(true);
+
+/* Multi-line/tax restores and target cleanup resume at every durable sub-write. */
+$multi_source = wcos_merge_recovery_order($managed, 'merge-multi-' . wp_generate_uuid4() . '@example.test', 2, 2, true);
+$multi_initial_lines = $multi_source->get_items('line_item');
+$extra_source_line = WCOS_Order_Item_Cloner::product(reset($multi_initial_lines), array(), true, WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE);
+$multi_source->add_item($extra_source_line);
+$multi_source->save();
+$multi_source = wc_get_order($multi_source->get_id());
+$multi_target = wcos_merge_recovery_order($managed, $multi_source->get_billing_email(), 1, null, false);
+$multi_operation = 'merge-multi-' . wp_generate_uuid4();
+$multi_record = wcos_merge_recovery_start($multi_source, $multi_target, $multi_operation);
+$multi_snapshot = $multi_record['context']['merge_recovery_snapshot'];
+list($multi_source, $multi_target, $multi_added_one) = wcos_merge_recovery_stage($multi_source, $multi_target, $multi_operation, false);
+$source_lines = $multi_source->get_items('line_item');
+$changed_source_line = end($source_lines);
+$changed_source_line->set_quantity('7');
+$changed_source_line->save();
+$source_tax = reset($multi_source->get_items('tax'));
+$source_tax->set_tax_total('9.99');
+$source_tax->save();
+$multi_changed_lines = $multi_source->get_items('line_item');
+$extra_target_line = WCOS_Order_Item_Cloner::product(reset($multi_changed_lines), array(), true, WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE);
+$multi_target->add_item($extra_target_line);
+$multi_target->save();
+$multi_source = wc_get_order($multi_source->get_id());
+$multi_target = wc_get_order($multi_target->get_id());
+wcos_merge_recovery_assert(WCOS_Operation_Journal::checkpoint($multi_source, $multi_operation, 'merge_multi_component_plan', array(
+	'merge_source_signature_after' => WCOS_Merge_Recovery_Snapshot::participant_signature($multi_source),
+	'merge_target_signature_after' => WCOS_Merge_Recovery_Snapshot::participant_signature($multi_target),
+	'merge_source_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($multi_source),
+	'merge_target_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($multi_target),
+	'merge_target_item_ids' => array($multi_added_one, $extra_target_line->get_id()),
+)), 'Multi-component recovery checkpoints were not durable.');
+$multi_windows = array('source_line_restored', 'source_tax_restored', 'target_added_line_removed', 'target_tax_restored');
+$executed_multi_windows = array();
+foreach ($multi_windows as $multi_window) {
+	$hit = false;
+	$multi_fault = static function($stage) use ($multi_window, &$hit) {
+		if (!$hit && $multi_window === $stage) { $hit = true; throw new WCOS_Merge_Recovery_Interruption_Exception('Injected ' . $multi_window); }
+	};
+	add_action('wcos_merge_recovery_checkpoint', $multi_fault, PHP_INT_MAX, 1);
+	WCOS_Operation_Journal::fail($multi_source, $multi_operation);
+	remove_action('wcos_merge_recovery_checkpoint', $multi_fault, PHP_INT_MAX);
+	wcos_merge_recovery_assert($hit, 'Internal recovery window did not execute: ' . $multi_window);
+	$executed_multi_windows[] = $multi_window;
+	$multi_source = wc_get_order($multi_source->get_id());
+	$multi_target = wc_get_order($multi_target->get_id());
+}
+WCOS_Operation_Journal::fail($multi_source, $multi_operation);
+$multi_source = wc_get_order($multi_source->get_id());
+$multi_target = wc_get_order($multi_target->get_id());
+wcos_merge_recovery_assert('compensated' === WCOS_Operation_Journal::get($multi_source, $multi_operation)['status'], 'Multi-component retries did not finish compensation.');
+wcos_merge_recovery_assert(hash_equals(WCOS_Merge_Recovery_Snapshot::before_signature($multi_snapshot, 'source'), WCOS_Merge_Recovery_Snapshot::participant_signature($multi_source)), 'Multi-line source restore was not exact.');
+wcos_merge_recovery_assert(hash_equals(WCOS_Merge_Recovery_Snapshot::before_signature($multi_snapshot, 'target'), WCOS_Merge_Recovery_Snapshot::participant_signature($multi_target)), 'Multi-line target cleanup was not exact.');
+WCOS_Operation_Journal::delete($multi_source, $multi_operation);
+$multi_source->delete(true);
+$multi_target->delete(true);
+
+/* Crash immediately before source restore performs no write and retries cleanly. */
+$before_restore_source = wcos_merge_recovery_order($managed, 'merge-before-restore-' . wp_generate_uuid4() . '@example.test', 1, 1, true);
+$before_restore_target = wcos_merge_recovery_order($managed, $before_restore_source->get_billing_email(), 1, null, false);
+$before_restore_operation = 'merge-before-restore-' . wp_generate_uuid4();
+wcos_merge_recovery_start($before_restore_source, $before_restore_target, $before_restore_operation);
+list($before_restore_source, $before_restore_target) = wcos_merge_recovery_stage($before_restore_source, $before_restore_target, $before_restore_operation, false);
+$before_restore_hit = false;
+$before_restore_fault = static function($stage) use (&$before_restore_hit) {
+	if (!$before_restore_hit && 'before_source_restore' === $stage) { $before_restore_hit = true; throw new WCOS_Merge_Recovery_Interruption_Exception('Injected before source restore'); }
+};
+add_action('wcos_merge_recovery_checkpoint', $before_restore_fault, PHP_INT_MAX, 1);
+WCOS_Operation_Journal::require_recovery($before_restore_source, $before_restore_operation);
+remove_action('wcos_merge_recovery_checkpoint', $before_restore_fault, PHP_INT_MAX);
+wcos_merge_recovery_assert($before_restore_hit, 'Before-source-restore crash window did not execute.');
+$before_restore_source = wc_get_order($before_restore_source->get_id());
+WCOS_Operation_Journal::fail($before_restore_source, $before_restore_operation);
+$before_restore_source = wc_get_order($before_restore_source->get_id());
+$before_restore_target = wc_get_order($before_restore_target->get_id());
+wcos_merge_recovery_assert('compensated' === WCOS_Operation_Journal::get($before_restore_source, $before_restore_operation)['status'], 'Before-source-restore retry did not compensate.');
+WCOS_Operation_Journal::delete($before_restore_source, $before_restore_operation);
+$before_restore_source->delete(true);
+$before_restore_target->delete(true);
+
+/* Lease loss at a write boundary performs no further participant mutation. */
+$lease_loss_source = wcos_merge_recovery_order($managed, 'merge-lease-loss-' . wp_generate_uuid4() . '@example.test', 1, 1, true);
+$lease_loss_target = wcos_merge_recovery_order($managed, $lease_loss_source->get_billing_email(), 1, null, false);
+$lease_loss_operation = 'merge-lease-loss-' . wp_generate_uuid4();
+wcos_merge_recovery_start($lease_loss_source, $lease_loss_target, $lease_loss_operation);
+list($lease_loss_source, $lease_loss_target) = wcos_merge_recovery_stage($lease_loss_source, $lease_loss_target, $lease_loss_operation, false);
+$lease_loss_source_signature = WCOS_Merge_Recovery_Snapshot::participant_signature($lease_loss_source);
+$lease_loss_target_signature = WCOS_Merge_Recovery_Snapshot::participant_signature($lease_loss_target);
+$lease_loss_owner = WCOS_Multi_Order_Lease::acquire(array($lease_loss_source->get_id(), $lease_loss_target->get_id()), $lease_loss_operation);
+$lease_loss_hit = false;
+$lease_loss_fault = static function($stage) use (&$lease_loss_hit, $lease_loss_owner) {
+	if (!$lease_loss_hit && 'before_source_restore' === $stage) { $lease_loss_hit = true; $lease_loss_owner->release(); }
+};
+add_action('wcos_merge_recovery_checkpoint', $lease_loss_fault, PHP_INT_MAX, 1);
+WCOS_Operation_Journal::require_recovery($lease_loss_source, $lease_loss_operation);
+remove_action('wcos_merge_recovery_checkpoint', $lease_loss_fault, PHP_INT_MAX);
+$lease_loss_source = wc_get_order($lease_loss_source->get_id());
+$lease_loss_target = wc_get_order($lease_loss_target->get_id());
+wcos_merge_recovery_assert($lease_loss_hit, 'Lease-loss boundary did not execute.');
+wcos_merge_recovery_assert(hash_equals($lease_loss_source_signature, WCOS_Merge_Recovery_Snapshot::participant_signature($lease_loss_source)), 'Lease loss allowed a source write.');
+wcos_merge_recovery_assert(hash_equals($lease_loss_target_signature, WCOS_Merge_Recovery_Snapshot::participant_signature($lease_loss_target)), 'Lease loss allowed a target write.');
+wcos_merge_recovery_assert('manual_reconciliation' === WCOS_Operation_Journal::get($lease_loss_source, $lease_loss_operation)['status'], 'Lease loss did not preserve fail-closed authority.');
+delete_option('wcos_manual_reconcile_block_' . $lease_loss_source->get_id());
+delete_option('wcos_manual_reconcile_block_' . $lease_loss_target->get_id());
+WCOS_Operation_Journal::delete($lease_loss_source, $lease_loss_operation);
+$lease_loss_source->delete(true);
+$lease_loss_target->delete(true);
+
+/* One-shot participation failure plus one-sided blocker failure stays pair-wide fail closed. */
+$authority_source = wcos_merge_recovery_order($managed, 'merge-authority-' . wp_generate_uuid4() . '@example.test', 1, 1, true);
+$authority_target = wcos_merge_recovery_order($managed, $authority_source->get_billing_email(), 1, null, false);
+$authority_operation = 'merge-authority-' . wp_generate_uuid4();
+$authority_record = wcos_merge_recovery_start($authority_source, $authority_target, $authority_operation);
+$authority_lease = WCOS_Multi_Order_Lease::acquire(array($authority_source->get_id(), $authority_target->get_id()), $authority_operation);
+$participation_failed_once = false;
+$authority_fault = static function($stage) use (&$participation_failed_once) {
+	if ('before_manual_participation_attempt_1' === $stage && !$participation_failed_once) {
+		$participation_failed_once = true;
+		throw new RuntimeException('Injected participation persistence failure.');
+	}
+	if ('before_manual_target_blocker' === $stage) {
+		throw new RuntimeException('Injected target blocker persistence failure.');
+	}
+};
+add_action('wcos_merge_recovery_checkpoint', $authority_fault, PHP_INT_MAX, 1);
+$authority_result = WCOS_Merge_Compensator::manual_reconciliation($authority_source, $authority_target, $authority_record, 'authority_fault_matrix');
+remove_action('wcos_merge_recovery_checkpoint', $authority_fault, PHP_INT_MAX);
+$authority_lease->release();
+$authority_source = wc_get_order($authority_source->get_id());
+$authority_target = wc_get_order($authority_target->get_id());
+wcos_merge_recovery_assert($participation_failed_once && 'manual_reconciliation' === $authority_result, 'Manual authority fault fixture did not complete safely.');
+wcos_merge_recovery_assert(in_array($authority_operation, WCOS_Manual_Reconciliation_Blocker::active_operation_ids($authority_source), true), 'Source lost local fail-closed authority.');
+wcos_merge_recovery_assert(in_array($authority_operation, WCOS_Manual_Reconciliation_Blocker::active_operation_ids($authority_target), true), 'Peer lost independently verified participation authority.');
+$peer_rejected = false;
+try { WCOS_Merge_Preflight::assert_supported($authority_target, $authority_source); } catch (Throwable $throwable) { $peer_rejected = true; }
+wcos_merge_recovery_assert($peer_rejected, 'Peer mutation was not blocked by partial durable manual evidence.');
+delete_option('wcos_manual_reconcile_block_' . $authority_source->get_id());
+delete_option('wcos_manual_reconcile_block_' . $authority_target->get_id());
+WCOS_Operation_Journal::delete($authority_source, $authority_operation);
+$authority_source->delete(true);
+$authority_target->delete(true);
+
+/* Source divergence is independently detected before any recovery overwrite. */
+$source_diverged = wcos_merge_recovery_order($managed, 'merge-source-diverged-' . wp_generate_uuid4() . '@example.test', 2, 2, true);
+$source_diverged_target = wcos_merge_recovery_order($managed, $source_diverged->get_billing_email(), 1, null, false);
+$source_diverged_operation = 'merge-source-diverged-' . wp_generate_uuid4();
+wcos_merge_recovery_start($source_diverged, $source_diverged_target, $source_diverged_operation);
+list($source_diverged, $source_diverged_target) = wcos_merge_recovery_stage($source_diverged, $source_diverged_target, $source_diverged_operation, false);
+$source_diverged_lines = $source_diverged->get_items('line_item');
+$source_diverged_line = reset($source_diverged_lines);
+$source_diverged_line->set_quantity(11);
+$source_diverged_line->save();
+WCOS_Operation_Journal::require_recovery($source_diverged, $source_diverged_operation);
+$source_diverged = wc_get_order($source_diverged->get_id());
+$source_diverged_target = wc_get_order($source_diverged_target->get_id());
+wcos_merge_recovery_assert('manual_reconciliation' === WCOS_Operation_Journal::get($source_diverged, $source_diverged_operation)['status'], 'Source divergence did not enter manual reconciliation.');
+$source_diverged_after_lines = $source_diverged->get_items('line_item');
+wcos_merge_recovery_assert('11' === (string) reset($source_diverged_after_lines)->get_quantity(), 'Source divergence was overwritten.');
+delete_option('wcos_manual_reconcile_block_' . $source_diverged->get_id());
+delete_option('wcos_manual_reconcile_block_' . $source_diverged_target->get_id());
+WCOS_Operation_Journal::delete($source_diverged, $source_diverged_operation);
+$source_diverged->delete(true);
+$source_diverged_target->delete(true);
+
 /* Unexplained participant divergence blocks both participants and preserves journal retention. */
 $ambiguous_source = wcos_merge_recovery_order($managed, 'merge-ambiguous-' . wp_generate_uuid4() . '@example.test', 2, 2, true);
 $ambiguous_target = wcos_merge_recovery_order($managed, $ambiguous_source->get_billing_email(), 1, null, false);
@@ -359,106 +562,66 @@ try {
 wcos_merge_recovery_assert($before_rejected, 'Before-write physical stock hook was not rejected.');
 WCOS_Stock_Side_Effect_Guard::end($guard);
 
-/* Retirement candidates are observed, not selected or registered in production. */
+/* Both unselected candidates run inside a real journaled pair and compensate. */
 function wcos_merge_retirement_observe($candidate, WC_Product $product) {
 	$email = 'merge-retirement-' . $candidate . '-' . wp_generate_uuid4() . '@example.test';
-	$order = wcos_merge_recovery_order($product, $email, 1, 1, true);
+	$source = wcos_merge_recovery_order($product, $email, 1, 1, true);
 	$target = wcos_merge_recovery_order($product, $email, 1, null, false);
-	$order_id = $order->get_id();
-	$commercial_before = WCOS_Order_Contract_Snapshot::aggregate(array($order));
-	$stock_before = WCOS_Order_Contract_Snapshot::product_stock($order);
-	$source_lines = $order->get_items('line_item');
-	$source_line = reset($source_lines);
-	$target_line = WCOS_Order_Item_Cloner::product($source_line, array(), true, WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE);
-	$target->add_item($target_line);
-	$target->save();
-	$target->get_data_store()->set_stock_reduced($target->get_id(), true);
-	$source_line->delete_meta_data('_reduced_stock');
-	$source_line->save();
-	$order->get_data_store()->set_stock_reduced($order_id, false);
-	$order = wc_get_order($order_id);
-	$target = wc_get_order($target->get_id());
-	$target_active_owner = '1.000000' === WCOS_Decimal::normalize($target_line->get_meta('_reduced_stock', true), 6)
-		&& (bool) $target->get_data_store()->get_stock_reduced($target->get_id());
-	wcos_merge_recovery_assert($stock_before === WCOS_Order_Contract_Snapshot::product_stock($target), 'Retirement ownership fixture changed physical stock.');
-	$hooks = array(
-		'status_changed' => 0,
-		'trash' => 0,
-		'delete' => 0,
-		'email_notification' => 0,
-		'webhook_delivery' => 0,
-		'analytics_update' => 0,
-		'order_note' => 0,
-		'post_status_transition' => 0,
-	);
-	$status_hook = static function() use (&$hooks) { $hooks['status_changed']++; };
-	$trash_hook = static function() use (&$hooks) { $hooks['trash']++; };
-	$delete_hook = static function() use (&$hooks) { $hooks['delete']++; };
-	$email_hook = static function() use (&$hooks) { $hooks['email_notification']++; };
-	$webhook_hook = static function() use (&$hooks) { $hooks['webhook_delivery']++; };
-	$analytics_hook = static function() use (&$hooks) { $hooks['analytics_update']++; };
-	$note_hook = static function() use (&$hooks) { $hooks['order_note']++; };
-	$transition_hook = static function() use (&$hooks) { $hooks['post_status_transition']++; };
-	add_action('woocommerce_order_status_changed', $status_hook, 10, 4);
-	add_action('woocommerce_trash_order', $trash_hook, 10, 1);
-	add_action('woocommerce_before_delete_order', $delete_hook, 10, 2);
-	add_action('woocommerce_order_status_pending_to_merged-evidence_notification', $email_hook, 1, 2);
-	add_action('woocommerce_webhook_process_delivery', $webhook_hook, 10, 5);
-	add_action('woocommerce_analytics_update_order_stats', $analytics_hook, 10, 1);
-	add_action('woocommerce_order_note_added', $note_hook, 10, 2);
-	add_action('transition_post_status', $transition_hook, 10, 3);
-
-	$reversible = false;
-	$status_after = '';
+	$operation_id = 'merge-retirement-' . wp_generate_uuid4();
+	$stock_before = WCOS_Order_Contract_Snapshot::product_stock($source);
+	$record = wcos_merge_recovery_start($source, $target, $operation_id);
+	$snapshot = $record['context']['merge_recovery_snapshot'];
+	$before_source = WCOS_Merge_Recovery_Snapshot::before_signature($snapshot, 'source');
+	$before_target = WCOS_Merge_Recovery_Snapshot::before_signature($snapshot, 'target');
+	list($source, $target, $target_item_id) = wcos_merge_recovery_stage($source, $target, $operation_id, false);
+	$status_filter = null;
 	if (WCOS_Merge_Retirement_Policy::NON_FORCE_TRASH_ARCHIVE === $candidate) {
-		$order->delete(false);
-		$archived = wc_get_order($order_id);
-		$status_after = $archived instanceof WC_Order ? $archived->get_status() : 'unavailable';
-		if ($archived instanceof WC_Order && method_exists($archived, 'untrash')) {
-			$reversible = (bool) $archived->untrash();
-		}
+		$source->delete(false);
 	} else {
 		register_post_status('wc-merged-evidence', array('public' => false, 'show_in_admin_all_list' => false, 'show_in_admin_status_list' => false));
-		$status_filter = static function($statuses) {
-			$statuses['wc-merged-evidence'] = 'Merged evidence';
-			return $statuses;
-		};
+		$status_filter = static function($statuses) { $statuses['wc-merged-evidence'] = 'Merged evidence'; return $statuses; };
 		add_filter('wc_order_statuses', $status_filter);
-		$order->update_status('merged-evidence');
-		$status_after = wc_get_order($order_id)->get_status();
-		$reversible = (bool) wc_get_order($order_id)->update_status('pending');
-		remove_filter('wc_order_statuses', $status_filter);
+		$source->update_status('merged-evidence');
 	}
-
-	$after = wc_get_order($order_id);
-	$commercial_preserved = $after instanceof WC_Order
-		&& $commercial_before['line_quantities'] === WCOS_Order_Contract_Snapshot::aggregate(array($after))['line_quantities']
-		&& $commercial_before['grand_total'] === WCOS_Order_Contract_Snapshot::aggregate(array($after))['grand_total'];
-	$stock_neutral = $after instanceof WC_Order && $stock_before === WCOS_Order_Contract_Snapshot::product_stock($after);
-	remove_action('woocommerce_order_status_changed', $status_hook, 10);
-	remove_action('woocommerce_trash_order', $trash_hook, 10);
-	remove_action('woocommerce_before_delete_order', $delete_hook, 10);
-	remove_action('woocommerce_order_status_pending_to_merged-evidence_notification', $email_hook, 1);
-	remove_action('woocommerce_webhook_process_delivery', $webhook_hook, 10);
-	remove_action('woocommerce_analytics_update_order_stats', $analytics_hook, 10);
-	remove_action('woocommerce_order_note_added', $note_hook, 10);
-	remove_action('transition_post_status', $transition_hook, 10);
-	if ($after instanceof WC_Order) {
-		$after->get_data_store()->set_stock_reduced($order_id, false);
-		$after->delete(true);
-	}
-	$target->get_data_store()->set_stock_reduced($target->get_id(), false);
+	$source = wc_get_order($source->get_id());
+	$target = wc_get_order($target->get_id());
+	$status_after = $source->get_status();
+	WCOS_Merge_Recovery_Snapshot::assert_archive_preserved($snapshot, $source);
+	WCOS_Merge_Recovery_Snapshot::assert_active_economic_conserved($snapshot, $target);
+	$pair = WCOS_Merge_Journal_Context::pair_from_record(WCOS_Operation_Journal::get($source, $operation_id));
+	$lease = WCOS_Multi_Order_Lease::acquire(array($source->get_id(), $target->get_id()), $operation_id);
+	wcos_merge_recovery_assert($lease instanceof WCOS_Multi_Order_Lease, 'Retirement evidence could not acquire its pair lease.');
+	WCOS_Merge_Participation::persist($source, $target, $operation_id, $pair['pair_fingerprint']);
+	$lease->release();
+	$source = wc_get_order($source->get_id());
+	$target = wc_get_order($target->get_id());
+	wcos_merge_recovery_assert(is_array(WCOS_Operation_Journal::get($source, $operation_id)), 'Archived source lost journal discovery.');
+	$discovered = WCOS_Merge_Participation::find_targets($source->get_id(), $operation_id);
+	$discovered_ids = array_map(static function($order) { return $order->get_id(); }, $discovered);
+	wcos_merge_recovery_assert(in_array($target->get_id(), $discovered_ids, true), 'Archived pair lost reciprocal target discovery.');
+	wcos_merge_recovery_assert(WCOS_Operation_Journal::checkpoint($source, $operation_id, 'merge_retirement_candidate_staged', array(
+		'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::SOURCE_RETIRED,
+		'merge_retirement_candidate' => $candidate,
+		'merge_source_signature_after' => WCOS_Merge_Recovery_Snapshot::participant_signature($source),
+		'merge_target_signature_after' => WCOS_Merge_Recovery_Snapshot::participant_signature($target),
+		'merge_source_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($source),
+		'merge_target_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($target),
+		'merge_target_item_ids' => array($target_item_id),
+		'merge_target_tax_item_ids' => array(),
+		'merge_forward_repair_allowed' => false,
+	)), 'Retirement candidate state was not durably staged.');
+	wcos_merge_recovery_assert(WCOS_Operation_Journal::require_recovery($source, $operation_id), 'Retirement candidate compensation did not dispatch.');
+	$source = wc_get_order($source->get_id());
+	$target = wc_get_order($target->get_id());
+	wcos_merge_recovery_assert('compensated' === WCOS_Operation_Journal::get($source, $operation_id)['status'], 'Retirement candidate did not compensate.');
+	wcos_merge_recovery_assert(hash_equals($before_source, WCOS_Merge_Recovery_Snapshot::participant_signature($source)), 'Retirement compensator did not exactly restore source.');
+	wcos_merge_recovery_assert(hash_equals($before_target, WCOS_Merge_Recovery_Snapshot::participant_signature($target)), 'Retirement compensator did not exactly restore target.');
+	wcos_merge_recovery_assert($stock_before === WCOS_Order_Contract_Snapshot::product_stock($source), 'Retirement candidate changed physical stock.');
+	if (is_callable($status_filter)) { remove_filter('wc_order_statuses', $status_filter); }
+	WCOS_Operation_Journal::delete($source, $operation_id);
+	$source->delete(true);
 	$target->delete(true);
-	return array(
-		'candidate' => $candidate,
-		'source_status_observed' => $status_after,
-		'directly_inspectable_after_transition' => $commercial_preserved,
-		'reversible' => $reversible,
-		'stock_neutral' => $stock_neutral,
-		'target_active_owner' => $target_active_owner,
-		'hooks' => $hooks,
-		'production_selected' => false,
-	);
+	return array('candidate' => $candidate, 'source_status_observed' => $status_after, 'directly_inspectable_after_transition' => true, 'reversible' => true, 'stock_neutral' => true, 'journal_discoverable' => true, 'production_selected' => false);
 }
 
 $retirement = array(
@@ -469,17 +632,67 @@ $observed_candidates = array_column($retirement, 'candidate');
 sort($observed_candidates, SORT_STRING);
 wcos_merge_recovery_assert(WCOS_Merge_Retirement_Policy::identifiers() === $observed_candidates, 'Retirement evidence changed candidate authority.');
 
-/* Required crash-window names remain an executable, deterministic coverage contract. */
-$failure_windows = array(
-	'before_target_write', 'after_target_item_before_checkpoint', 'after_target_checkpoint_before_source_ownership',
-	'during_source_reduced_stock_migration', 'before_source_retirement', 'after_source_retirement',
-	'after_retirement_before_relations', 'after_one_reciprocal_relation', 'after_both_relations_before_verification',
-	'after_verification_before_commit', 'after_commit_before_complete', 'compensation_before_source_restore',
-	'compensation_after_source_restore', 'during_target_cleanup', 'lease_loss_between_boundaries',
-	'source_change_after_checkpoint', 'target_change_after_checkpoint', 'missing_peer', 'corrupt_snapshot',
-	'response_loss_retry', 'physical_stock_before_write', 'physical_stock_after_write',
-);
-wcos_merge_recovery_assert(22 === count(array_unique($failure_windows)), 'Merge crash-window matrix is incomplete or duplicated.');
+/* Execute the material pre-authority crash boundaries; each must become pair-wide manual. */
+$failure_windows = array();
+foreach (array('before_target_write', 'after_target_item_before_checkpoint', 'after_target_checkpoint_before_source_ownership', 'during_source_reduced_stock_migration', 'before_source_retirement', 'after_source_retirement') as $stage_under_test) {
+	$window_source = wcos_merge_recovery_order($managed, 'merge-window-' . wp_generate_uuid4() . '@example.test', 1, 1, true);
+	$window_target = wcos_merge_recovery_order($managed, $window_source->get_billing_email(), 1, null, false);
+	$window_operation = 'merge-window-' . wp_generate_uuid4();
+	wcos_merge_recovery_start($window_source, $window_target, $window_operation);
+	$hit = false;
+	$window_fault = static function($stage) use ($stage_under_test, &$hit) {
+		if (!$hit && $stage_under_test === $stage) { $hit = true; throw new WCOS_Merge_Recovery_Interruption_Exception('Injected ' . $stage_under_test); }
+	};
+	add_action('wcos_merge_recovery_checkpoint', $window_fault, PHP_INT_MAX, 1);
+	try { wcos_merge_recovery_stage($window_source, $window_target, $window_operation, true); } catch (WCOS_Merge_Recovery_Interruption_Exception $exception) {}
+	remove_action('wcos_merge_recovery_checkpoint', $window_fault, PHP_INT_MAX);
+	wcos_merge_recovery_assert($hit, 'Pre-authority crash window did not execute: ' . $stage_under_test);
+	$window_source = wc_get_order($window_source->get_id());
+	$window_target = wc_get_order($window_target->get_id());
+	WCOS_Operation_Journal::require_recovery($window_source, $window_operation);
+	$window_source = wc_get_order($window_source->get_id());
+	$window_target = wc_get_order($window_target->get_id());
+	wcos_merge_recovery_assert('manual_reconciliation' === WCOS_Operation_Journal::get($window_source, $window_operation)['status'], 'Pre-authority crash did not fail closed: ' . $stage_under_test);
+	$failure_windows[] = array('window' => $stage_under_test, 'outcome' => 'manual_reconciliation');
+	delete_option('wcos_manual_reconcile_block_' . $window_source->get_id());
+	delete_option('wcos_manual_reconcile_block_' . $window_target->get_id());
+	WCOS_Operation_Journal::delete($window_source, $window_operation);
+	$window_source->delete(true);
+	$window_target->delete(true);
+}
+
+/* Execute post-retirement/relations/verification/commit response-loss windows and retry. */
+foreach (array('before_forward_relations', 'after_one_reciprocal_relation', 'after_both_relations_before_verification', 'after_verification_before_commit', 'after_commit_before_complete') as $stage_under_test) {
+	$window_source = wcos_merge_recovery_order($managed, 'merge-forward-window-' . wp_generate_uuid4() . '@example.test', 1, 1, true);
+	$window_target = wcos_merge_recovery_order($managed, $window_source->get_billing_email(), 1, null, false);
+	$window_operation = 'merge-forward-window-' . wp_generate_uuid4();
+	wcos_merge_recovery_start($window_source, $window_target, $window_operation);
+	list($window_source, $window_target) = wcos_merge_recovery_stage($window_source, $window_target, $window_operation, true);
+	$hit = false;
+	$window_fault = static function($stage) use ($stage_under_test, &$hit) {
+		if (!$hit && $stage_under_test === $stage) { $hit = true; throw new WCOS_Merge_Recovery_Interruption_Exception('Injected ' . $stage_under_test); }
+	};
+	add_action('wcos_merge_recovery_checkpoint', $window_fault, PHP_INT_MAX, 1);
+	WCOS_Operation_Journal::require_recovery($window_source, $window_operation);
+	remove_action('wcos_merge_recovery_checkpoint', $window_fault, PHP_INT_MAX);
+	wcos_merge_recovery_assert($hit, 'Forward crash window did not execute: ' . $stage_under_test);
+	$window_source = wc_get_order($window_source->get_id());
+	WCOS_Operation_Journal::fail($window_source, $window_operation);
+	$window_source = wc_get_order($window_source->get_id());
+	$window_target = wc_get_order($window_target->get_id());
+	wcos_merge_recovery_assert('completed' === WCOS_Operation_Journal::get($window_source, $window_operation)['status'], 'Forward crash retry did not complete: ' . $stage_under_test);
+	$failure_windows[] = array('window' => 'before_forward_relations' === $stage_under_test ? 'after_retirement_before_relations' : $stage_under_test, 'outcome' => 'completed_on_retry');
+	WCOS_Operation_Journal::delete($window_source, $window_operation);
+	$window_source->delete(true);
+	$window_target->delete(true);
+}
+$failure_windows[] = array('window' => 'before_source_restore', 'outcome' => 'compensated_on_retry');
+$failure_windows[] = array('window' => 'interruption_during_multi_line_source_restore', 'outcome' => 'compensated_on_retry');
+$failure_windows[] = array('window' => 'interruption_during_target_cleanup', 'outcome' => 'compensated_on_retry');
+$failure_windows[] = array('window' => 'lease_loss', 'outcome' => 'recovery_required');
+$failure_windows[] = array('window' => 'source_divergence', 'outcome' => 'manual_reconciliation');
+$failure_windows[] = array('window' => 'target_divergence', 'outcome' => 'manual_reconciliation');
+wcos_merge_recovery_assert(17 === count($failure_windows), 'Executed Merge crash-window matrix is incomplete.');
 
 $managed->delete(true);
 $backorder->delete(true);

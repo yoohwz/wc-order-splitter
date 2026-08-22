@@ -33,13 +33,19 @@ final class WCOS_Merge_Compensator {
 		$target_before = WCOS_Merge_Recovery_Snapshot::before_signature($snapshot, 'target');
 		$source_after = self::fingerprint(isset($context['merge_source_signature_after']) ? $context['merge_source_signature_after'] : '');
 		$target_after = self::fingerprint(isset($context['merge_target_signature_after']) ? $context['merge_target_signature_after'] : '');
+		$source_after_state = isset($context['merge_source_state_after']) && is_array($context['merge_source_state_after']) ? $context['merge_source_state_after'] : array();
+		$target_after_state = isset($context['merge_target_state_after']) && is_array($context['merge_target_state_after']) ? $context['merge_target_state_after'] : array();
 		$target_item_ids = self::ids(isset($context['merge_target_item_ids']) ? (array) $context['merge_target_item_ids'] : array());
 		$target_tax_item_ids = self::ids(isset($context['merge_target_tax_item_ids']) ? (array) $context['merge_target_tax_item_ids'] : array());
+		$retirement_candidate = sanitize_key(isset($context['merge_retirement_candidate']) ? (string) $context['merge_retirement_candidate'] : '');
+		if ('' !== $retirement_candidate) {
+			WCOS_Merge_Retirement_Policy::assert_candidate($retirement_candidate);
+		}
 
 		try {
 			$current_source = WCOS_Merge_Recovery_Snapshot::participant_signature($source);
 			$current_target = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
-			if (!empty($context['merge_forward_repair_allowed'])
+			$forward_state = !empty($context['merge_forward_repair_allowed'])
 				&& in_array($recovery_state, array(
 					WCOS_Merge_Recovery_State_Graph::SOURCE_RETIRED,
 					WCOS_Merge_Recovery_State_Graph::SOURCE_RELATION,
@@ -47,21 +53,33 @@ final class WCOS_Merge_Compensator {
 					WCOS_Merge_Recovery_State_Graph::VERIFIED,
 					WCOS_Merge_Recovery_State_Graph::COMMITTED,
 				), true)
-				&& '' !== $source_after && '' !== $target_after
-				&& hash_equals($source_after, $current_source)
-				&& hash_equals($target_after, $current_target)) {
-				return self::forward($source, $target, $record, $lease, $source_after, $target_after);
+				&& '' !== $source_after && '' !== $target_after;
+			if ($forward_state) {
+				$forward_valid = false;
+				try {
+					WCOS_Merge_Recovery_Snapshot::assert_forward_checkpoint($source_after_state, $source);
+					WCOS_Merge_Recovery_Snapshot::assert_forward_checkpoint($target_after_state, $target);
+					$forward_valid = true;
+				} catch (Throwable $throwable) {
+					/* Fall through to compensation/manual validation. */
+				}
+				if ($forward_valid) {
+					return self::forward($source, $target, $record, $lease, $current_source, $current_target);
+				}
 			}
 
-			$source_known = hash_equals($source_before, $current_source)
-				|| ('' !== $source_after && hash_equals($source_after, $current_source));
-			$target_known = hash_equals($target_before, $current_target)
-				|| ('' !== $target_after && hash_equals($target_after, $current_target));
-			if (!$source_known || !$target_known) {
+			if (empty($source_after_state) || empty($target_after_state)) {
+				throw new RuntimeException(__('Merge recovery is missing durable component checkpoints.', 'wc-order-splitter'));
+			}
+			try {
+				WCOS_Merge_Recovery_Snapshot::assert_resumable_participant($snapshot['source'], $source_after_state, $source, array(), array());
+				WCOS_Merge_Recovery_Snapshot::assert_resumable_participant($snapshot['target'], $target_after_state, $target, $target_item_ids, $target_tax_item_ids);
+			} catch (Throwable $throwable) {
 				throw new RuntimeException(__('A Merge participant diverged from every approved recovery checkpoint.', 'wc-order-splitter'));
 			}
 
 			if ('compensating' !== sanitize_key(isset($record['status']) ? (string) $record['status'] : '')) {
+				self::lease_guard($lease);
 				if (!WCOS_Operation_Journal::mark_compensating($source, $operation_id, array(
 					'merge_compensation' => true,
 					'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::COMPENSATING,
@@ -73,9 +91,11 @@ final class WCOS_Merge_Compensator {
 			/* Restore stock/commercial ownership to source before target cleanup. */
 			if (!hash_equals($source_before, $current_source)) {
 				self::boundary($lease, $source, $target, $record, $current_source, $current_target, 'any', 'before_source_restore');
-				$source = WCOS_Merge_Recovery_Snapshot::restore_participant($snapshot, 'source', $current_source);
+				list($write_boundary, $sub_checkpoint) = self::resumable_callbacks($lease, $source, $target, $record, $snapshot, $source_after_state, $target_after_state, $target_item_ids, $target_tax_item_ids);
+				$source = WCOS_Merge_Recovery_Snapshot::restore_participant($snapshot, 'source', $source_after_state, array(), array(), $write_boundary, $sub_checkpoint, $retirement_candidate);
 				self::event('after_source_restore', $source, $target, $operation_id);
 			}
+			self::lease_guard($lease);
 			if (!WCOS_Operation_Journal::checkpoint($source, $operation_id, 'merge_compensation_source_restored', array(
 				'merge_source_compensated_signature' => $source_before,
 				'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::SOURCE_RESTORED,
@@ -89,15 +109,19 @@ final class WCOS_Merge_Compensator {
 			$current_target = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
 			if (!hash_equals($target_before, $current_target)) {
 				self::boundary($lease, $source, $target, $record, $source_before, $current_target, 'any', 'before_target_cleanup');
+				list($write_boundary, $sub_checkpoint) = self::resumable_callbacks($lease, $source, $target, $record, $snapshot, $source_after_state, $target_after_state, $target_item_ids, $target_tax_item_ids);
 				$target = WCOS_Merge_Recovery_Snapshot::restore_participant(
 					$snapshot,
 					'target',
-					$current_target,
+					$target_after_state,
 					$target_item_ids,
-					$target_tax_item_ids
+					$target_tax_item_ids,
+					$write_boundary,
+					$sub_checkpoint
 				);
 				self::event('after_target_cleanup', $source, $target, $operation_id);
 			}
+			self::lease_guard($lease);
 			if (!WCOS_Operation_Journal::checkpoint($source, $operation_id, 'merge_compensation_target_restored', array(
 				'merge_target_compensated_signature' => $target_before,
 				'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::TARGET_RESTORED,
@@ -111,6 +135,7 @@ final class WCOS_Merge_Compensator {
 			if (!WCOS_Merge_Participation::cleanup($source, $target, $operation_id)) {
 				throw new RuntimeException(__('Operation-owned Merge participation could not be cleaned up.', 'wc-order-splitter'));
 			}
+			self::lease_guard($lease);
 			if (!WCOS_Operation_Journal::mark_compensated($source, $operation_id, array(
 				'merge_compensated' => true,
 				'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::COMPENSATED,
@@ -138,15 +163,33 @@ final class WCOS_Merge_Compensator {
 			$reason = 'merge_recovery_ambiguous';
 		}
 		if (is_array($pair) && $target instanceof WC_Order) {
-			try {
-				WCOS_Merge_Participation::persist($source, $target, $operation_id, $pair['pair_fingerprint']);
-			} catch (Throwable $throwable) {
-				/* Pair blockers below remain the primary fail-closed authority. */
+			for ($attempt = 1; $attempt <= 2; $attempt++) {
+				try {
+					self::event('before_manual_participation_attempt_' . $attempt, $source, $target, $operation_id);
+					WCOS_Merge_Participation::persist($source, $target, $operation_id, $pair['pair_fingerprint']);
+					break;
+				} catch (Throwable $throwable) {
+					/* A bounded retry closes response-loss and one-shot persistence windows. */
+				}
 			}
-			$blocked = WCOS_Manual_Reconciliation_Blocker::block_pair($source, $target, $operation_id, $pair['pair_fingerprint']);
-			if (!$blocked
-				&& !WCOS_Manual_Reconciliation_Blocker::has_active($source)
-				&& !WCOS_Manual_Reconciliation_Blocker::has_active($target)) {
+			foreach (array('source' => $source, 'target' => $target) as $role => $participant) {
+				try {
+					self::event('before_manual_' . $role . '_blocker', $source, $target, $operation_id);
+					WCOS_Manual_Reconciliation_Blocker::block_participant(
+						$participant,
+						$source,
+						$operation_id,
+						$role,
+						'source' === $role ? $target->get_id() : $source->get_id(),
+						$pair['pair_fingerprint']
+					);
+				} catch (Throwable $throwable) {
+					/* Verified participation may remain this participant's local authority. */
+				}
+			}
+			$source_active = in_array($operation_id, WCOS_Manual_Reconciliation_Blocker::active_operation_ids($source), true);
+			$target_active = in_array($operation_id, WCOS_Manual_Reconciliation_Blocker::active_operation_ids($target), true);
+			if (!$source_active || !$target_active) {
 				throw new RuntimeException(__('Pair-wide Merge reconciliation authority could not be persisted.', 'wc-order-splitter'));
 			}
 		} else {
@@ -167,11 +210,14 @@ final class WCOS_Merge_Compensator {
 	private static function forward(WC_Order $source, WC_Order $target, array $record, WCOS_Multi_Order_Lease $lease, $source_after, $target_after) {
 		$operation_id = sanitize_key((string) $record['operation_id']);
 		$pair = WCOS_Merge_Journal_Context::pair_from_record($record);
+		$recovery_state = WCOS_Merge_Recovery_State_Graph::assert_record($record);
 		self::boundary($lease, $source, $target, $record, $source_after, $target_after, 'any', 'before_forward_relations');
 		WCOS_Merge_Participation::persist($source, $target, $operation_id, $pair['pair_fingerprint']);
 		$source = wc_get_order($source->get_id());
 		$target = wc_get_order($target->get_id());
-		if (!WCOS_Operation_Journal::checkpoint($source, $operation_id, 'merge_relations_completed', array(
+		self::lease_guard($lease);
+		if (!in_array($recovery_state, array(WCOS_Merge_Recovery_State_Graph::VERIFIED, WCOS_Merge_Recovery_State_Graph::COMMITTED), true)
+			&& !WCOS_Operation_Journal::checkpoint($source, $operation_id, 'merge_relations_completed', array(
 			'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::RELATIONS_COMPLETE,
 		))) {
 			throw new RuntimeException(__('Forward-repaired Merge relations could not be checkpointed.', 'wc-order-splitter'));
@@ -186,14 +232,29 @@ final class WCOS_Merge_Compensator {
 			'complete',
 			'after_forward_relations'
 		);
-		if (!WCOS_Operation_Journal::checkpoint($source, $operation_id, 'merge_commercial_verified', array(
+		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
+		$snapshot = isset($context['merge_recovery_snapshot']) && is_array($context['merge_recovery_snapshot']) ? $context['merge_recovery_snapshot'] : array();
+		WCOS_Merge_Recovery_Snapshot::assert_archive_preserved($snapshot, $source);
+		WCOS_Merge_Recovery_Snapshot::assert_active_economic_conserved($snapshot, $target);
+		if (!in_array($recovery_state, array(WCOS_Merge_Recovery_State_Graph::VERIFIED, WCOS_Merge_Recovery_State_Graph::COMMITTED), true)
+			&& !WCOS_Operation_Journal::checkpoint($source, $operation_id, 'merge_commercial_verified', array(
 			'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::VERIFIED,
-		))
-			|| !WCOS_Operation_Journal::mark_committed($source, $operation_id, array(
+		))) {
+			throw new RuntimeException(__('Forward-repaired Merge state could not be verified.', 'wc-order-splitter'));
+		}
+		if (WCOS_Merge_Recovery_State_Graph::COMMITTED !== $recovery_state) {
+			self::event('after_verification_before_commit', $source, $target, $operation_id);
+			self::lease_guard($lease);
+		}
+		if (WCOS_Merge_Recovery_State_Graph::COMMITTED !== $recovery_state && !WCOS_Operation_Journal::mark_committed($source, $operation_id, array(
 				'merge_forward_repaired' => true,
 				'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::COMMITTED,
-			))
-			|| !WCOS_Operation_Journal::complete($source, $operation_id, array(
+			))) {
+			throw new RuntimeException(__('Forward-repaired Merge state could not be committed.', 'wc-order-splitter'));
+		}
+		self::event('after_commit_before_complete', $source, $target, $operation_id);
+		self::lease_guard($lease);
+		if (!WCOS_Operation_Journal::complete($source, $operation_id, array(
 				'merge_verified' => true,
 				'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::COMPLETED,
 			))) {
@@ -207,7 +268,41 @@ final class WCOS_Merge_Compensator {
 		WCOS_Merge_Commit_Guard::assert_boundary($lease, $source, $target, $record, $source_signature, $target_signature, $relation);
 	}
 
-	private static function event($stage, WC_Order $source, WC_Order $target, $operation_id) {
+	private static function lease_guard(WCOS_Multi_Order_Lease $lease) {
+		if (!$lease->refresh()) {
+			throw new RuntimeException(__('A participant lease expired before a durable Merge recovery write.', 'wc-order-splitter'));
+		}
+		WCOS_Stock_Side_Effect_Guard::assert_current_clean();
+	}
+
+	private static function resumable_callbacks(WCOS_Multi_Order_Lease $lease, WC_Order $source, WC_Order $target, array $record, array $snapshot, array $source_after, array $target_after, array $target_item_ids, array $target_tax_item_ids) {
+		$operation_id = sanitize_key((string) $record['operation_id']);
+		$guard = static function($stage, $component_id = 0) use ($lease, $source, $target, $operation_id, $snapshot, $source_after, $target_after, $target_item_ids, $target_tax_item_ids) {
+			WCOS_Merge_Compensator::event($stage, $source, $target, $operation_id);
+			if (!$lease->refresh()) {
+				throw new RuntimeException(__('A participant lease expired during resumable Merge recovery.', 'wc-order-splitter'));
+			}
+			WCOS_Stock_Side_Effect_Guard::assert_current_clean();
+			$fresh_source = wc_get_order($snapshot['source_order_id']);
+			$fresh_target = wc_get_order($snapshot['target_order_id']);
+			if (!$fresh_source instanceof WC_Order || !$fresh_target instanceof WC_Order) {
+				throw new RuntimeException(__('A Merge recovery participant disappeared during a durable write.', 'wc-order-splitter'));
+			}
+			WCOS_Merge_Recovery_Snapshot::assert_resumable_participant($snapshot['source'], $source_after, $fresh_source, array(), array());
+			WCOS_Merge_Recovery_Snapshot::assert_resumable_participant($snapshot['target'], $target_after, $fresh_target, $target_item_ids, $target_tax_item_ids);
+		};
+		$checkpoint = static function($stage, $component_id = 0) use ($guard, $source, $operation_id) {
+			$guard('before_' . $stage . '_checkpoint', $component_id);
+			if (!WCOS_Operation_Journal::checkpoint($source, $operation_id, 'merge_recovery_component_checkpoint', array(
+				'merge_recovery_component' => array('stage' => sanitize_key($stage), 'component_id' => absint($component_id)),
+			))) {
+				throw new RuntimeException(__('A resumable Merge component checkpoint could not be persisted.', 'wc-order-splitter'));
+			}
+		};
+		return array($guard, $checkpoint);
+	}
+
+	public static function event($stage, WC_Order $source, WC_Order $target, $operation_id) {
 		do_action('wcos_merge_recovery_checkpoint', sanitize_key((string) $stage), $source, $target, $operation_id);
 	}
 

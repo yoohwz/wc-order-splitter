@@ -45,11 +45,13 @@ final class WCOS_Merge_Participation {
 		self::set_exact_scalar($fresh_source, self::SOURCE_OPERATION_META, $operation_id);
 		self::set_exact_scalar($fresh_source, self::SOURCE_PAIR_FINGERPRINT_META, $pair_fingerprint);
 		$fresh_source->save_meta_data();
+		do_action('wcos_merge_recovery_checkpoint', 'after_one_reciprocal_relation', $fresh_source, $fresh_target, $operation_id);
 
 		self::add_exact_repeatable($fresh_target, self::TARGET_SOURCE_META, $source_id);
 		self::add_exact_repeatable($fresh_target, self::TARGET_OPERATION_META, $operation_id);
 		self::add_exact_repeatable($fresh_target, self::TARGET_AUTHORITY_META, self::authority_pointer($source_id, $operation_id, $pair_fingerprint));
 		$fresh_target->save_meta_data();
+		do_action('wcos_merge_recovery_checkpoint', 'after_both_relations_before_verification', $fresh_source, $fresh_target, $operation_id);
 
 		$source_after = wc_get_order($source_id);
 		$target_after = wc_get_order($target_id);
