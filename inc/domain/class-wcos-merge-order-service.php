@@ -345,7 +345,10 @@ final class WCOS_Merge_Order_Service {
 			|| (string) $authority['subtotal_tax'] !== (string) $item->get_subtotal_tax()
 			|| (string) $authority['total'] !== (string) $item->get_total()
 			|| (string) $authority['total_tax'] !== (string) $item->get_total_tax()
-			|| $authority['taxes'] !== $item->get_taxes()) {
+			|| !hash_equals(
+				WCOS_Mutation_Fingerprint::create('merge_plan_line_taxes', $item->get_id(), $authority['taxes']),
+				WCOS_Mutation_Fingerprint::create('merge_plan_line_taxes', $item->get_id(), $item->get_taxes())
+			)) {
 			throw new RuntimeException(__('A Merge source line changed after its server-owned plan was bound.', 'wc-order-splitter'));
 		}
 		if ($check_reduced_stock) {
