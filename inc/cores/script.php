@@ -50,6 +50,8 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-merge-context-signature.php';
 		include_once $root . 'domain/class-wcos-merge-journal-context.php';
 		include_once $root . 'domain/class-wcos-merge-participation.php';
+		include_once $root . 'domain/class-wcos-merge-recovery-snapshot.php';
+		include_once $root . 'domain/class-wcos-merge-recovery-state-graph.php';
 		include_once $root . 'domain/class-wcos-operation-journal.php';
 		include_once $root . 'domain/class-wcos-manual-reconciliation-blocker.php';
 		include_once $root . 'domain/class-wcos-operation-journal-retention.php';
@@ -58,9 +60,11 @@ class WC_Order_Splitter_Script {
 		WCOS_Order_Relation_Repository::bootstrap();
 		include_once $root . 'domain/class-wcos-mutation-commit-guard.php';
 		WCOS_Mutation_Commit_Guard::bootstrap();
+		include_once $root . 'domain/class-wcos-merge-commit-guard.php';
 		include_once $root . 'domain/class-wcos-duplicate-order-service.php';
 		include_once $root . 'domain/class-wcos-split-order-service.php';
 		include_once $root . 'domain/class-wcos-split-compensator.php';
+		include_once $root . 'domain/class-wcos-merge-compensator.php';
 		include_once $root . 'domain/class-wcos-mutation-recovery-coordinator.php';
 		WCOS_Mutation_Recovery_Coordinator::bootstrap();
 		include_once $root . 'domain/class-wcos-split-preflight.php';

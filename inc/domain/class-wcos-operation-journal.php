@@ -37,6 +37,27 @@ final class WCOS_Operation_Journal {
         if ('split' === $type && class_exists('WCOS_Split_Preflight')) {
             $context['policy_version'] = (int) WCOS_Split_Preflight::POLICY_VERSION;
         }
+        if ('merge' === $type && class_exists('WCOS_Merge_Recovery_Snapshot')) {
+            $provisional_record = array(
+                'source_order_id' => $order->get_id(),
+                'operation_id' => $operation_id,
+                'type' => $type,
+                'fingerprint' => $fingerprint,
+                'context' => $context,
+            );
+            $pair = WCOS_Merge_Journal_Context::pair_from_record($provisional_record);
+            $target = is_array($pair) ? wc_get_order($pair['target_order_id']) : null;
+            if (!is_array($pair) || !$target instanceof WC_Order || 'shop_order' !== $target->get_type()) {
+                return false;
+            }
+            try {
+                $snapshot = WCOS_Merge_Recovery_Snapshot::capture($order, $target, $provisional_record);
+            } catch (Throwable $throwable) {
+                return false;
+            }
+            $context['merge_recovery_snapshot'] = $snapshot;
+            $context['merge_recovery_snapshot_fingerprint'] = $snapshot['recovery_fingerprint'];
+        }
 
         $now = gmdate('c');
         $record = array(
@@ -370,6 +391,10 @@ final class WCOS_Operation_Journal {
     }
 
     private static function append_checkpoint(array $record, $stage, array $context) {
+        if ('merge' === sanitize_key(isset($record['type']) ? (string) $record['type'] : '')
+            && class_exists('WCOS_Merge_Recovery_State_Graph')) {
+            $context = WCOS_Merge_Recovery_State_Graph::seal_context($record, $context);
+        }
         $now = gmdate('c');
         $record['stage'] = sanitize_key($stage);
         $record['updated_at'] = $now;
@@ -440,7 +465,10 @@ final class WCOS_Operation_Journal {
             }
         }
 
-        foreach (array('execution_policy', 'fully_moved_item_ids', 'strategy_authority') as $field) {
+        foreach (array(
+            'execution_policy', 'fully_moved_item_ids', 'strategy_authority', 'merge_pair',
+            'merge_recovery_snapshot', 'merge_recovery_snapshot_fingerprint',
+        ) as $field) {
             if (array_key_exists($field, $current_context)) {
                 if (!array_key_exists($field, $replacement_context)
                     || $current_context[$field] !== $replacement_context[$field]) {

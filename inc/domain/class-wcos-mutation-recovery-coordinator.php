@@ -21,7 +21,12 @@ final class WCOS_Mutation_Recovery_Coordinator {
 		if (isset(self::$active[$key])) {
 			return;
 		}
-		if (!isset($record['type']) || 'split' !== sanitize_key($record['type'])) {
+		$type = isset($record['type']) ? sanitize_key($record['type']) : '';
+		if (!in_array($type, array('split', 'merge'), true)) {
+			return;
+		}
+		if ('merge' === $type) {
+			self::handle_merge($source, $operation_id, $record, $key);
 			return;
 		}
 
@@ -68,6 +73,68 @@ final class WCOS_Mutation_Recovery_Coordinator {
 		} finally {
 			if ($acquired_here && false !== $lease_token) {
 				WCOS_Operation_Lock::release($source_id, $lease_token);
+			}
+			unset(self::$active[$key]);
+		}
+	}
+
+	private static function handle_merge(WC_Order $source, $operation_id, array $record, $key) {
+		self::$active[$key] = true;
+		$lease = false;
+		$target = null;
+		$stock_guard = false;
+		try {
+			$fresh_source = wc_get_order($source->get_id());
+			$fresh_record = $fresh_source instanceof WC_Order
+				? WCOS_Operation_Journal::get($fresh_source, $operation_id)
+				: null;
+			if (!$fresh_source instanceof WC_Order || !is_array($fresh_record)) {
+				throw new RuntimeException(__('The authoritative Merge recovery journal is unavailable.', 'wc-order-splitter'));
+			}
+			WCOS_Operation_Journal::assert_fingerprint($fresh_record, isset($record['fingerprint']) ? $record['fingerprint'] : '');
+			$pair = WCOS_Merge_Journal_Context::pair_from_record($fresh_record);
+			if (!is_array($pair)) {
+				WCOS_Merge_Compensator::manual_reconciliation($fresh_source, null, $fresh_record, 'corrupt_pair_authority');
+				return;
+			}
+			$target = wc_get_order($pair['target_order_id']);
+			if (!$target instanceof WC_Order || 'shop_order' !== $target->get_type()) {
+				WCOS_Merge_Compensator::manual_reconciliation($fresh_source, null, $fresh_record, 'missing_merge_peer');
+				return;
+			}
+
+			$lease = WCOS_Multi_Order_Lease::acquire(
+				array($pair['source_order_id'], $pair['target_order_id']),
+				$operation_id
+			);
+			if (!$lease instanceof WCOS_Multi_Order_Lease) {
+				throw new RuntimeException(__('Merge recovery could not acquire both participant leases.', 'wc-order-splitter'));
+			}
+			$lease->assert_owned();
+			$stock_guard = WCOS_Stock_Side_Effect_Guard::begin($operation_id);
+			WCOS_Merge_Compensator::recover($fresh_source, $target, $fresh_record, $lease);
+		} catch (Throwable $throwable) {
+			$before_write_rejection = $throwable instanceof WCOS_Unexpected_Stock_Mutation_Exception
+				&& !WCOS_Stock_Side_Effect_Guard::events_require_manual_reconciliation($throwable->get_events());
+			if (!$throwable instanceof WCOS_Merge_Recovery_Interruption_Exception && !$before_write_rejection
+				&& $lease instanceof WCOS_Multi_Order_Lease
+				&& isset($fresh_source, $fresh_record)
+				&& $fresh_source instanceof WC_Order && is_array($fresh_record)) {
+				WCOS_Merge_Compensator::manual_reconciliation(
+					$fresh_source,
+					$target,
+					$fresh_record,
+					'merge_recovery_validation_failed'
+				);
+			}
+			/* Lock contention before pair ownership remains safely retryable. */
+			do_action('wcos_mutation_compensation_error', $throwable, $source, $operation_id, $record);
+		} finally {
+			if (false !== $stock_guard) {
+				WCOS_Stock_Side_Effect_Guard::end($stock_guard);
+			}
+			if ($lease instanceof WCOS_Multi_Order_Lease) {
+				$lease->release();
 			}
 			unset(self::$active[$key]);
 		}

@@ -293,6 +293,24 @@ final class WCOS_Merge_Participation {
 		}));
 	}
 
+	/**
+	 * Exact reciprocal relation state for one authoritative pair.
+	 *
+	 * Values are booleans so recovery never treats unrelated target authorities
+	 * as belonging to the operation being repaired.
+	 */
+	public static function state_for_pair(WC_Order $source, WC_Order $target, $operation_id, $pair_fingerprint) {
+		$operation_id = sanitize_key((string) $operation_id);
+		$pair_fingerprint = self::normalized_fingerprint($pair_fingerprint);
+		if ('' === $operation_id || '' === $pair_fingerprint) {
+			return array('source' => false, 'target' => false);
+		}
+		return array(
+			'source' => self::source_values_match($source, $target->get_id(), $operation_id, $pair_fingerprint),
+			'target' => self::target_values_contain($target, $source->get_id(), $operation_id, $pair_fingerprint),
+		);
+	}
+
 	private static function set_exact_scalar(WC_Order $order, $key, $value) {
 		$current = self::meta_values($order, $key);
 		if (count($current) > 1 || (!empty($current) && (string) reset($current) !== (string) $value)) {
