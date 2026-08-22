@@ -12,7 +12,7 @@ defined('ABSPATH') || exit;
  */
 final class WCOS_Merge_Recovery_Snapshot {
 
-	const SCHEMA_VERSION = 3;
+	const SCHEMA_VERSION = 4;
 
 	public static function capture(WC_Order $source, WC_Order $target, array $record) {
 		$pair = WCOS_Merge_Journal_Context::pair_from_record($record);
@@ -35,7 +35,8 @@ final class WCOS_Merge_Recovery_Snapshot {
 			'preflight_policy_version' => $pair['preflight_policy_version'],
 			'retirement_policy_schema_version' => $pair['retirement_policy_schema_version'],
 			'retirement_candidates' => $pair['retirement_candidates'],
-			'retirement_policy_selected' => false,
+			'retirement_policy_selected' => (bool) $pair['retirement_policy_selected'],
+			'retirement_policy_identifier' => (string) $pair['retirement_policy_identifier'],
 			'source' => self::participant_state($source),
 			'target' => self::participant_state($target),
 			'source_immutable_context' => self::immutable_guard($source),
@@ -53,7 +54,7 @@ final class WCOS_Merge_Recovery_Snapshot {
 		$expected_keys = array(
 			'active_economic_contract_before', 'active_ownership_before_signature', 'archive_source_contract_before', 'archive_source_signature_before', 'pair_fingerprint',
 			'preflight_policy_version', 'price_precision', 'recovery_fingerprint', 'retirement_candidates',
-			'retirement_policy_schema_version', 'retirement_policy_selected', 'schema_version', 'source',
+			'retirement_policy_identifier', 'retirement_policy_schema_version', 'retirement_policy_selected', 'schema_version', 'source',
 			'source_immutable_context', 'source_order_id', 'target', 'target_immutable_context', 'target_order_id',
 		);
 		$actual_keys = array_keys($snapshot);
@@ -62,7 +63,9 @@ final class WCOS_Merge_Recovery_Snapshot {
 		if ($actual_keys !== $expected_keys
 			|| self::SCHEMA_VERSION !== (int) $snapshot['schema_version']
 			|| !is_array($snapshot['source']) || !is_array($snapshot['target'])
-			|| false !== (bool) $snapshot['retirement_policy_selected']) {
+			|| !in_array($snapshot['retirement_policy_selected'], array(true, false), true)
+			|| ((bool) $snapshot['retirement_policy_selected'] && WCOS_Merge_Retirement_Policy::approved_identifier() !== sanitize_key((string) $snapshot['retirement_policy_identifier']))
+			|| (!(bool) $snapshot['retirement_policy_selected'] && '' !== (string) $snapshot['retirement_policy_identifier'])) {
 			throw new RuntimeException(__('The Merge recovery snapshot has an invalid schema.', 'wc-order-splitter'));
 		}
 
@@ -90,6 +93,8 @@ final class WCOS_Merge_Recovery_Snapshot {
 				|| (int) $snapshot['preflight_policy_version'] !== $pair['preflight_policy_version']
 				|| (int) $snapshot['retirement_policy_schema_version'] !== $pair['retirement_policy_schema_version']
 				|| array_values($snapshot['retirement_candidates']) !== $pair['retirement_candidates']
+				|| (bool) $snapshot['retirement_policy_selected'] !== (bool) $pair['retirement_policy_selected']
+				|| (string) $snapshot['retirement_policy_identifier'] !== (string) $pair['retirement_policy_identifier']
 				|| !hash_equals((string) $snapshot['archive_source_signature_before'], $pair['archive_source_signature_before'])
 				|| !hash_equals((string) $snapshot['active_ownership_before_signature'], $pair['active_ownership_before_signature'])) {
 				throw new RuntimeException(__('The Merge recovery snapshot no longer matches pair authority.', 'wc-order-splitter'));
@@ -102,7 +107,7 @@ final class WCOS_Merge_Recovery_Snapshot {
 		$copy = $snapshot;
 		unset($copy['recovery_fingerprint']);
 		return WCOS_Mutation_Fingerprint::create(
-			'merge_pair_recovery_v3',
+			'merge_pair_recovery_v4',
 			isset($copy['source_order_id']) ? absint($copy['source_order_id']) : 0,
 			$copy
 		);

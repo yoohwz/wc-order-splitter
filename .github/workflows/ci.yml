@@ -140,7 +140,13 @@ jobs:
           grep -Fq 'class-wcos-merge-compensator.php' inc/cores/script.php
           grep -Fq 'class-wcos-merge-preflight.php' inc/cores/script.php
           grep -Fq 'class-wcos-merge-retirement-policy.php' inc/cores/script.php
-          grep -Fq "throw new RuntimeException(__('The hardened merge service has not been implemented.'" inc/domain/class-wcos-mutation-gateway.php
+          grep -Fq 'class-wcos-merge-order-service.php' inc/cores/script.php
+          grep -Fq 'class-wcos-merge-woocommerce-adapter.php' inc/cores/script.php
+          grep -Fq 'new WCOS_Merge_WooCommerce_Adapter' inc/domain/class-wcos-mutation-gateway.php
+          grep -Fq 'const APPROVED = self::NON_FORCE_TRASH_ARCHIVE;' inc/domain/class-wcos-merge-retirement-policy.php
+          test ! -e inc/backend/class-wcos-merge-admin-controller.php
+          test ! -e inc/backend/class-wcos-merge-confirmation-store.php
+          test ! -e inc/backend/class-wcos-merge-review-store.php
           grep -Fq 'inc/domain/' AGENTS.md
           grep -Fq 'inc/domain/' docs/order-mutation-v2-contract.md
 
@@ -255,6 +261,8 @@ jobs:
             'inc/domain/class-wcos-merge-compensator.php' \
             'inc/domain/class-wcos-merge-preflight.php' \
             'inc/domain/class-wcos-merge-retirement-policy.php' \
+            'inc/domain/class-wcos-merge-order-service.php' \
+            'inc/domain/class-wcos-merge-woocommerce-adapter.php' \
             'css/p2-split-strategy-admin.css' \
             'js/p2-split-strategy-admin.js'; do
             if test ! -e "$package_root/$required_path"; then
@@ -318,6 +326,8 @@ jobs:
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-compensator.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-preflight.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-retirement-policy.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-order-service.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-woocommerce-adapter.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/js/p2-split-strategy-admin.js'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/css/p2-split-strategy-admin.css'
           if unzip -Z1 wc-order-splitter.zip | grep -E '(^|/)(tests|docs|node_modules|inc/mutation-v2)(/|$)|(^|/)AGENTS\.md$'; then
@@ -464,6 +474,42 @@ jobs:
 
       - name: Verify hard-off Merge recovery and retirement evidence
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-recovery-foundation-smoke.php
+
+      - name: Verify hardened Merge service and adapter core contracts
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php core
+
+      - name: Verify hardened Merge pre-retirement crash contracts
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php crash_pre
+
+      - name: Verify hardened Merge before-relations crash contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php forward_before_forward_relations
+
+      - name: Verify hardened Merge partial-relations crash contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php forward_after_one_reciprocal_relation
+
+      - name: Verify hardened Merge post-relations crash contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php forward_after_both_relations_before_verification
+
+      - name: Verify hardened Merge pre-commit crash contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php forward_after_verification_before_commit
+
+      - name: Verify hardened Merge pre-complete crash contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php forward_after_commit_before_complete
+
+      - name: Verify hardened Merge response-loss contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php response_loss
+
+      - name: Verify hardened Merge lease-loss contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php lease_loss
+
+      - name: Verify hardened Merge blocked stock-write contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php stock_guard_before
+
+      - name: Verify hardened Merge observed stock-write contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php stock_guard_after
+
+      - name: Verify hardened Merge immutable-context and stock contracts
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php drift_stock
 
       - name: Verify duplicate integrity, idempotency, and recovery
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/duplicate-smoke.php

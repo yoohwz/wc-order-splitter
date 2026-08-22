@@ -103,6 +103,17 @@ php tests/unit/run.php
 
 WooCommerce/WordPress integration contracts run through `.github/workflows/ci.yml` across legacy, HPOS, and HPOS-sync storage. The GitHub Actions workflows are the merge authority. Local success is necessary but not sufficient.
 
+## Local-runtime worktree contract
+
+When a task brief designates Local-runtime mode:
+
+- Implementation and hands-on runtime validation must use the exact active Git worktree loaded by WordPress Local.
+- Do not use a detached temporary implementation worktree for that task.
+- Isolated worktrees remain allowed for independent review, experiments, and explicitly parallel non-runtime work.
+- File copying or `rsync` between worktrees is not accepted as runtime evidence.
+- Before changing worktree topology or switching the active Local-runtime branch, prove every affected worktree is clean and safe to switch. If that cannot be proven, stop with `LOCAL_RUNTIME_WORKTREE_SYNC_REQUIRED` without discarding uncommitted state.
+- Canonical GitHub CI remains the merge authority.
+
 ## Review rules
 
 - Review the complete diff, not only the newest commit.

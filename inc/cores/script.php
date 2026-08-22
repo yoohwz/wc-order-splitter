@@ -61,6 +61,7 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-mutation-commit-guard.php';
 		WCOS_Mutation_Commit_Guard::bootstrap();
 		include_once $root . 'domain/class-wcos-merge-commit-guard.php';
+		include_once $root . 'domain/class-wcos-merge-order-service.php';
 		include_once $root . 'domain/class-wcos-duplicate-order-service.php';
 		include_once $root . 'domain/class-wcos-split-order-service.php';
 		include_once $root . 'domain/class-wcos-split-compensator.php';
@@ -75,6 +76,7 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-duplicate-preflight.php';
 		include_once $root . 'domain/class-wcos-merge-preflight.php';
 		include_once $root . 'domain/class-wcos-duplicate-woocommerce-adapter.php';
+		include_once $root . 'domain/class-wcos-merge-woocommerce-adapter.php';
 		include_once $root . 'domain/class-wcos-mutation-gateway.php';
 
 		include_once $root . 'backend/class-wcos-admin-backbone-modal-assets.php';

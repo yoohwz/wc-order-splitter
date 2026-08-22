@@ -19,7 +19,7 @@ final class WCOS_Merge_Compensator {
 		$snapshot = isset($context['merge_recovery_snapshot']) && is_array($context['merge_recovery_snapshot'])
 			? $context['merge_recovery_snapshot']
 			: array();
-		$pair = WCOS_Merge_Journal_Context::pair_from_record($record);
+		$pair = WCOS_Merge_Journal_Context::assert_executable_policy($record);
 		if ('' === $operation_id || !is_array($pair) || empty($snapshot)) {
 			throw new RuntimeException(__('Merge recovery authority is incomplete.', 'wc-order-splitter'));
 		}
@@ -39,7 +39,7 @@ final class WCOS_Merge_Compensator {
 		$target_tax_item_ids = self::ids(isset($context['merge_target_tax_item_ids']) ? (array) $context['merge_target_tax_item_ids'] : array());
 		$retirement_candidate = sanitize_key(isset($context['merge_retirement_candidate']) ? (string) $context['merge_retirement_candidate'] : '');
 		if ('' !== $retirement_candidate) {
-			WCOS_Merge_Retirement_Policy::assert_candidate($retirement_candidate);
+			WCOS_Merge_Retirement_Policy::assert_approved($retirement_candidate);
 		}
 
 		try {
@@ -251,22 +251,47 @@ final class WCOS_Merge_Compensator {
 			throw new RuntimeException(__('Forward-repaired Merge state could not be verified.', 'wc-order-splitter'));
 		}
 		if (WCOS_Merge_Recovery_State_Graph::COMMITTED !== $recovery_state) {
-			self::event('after_verification_before_commit', $source, $target, $operation_id);
-			self::lease_guard($lease);
+			self::boundary(
+					$lease,
+					$source,
+					$target,
+					$record,
+					WCOS_Merge_Recovery_Snapshot::participant_signature($source),
+					WCOS_Merge_Recovery_Snapshot::participant_signature($target),
+					'complete',
+					'after_verification_before_commit'
+			);
 		}
 		$journal_status = sanitize_key(isset($record['status']) ? (string) $record['status'] : '');
 		$commit_checkpoint_required = WCOS_Merge_Recovery_State_Graph::COMMITTED !== $recovery_state || 'committed' !== $journal_status;
 		if ($commit_checkpoint_required && !WCOS_Operation_Journal::mark_committed($source, $operation_id, array(
-				'merge_forward_repaired' => true,
-				'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::COMMITTED,
+					'merge_forward_repaired' => true,
+					'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::COMMITTED,
+					'merge_source_signature_after' => WCOS_Merge_Recovery_Snapshot::participant_signature($source),
+					'merge_target_signature_after' => WCOS_Merge_Recovery_Snapshot::participant_signature($target),
+					'merge_source_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($source),
+					'merge_target_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($target),
 			))) {
 			throw new RuntimeException(__('Forward-repaired Merge state could not be committed.', 'wc-order-splitter'));
 		}
-		self::event('after_commit_before_complete', $source, $target, $operation_id);
-		self::lease_guard($lease);
+		self::boundary(
+				$lease,
+				$source,
+				$target,
+				$record,
+				WCOS_Merge_Recovery_Snapshot::participant_signature($source),
+				WCOS_Merge_Recovery_Snapshot::participant_signature($target),
+				'complete',
+				'after_commit_before_complete'
+		);
+		$terminal_record = WCOS_Operation_Journal::get(wc_get_order($source->get_id()), $operation_id);
+		if (!is_array($terminal_record)) {
+			throw new RuntimeException(__('Forward-repaired Merge terminal authority could not be reloaded.', 'wc-order-splitter'));
+		}
 		if (!WCOS_Operation_Journal::complete($source, $operation_id, array(
 				'merge_verified' => true,
 				'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::COMPLETED,
+				'merge_terminal_result' => WCOS_Merge_Journal_Context::create_terminal_result($terminal_record),
 			))) {
 			throw new RuntimeException(__('Forward-repaired Merge state could not be finalized.', 'wc-order-splitter'));
 		}

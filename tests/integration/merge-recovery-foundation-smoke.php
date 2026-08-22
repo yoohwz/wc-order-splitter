@@ -73,7 +73,7 @@ function wcos_merge_recovery_order(WC_Product $product, $email, $quantity, $redu
 
 function wcos_merge_recovery_start(WC_Order $source, WC_Order $target, $operation_id) {
 	$report = WCOS_Merge_Preflight::assert_supported($source, $target);
-	$context = WCOS_Merge_Journal_Context::create(
+	$context = WCOS_Merge_Journal_Context::create_executable(
 		$source,
 		$target,
 		$report['plan'],
@@ -81,7 +81,7 @@ function wcos_merge_recovery_start(WC_Order $source, WC_Order $target, $operatio
 		$report['price_precision']
 	);
 	wcos_merge_recovery_assert(
-		WCOS_Operation_Journal::start($source, $operation_id, 'merge', $context, $report['pair_fingerprint']),
+		WCOS_Operation_Journal::start($source, $operation_id, 'merge', $context, $context['merge_pair']['pair_fingerprint']),
 		'Unable to start authoritative Merge recovery journal.'
 	);
 	wcos_merge_recovery_assert(
@@ -672,7 +672,7 @@ try {
 wcos_merge_recovery_assert($before_rejected, 'Before-write physical stock hook was not rejected.');
 WCOS_Stock_Side_Effect_Guard::end($guard);
 
-/* Both unselected candidates run inside a real journaled pair and compensate. */
+/* Retained comparison evidence remains inspectable, but only the approved policy can compensate automatically. */
 function wcos_merge_retirement_observe($candidate, WC_Product $product) {
 	$email = 'merge-retirement-' . $candidate . '-' . wp_generate_uuid4() . '@example.test';
 	$source = wcos_merge_recovery_order($product, $email, 1, 1, true);
@@ -725,15 +725,30 @@ function wcos_merge_retirement_observe($candidate, WC_Product $product) {
 	wcos_merge_recovery_assert(WCOS_Operation_Journal::require_recovery($source, $operation_id), 'Retirement candidate compensation did not dispatch.');
 	$source = wc_get_order($source->get_id());
 	$target = wc_get_order($target->get_id());
-	wcos_merge_recovery_assert('compensated' === WCOS_Operation_Journal::get($source, $operation_id)['status'], 'Retirement candidate did not compensate.');
-	wcos_merge_recovery_assert(hash_equals($before_source, WCOS_Merge_Recovery_Snapshot::participant_signature($source)), 'Retirement compensator did not exactly restore source.');
-	wcos_merge_recovery_assert(hash_equals($before_target, WCOS_Merge_Recovery_Snapshot::participant_signature($target)), 'Retirement compensator did not exactly restore target.');
+	if (WCOS_Merge_Retirement_Policy::approved_identifier() === $candidate) {
+		wcos_merge_recovery_assert('compensated' === WCOS_Operation_Journal::get($source, $operation_id)['status'], 'Approved retirement policy did not compensate.');
+		wcos_merge_recovery_assert(hash_equals($before_source, WCOS_Merge_Recovery_Snapshot::participant_signature($source)), 'Approved retirement compensator did not exactly restore source.');
+		wcos_merge_recovery_assert(hash_equals($before_target, WCOS_Merge_Recovery_Snapshot::participant_signature($target)), 'Approved retirement compensator did not exactly restore target.');
+	} else {
+		wcos_merge_recovery_assert('manual_reconciliation' === WCOS_Operation_Journal::get($source, $operation_id)['status'], 'Unapproved retirement policy did not fail closed.');
+		wcos_merge_recovery_assert(WCOS_Manual_Reconciliation_Blocker::has_active($source) && WCOS_Manual_Reconciliation_Blocker::has_active($target), 'Unapproved retirement policy did not block both participants.');
+	}
 	wcos_merge_recovery_assert($stock_before === WCOS_Order_Contract_Snapshot::product_stock($source), 'Retirement candidate changed physical stock.');
 	if (is_callable($status_filter)) { remove_filter('wc_order_statuses', $status_filter); }
+	delete_option('wcos_manual_reconcile_block_' . $source->get_id());
+	delete_option('wcos_manual_reconcile_block_' . $target->get_id());
 	WCOS_Operation_Journal::delete($source, $operation_id);
 	$source->delete(true);
 	$target->delete(true);
-	return array('candidate' => $candidate, 'source_status_observed' => $status_after, 'directly_inspectable_after_transition' => true, 'reversible' => true, 'stock_neutral' => true, 'journal_discoverable' => true, 'production_selected' => false);
+	return array(
+		'candidate' => $candidate,
+		'source_status_observed' => $status_after,
+		'directly_inspectable_after_transition' => true,
+		'reversible' => true,
+		'stock_neutral' => true,
+		'journal_discoverable' => true,
+		'production_selected' => WCOS_Merge_Retirement_Policy::approved_identifier() === $candidate,
+	);
 }
 
 $retirement = array(

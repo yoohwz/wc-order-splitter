@@ -7,9 +7,10 @@ defined('ABSPATH') || exit;
  */
 final class WCOS_Merge_Journal_Context {
 
-	const SCHEMA_VERSION = 2;
+	const SCHEMA_VERSION = 3;
+	const TERMINAL_RESULT_SCHEMA_VERSION = 1;
 
-	public static function create(WC_Order $source, WC_Order $target, array $plan, array $context_authority, $price_precision, array $evidence = array()) {
+	public static function create(WC_Order $source, WC_Order $target, array $plan, array $context_authority, $price_precision, array $evidence = array(), $selected_retirement_policy = '') {
 		$source_id = absint($source->get_id());
 		$target_id = absint($target->get_id());
 		$price_precision = WCOS_Price_Precision_Scope::validate($price_precision);
@@ -17,6 +18,10 @@ final class WCOS_Merge_Journal_Context {
 			throw new InvalidArgumentException(__('A Merge journal context requires two distinct persisted orders.', 'wc-order-splitter'));
 		}
 
+		$selected_retirement_policy = sanitize_key((string) $selected_retirement_policy);
+		if ('' !== $selected_retirement_policy) {
+			WCOS_Merge_Retirement_Policy::assert_approved($selected_retirement_policy);
+		}
 		$source_signature = WCOS_Order_Contract_Snapshot::source_signature($source);
 		$archive_signature = WCOS_Merge_Recovery_Snapshot::archive_commercial_signature($source);
 		$active_signature = WCOS_Merge_Recovery_Snapshot::active_economic_signature(array($source, $target), $price_precision, $source_id);
@@ -34,7 +39,8 @@ final class WCOS_Merge_Journal_Context {
 			'context_authority_fingerprint' => WCOS_Merge_Context_Signature::authority_fingerprint($context_authority),
 			'retirement_policy_schema_version' => WCOS_Merge_Retirement_Policy::SCHEMA_VERSION,
 			'retirement_candidates' => WCOS_Merge_Retirement_Policy::identifiers(),
-			'retirement_policy_selected' => false,
+			'retirement_policy_selected' => '' !== $selected_retirement_policy,
+			'retirement_policy_identifier' => $selected_retirement_policy,
 			'archive_source_signature_before' => isset($evidence['archive_source_signature_before'])
 				? sanitize_key((string) $evidence['archive_source_signature_before'])
 				: $archive_signature,
@@ -55,6 +61,18 @@ final class WCOS_Merge_Journal_Context {
 				'authority' => $authority,
 				'pair_fingerprint' => $pair_fingerprint,
 			),
+		);
+	}
+
+	public static function create_executable(WC_Order $source, WC_Order $target, array $plan, array $context_authority, $price_precision, array $evidence = array()) {
+		return self::create(
+			$source,
+			$target,
+			$plan,
+			$context_authority,
+			$price_precision,
+			$evidence,
+			WCOS_Merge_Retirement_Policy::approved_identifier()
 		);
 	}
 
@@ -122,6 +140,17 @@ final class WCOS_Merge_Journal_Context {
 			&& ('' === $operation_id || hash_equals($operation_id, $record_operation_id));
 	}
 
+	public static function assert_executable_policy(array $record) {
+		$pair = self::pair_from_record($record);
+		if (!is_array($pair)
+			|| true !== $pair['retirement_policy_selected']
+			|| WCOS_Merge_Retirement_Policy::approved_identifier() !== $pair['retirement_policy_identifier']) {
+			throw new RuntimeException(__('The Merge journal does not contain executable approved retirement-policy authority.', 'wc-order-splitter'));
+		}
+		WCOS_Merge_Retirement_Policy::assert_approved($pair['retirement_policy_identifier']);
+		return $pair;
+	}
+
 	public static function is_unsafe_record(array $record) {
 		if (!is_array(self::pair_from_record($record))) {
 			return true;
@@ -130,8 +159,89 @@ final class WCOS_Merge_Journal_Context {
 		return !in_array($status, array('completed', 'compensated', 'manual_reconciled'), true);
 	}
 
+	public static function create_terminal_result(array $record) {
+		$pair = self::assert_executable_policy($record);
+		if ('committed' !== sanitize_key(isset($record['status']) ? (string) $record['status'] : '')
+			|| WCOS_Merge_Recovery_State_Graph::COMMITTED !== WCOS_Merge_Recovery_State_Graph::assert_record($record)) {
+			throw new RuntimeException(__('The Merge terminal result requires durable committed authority.', 'wc-order-splitter'));
+		}
+		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
+		$result = array(
+			'schema_version' => self::TERMINAL_RESULT_SCHEMA_VERSION,
+			'status' => 'completed',
+			'operation_id' => sanitize_key(isset($record['operation_id']) ? (string) $record['operation_id'] : ''),
+			'source_order_id' => (int) $pair['source_order_id'],
+			'target_order_id' => (int) $pair['target_order_id'],
+			'retirement_policy' => (string) $pair['retirement_policy_identifier'],
+			'target_item_ids' => self::canonical_ids(isset($context['merge_target_item_ids']) ? (array) $context['merge_target_item_ids'] : array()),
+			'target_tax_item_ids' => self::canonical_ids(isset($context['merge_target_tax_item_ids']) ? (array) $context['merge_target_tax_item_ids'] : array()),
+		);
+		if ('' === $result['operation_id']) {
+			throw new RuntimeException(__('The Merge terminal result is missing its operation authority.', 'wc-order-splitter'));
+		}
+		$result['result_fingerprint'] = self::terminal_result_fingerprint($result);
+		return $result;
+	}
+
+	public static function terminal_result_from_record(array $record) {
+		$pair = self::assert_executable_policy($record);
+		if ('completed' !== sanitize_key(isset($record['status']) ? (string) $record['status'] : '')
+			|| WCOS_Merge_Recovery_State_Graph::COMPLETED !== WCOS_Merge_Recovery_State_Graph::assert_record($record)) {
+			throw new RuntimeException(__('The Merge terminal result requires durable completed authority.', 'wc-order-splitter'));
+		}
+		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
+		$stored = isset($context['merge_terminal_result']) && is_array($context['merge_terminal_result']) ? $context['merge_terminal_result'] : array();
+		$expected_keys = array(
+			'operation_id', 'result_fingerprint', 'retirement_policy', 'schema_version', 'source_order_id',
+			'status', 'target_item_ids', 'target_order_id', 'target_tax_item_ids',
+		);
+		$actual_keys = array_keys($stored);
+		sort($actual_keys, SORT_STRING);
+		sort($expected_keys, SORT_STRING);
+		if ($actual_keys !== $expected_keys || !is_array($stored['target_item_ids']) || !is_array($stored['target_tax_item_ids'])) {
+			throw new RuntimeException(__('Completed Merge authority is missing its bounded terminal result.', 'wc-order-splitter'));
+		}
+		$result = array(
+			'schema_version' => (int) $stored['schema_version'],
+			'status' => sanitize_key((string) $stored['status']),
+			'operation_id' => sanitize_key((string) $stored['operation_id']),
+			'source_order_id' => absint($stored['source_order_id']),
+			'target_order_id' => absint($stored['target_order_id']),
+			'retirement_policy' => sanitize_key((string) $stored['retirement_policy']),
+			'target_item_ids' => self::canonical_ids($stored['target_item_ids']),
+			'target_tax_item_ids' => self::canonical_ids($stored['target_tax_item_ids']),
+		);
+		$fingerprint = self::normalized_fingerprint($stored['result_fingerprint']);
+		$expected_item_ids = self::canonical_ids(isset($context['merge_target_item_ids']) ? (array) $context['merge_target_item_ids'] : array());
+		$expected_tax_ids = self::canonical_ids(isset($context['merge_target_tax_item_ids']) ? (array) $context['merge_target_tax_item_ids'] : array());
+		if (self::TERMINAL_RESULT_SCHEMA_VERSION !== $result['schema_version']
+			|| 'completed' !== $result['status']
+			|| sanitize_key((string) $record['operation_id']) !== $result['operation_id']
+			|| (int) $pair['source_order_id'] !== $result['source_order_id']
+			|| (int) $pair['target_order_id'] !== $result['target_order_id']
+			|| (string) $pair['retirement_policy_identifier'] !== $result['retirement_policy']
+			|| $expected_item_ids !== $result['target_item_ids']
+			|| $expected_tax_ids !== $result['target_tax_item_ids']
+			|| '' === $fingerprint
+			|| !hash_equals($fingerprint, self::terminal_result_fingerprint($result))) {
+			throw new RuntimeException(__('Completed Merge terminal result failed authority verification.', 'wc-order-splitter'));
+		}
+		return $result;
+	}
+
+	private static function terminal_result_fingerprint(array $result) {
+		unset($result['result_fingerprint']);
+		return WCOS_Mutation_Fingerprint::create('merge_terminal_result_v1', absint(isset($result['source_order_id']) ? $result['source_order_id'] : 0), $result);
+	}
+
+	private static function canonical_ids(array $ids) {
+		$ids = array_values(array_unique(array_filter(array_map('absint', $ids))));
+		sort($ids, SORT_NUMERIC);
+		return $ids;
+	}
+
 	private static function authority_fingerprint(array $authority) {
-		return WCOS_Mutation_Fingerprint::create('merge_pair_authority_v2', $authority['source_order_id'], $authority);
+		return WCOS_Mutation_Fingerprint::create('merge_pair_authority_v3', $authority['source_order_id'], $authority);
 	}
 
 	private static function canonical_authority(array $authority) {
@@ -139,7 +249,7 @@ final class WCOS_Merge_Journal_Context {
 			'active_ownership_before_signature', 'archive_source_signature_before', 'context_authority',
 			'context_authority_fingerprint', 'context_signature_version', 'participation_schema_version',
 			'plan_fingerprint', 'plan_schema_version', 'preflight_policy_version', 'price_precision',
-			'retirement_candidates', 'retirement_policy_schema_version', 'retirement_policy_selected',
+			'retirement_candidates', 'retirement_policy_identifier', 'retirement_policy_schema_version', 'retirement_policy_selected',
 			'source_order_id', 'source_signature', 'target_order_id', 'target_signature',
 		);
 		$actual_keys = array_keys($authority);
@@ -161,6 +271,8 @@ final class WCOS_Merge_Journal_Context {
 			? ''
 			: self::normalized_fingerprint($authority['active_ownership_before_signature']);
 		$price_precision = (int) $authority['price_precision'];
+		$policy_selected = true === $authority['retirement_policy_selected'];
+		$policy_identifier = sanitize_key((string) $authority['retirement_policy_identifier']);
 		if (!$source_id || !$target_id || $source_id === $target_id || !is_array($context_authority)
 			|| '' === $source_signature || '' === $target_signature || '' === $plan_fingerprint
 			|| '' === $context_fingerprint || '' === $archive_signature
@@ -171,7 +283,9 @@ final class WCOS_Merge_Journal_Context {
 			|| (int) $authority['context_signature_version'] !== WCOS_Merge_Context_Signature::SCHEMA_VERSION
 			|| (int) $authority['retirement_policy_schema_version'] !== WCOS_Merge_Retirement_Policy::SCHEMA_VERSION
 			|| (int) $authority['participation_schema_version'] !== WCOS_Merge_Participation::SCHEMA_VERSION
-			|| false !== (bool) $authority['retirement_policy_selected']
+			|| (!in_array($authority['retirement_policy_selected'], array(true, false), true))
+			|| ($policy_selected && WCOS_Merge_Retirement_Policy::approved_identifier() !== $policy_identifier)
+			|| (!$policy_selected && '' !== $policy_identifier)
 			|| WCOS_Merge_Retirement_Policy::identifiers() !== array_values($authority['retirement_candidates'])) {
 			return null;
 		}
@@ -190,7 +304,8 @@ final class WCOS_Merge_Journal_Context {
 			'context_authority_fingerprint' => $context_fingerprint,
 			'retirement_policy_schema_version' => WCOS_Merge_Retirement_Policy::SCHEMA_VERSION,
 			'retirement_candidates' => WCOS_Merge_Retirement_Policy::identifiers(),
-			'retirement_policy_selected' => false,
+			'retirement_policy_selected' => $policy_selected,
+			'retirement_policy_identifier' => $policy_identifier,
 			'archive_source_signature_before' => $archive_signature,
 			'active_ownership_before_signature' => $active_signature,
 			'participation_schema_version' => WCOS_Merge_Participation::SCHEMA_VERSION,
