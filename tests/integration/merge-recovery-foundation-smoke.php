@@ -103,6 +103,16 @@ function wcos_merge_recovery_money_add($left, $right) {
 	);
 }
 
+function wcos_merge_recovery_owned_components(WC_Order $order) {
+	$state = WCOS_Merge_Recovery_Snapshot::participant_checkpoint($order);
+	return array(
+		'line_items' => $state['line_items'],
+		'tax_items' => $state['tax_items'],
+		'order_props' => $state['order_props'],
+		'order_stock_reduced' => $state['order_stock_reduced'],
+	);
+}
+
 /** Test-only commercial staging; no production Merge service calls this helper. */
 function wcos_merge_recovery_stage(WC_Order $source, WC_Order $target, $operation_id, $forward) {
 	do_action('wcos_merge_recovery_checkpoint', 'before_target_write', $source, $target, $operation_id);
@@ -129,6 +139,7 @@ function wcos_merge_recovery_stage(WC_Order $source, WC_Order $target, $operatio
 	do_action('wcos_merge_recovery_checkpoint', 'during_source_reduced_stock_migration', $source, $target, $operation_id);
 	$source_line->delete_meta_data('_reduced_stock');
 	$source_line->save();
+	do_action('wcos_merge_recovery_checkpoint', 'after_source_line_ownership_before_order_flags', $source, $target, $operation_id);
 	$source->get_data_store()->set_stock_reduced($source->get_id(), false);
 	if ('' !== $source_reduced) {
 		$target->get_data_store()->set_stock_reduced($target->get_id(), true);
@@ -237,6 +248,78 @@ function wcos_merge_recovery_run_case($label, WC_Product $product, $quantity, $r
 	return array('label' => $label, 'forward' => (bool) $forward, 'stock_neutral' => true);
 }
 
+function wcos_merge_recovery_run_immutable_drift_case($label, WC_Product $product, $forward, $target_shipping) {
+	$email = 'merge-immutable-' . $label . '-' . wp_generate_uuid4() . '@example.test';
+	$source = wcos_merge_recovery_order($product, $email, 2, 2, true);
+	$target = wcos_merge_recovery_order($product, $email, 1, null, false);
+	$shipping_id = 0;
+	if ($target_shipping) {
+		$shipping = new WC_Order_Item_Shipping();
+		$shipping->set_method_title('Immutable target shipping');
+		$shipping->set_method_id('flat_rate');
+		$shipping->set_instance_id(71);
+		$shipping->set_total('0.00');
+		$shipping->set_taxes(array('total' => array()));
+		$target->add_item($shipping);
+		$target->save();
+		$shipping_id = $shipping->get_id();
+	}
+	$operation_id = 'merge-immutable-' . $label . '-' . wp_generate_uuid4();
+	wcos_merge_recovery_start($source, $target, $operation_id);
+	list($source, $target) = wcos_merge_recovery_stage($source, $target, $operation_id, $forward);
+	$stock_before = WCOS_Order_Contract_Snapshot::product_stock($source);
+	$source_quantity_before = array_map(static function($item) { return (string) $item->get_quantity(); }, $source->get_items('line_item'));
+	$target_quantity_before = array_map(static function($item) { return (string) $item->get_quantity(); }, $target->get_items('line_item'));
+	$source_total_before = (string) $source->get_total();
+	$target_total_before = (string) $target->get_total();
+
+	if ('source-billing-payment' === $label) {
+		$source->set_billing_city('Externally changed city');
+		$source->set_payment_method('bacs');
+		$source->set_payment_method_title('External bank transfer');
+		$source->save();
+	} else {
+		$shipping = $target->get_item($shipping_id);
+		wcos_merge_recovery_assert($shipping instanceof WC_Order_Item_Shipping, 'Target shipping drift fixture is unavailable.');
+		$shipping->set_method_title('Externally changed shipping');
+		$shipping->save();
+		$target_lines = $target->get_items('line_item');
+		$preexisting_target_line = reset($target_lines);
+		$preexisting_target_line->set_name('Externally renamed target line');
+		$preexisting_target_line->save();
+	}
+	$source = wc_get_order($source->get_id());
+	$target = wc_get_order($target->get_id());
+	wcos_merge_recovery_assert($source_quantity_before === array_map(static function($item) { return (string) $item->get_quantity(); }, $source->get_items('line_item')), 'Source immutable drift changed quantity.');
+	wcos_merge_recovery_assert($target_quantity_before === array_map(static function($item) { return (string) $item->get_quantity(); }, $target->get_items('line_item')), 'Target immutable drift changed quantity.');
+	wcos_merge_recovery_assert($source_total_before === (string) $source->get_total() && $target_total_before === (string) $target->get_total(), 'Immutable drift changed participant totals.');
+	$source_owned_before = wcos_merge_recovery_owned_components($source);
+	$target_owned_before = wcos_merge_recovery_owned_components($target);
+
+	wcos_merge_recovery_assert(WCOS_Operation_Journal::require_recovery($source, $operation_id), 'Immutable-context drift did not dispatch recovery.');
+	$source = wc_get_order($source->get_id());
+	$target = wc_get_order($target->get_id());
+	wcos_merge_recovery_assert('manual_reconciliation' === WCOS_Operation_Journal::get($source, $operation_id)['status'], 'Immutable-context drift failed open: ' . $label);
+	wcos_merge_recovery_assert($source_owned_before === wcos_merge_recovery_owned_components($source), 'Immutable source drift allowed an automatic recovery write.');
+	wcos_merge_recovery_assert($target_owned_before === wcos_merge_recovery_owned_components($target), 'Immutable target drift allowed an automatic recovery write.');
+	wcos_merge_recovery_assert($stock_before === WCOS_Order_Contract_Snapshot::product_stock($source), 'Immutable-context rejection changed physical stock.');
+	wcos_merge_recovery_assert(WCOS_Manual_Reconciliation_Blocker::has_active($source) && WCOS_Manual_Reconciliation_Blocker::has_active($target), 'Immutable-context drift did not block both participants.');
+	if ('source-billing-payment' === $label) {
+		wcos_merge_recovery_assert('Externally changed city' === $source->get_billing_city() && 'bacs' === $source->get_payment_method(), 'Recovery overwrote external billing/payment drift.');
+	} else {
+		$shipping = $target->get_item($shipping_id);
+		$target_lines = $target->get_items('line_item');
+		wcos_merge_recovery_assert($shipping instanceof WC_Order_Item_Shipping && 'Externally changed shipping' === $shipping->get_method_title(), 'Recovery overwrote external target shipping drift.');
+		wcos_merge_recovery_assert('Externally renamed target line' === reset($target_lines)->get_name(), 'Recovery overwrote external target item drift.');
+	}
+	delete_option('wcos_manual_reconcile_block_' . $source->get_id());
+	delete_option('wcos_manual_reconcile_block_' . $target->get_id());
+	WCOS_Operation_Journal::delete($source, $operation_id);
+	$source->delete(true);
+	$target->delete(true);
+	return array('label' => $label, 'manual_before_recovery_write' => true, 'stock_neutral' => true);
+}
+
 wcos_merge_recovery_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE), 'MERGE gate changed during recovery work.');
 $managed = wcos_merge_recovery_product(true, false);
 $backorder = wcos_merge_recovery_product(true, true);
@@ -259,6 +342,10 @@ $matrix = array(
 	wcos_merge_recovery_run_case('fractional', $managed, '0.500000', '0.500000', false),
 	wcos_merge_recovery_run_case('backorder', $backorder, 3, 3, false),
 	wcos_merge_recovery_run_case('unmanaged', $unmanaged, 1, null, false),
+);
+$immutable_drift_matrix = array(
+	wcos_merge_recovery_run_immutable_drift_case('source-billing-payment', $managed, true, false),
+	wcos_merge_recovery_run_immutable_drift_case('target-shipping-item', $managed, false, true),
 );
 
 /* Crash after source restore but before its checkpoint resumes idempotently. */
@@ -659,9 +746,10 @@ wcos_merge_recovery_assert(WCOS_Merge_Retirement_Policy::identifiers() === $obse
 
 /* Execute the material pre-authority crash boundaries; each must become pair-wide manual. */
 $failure_windows = array();
-foreach (array('before_target_write', 'after_target_item_before_checkpoint', 'after_target_checkpoint_before_source_ownership', 'during_source_reduced_stock_migration', 'before_source_retirement', 'after_source_retirement') as $stage_under_test) {
+foreach (array('before_target_write', 'after_target_item_before_checkpoint', 'after_target_checkpoint_before_source_ownership', 'during_source_reduced_stock_migration', 'after_source_line_ownership_before_order_flags', 'before_source_retirement', 'after_source_retirement') as $stage_under_test) {
 	$window_source = wcos_merge_recovery_order($managed, 'merge-window-' . wp_generate_uuid4() . '@example.test', 1, 1, true);
 	$window_target = wcos_merge_recovery_order($managed, $window_source->get_billing_email(), 1, null, false);
+	$window_stock_before = WCOS_Order_Contract_Snapshot::product_stock($window_source);
 	$window_source_id = $window_source->get_id();
 	$window_target_id = $window_target->get_id();
 	$window_operation = 'merge-window-' . wp_generate_uuid4();
@@ -676,10 +764,19 @@ foreach (array('before_target_write', 'after_target_item_before_checkpoint', 'af
 	wcos_merge_recovery_assert($hit, 'Pre-authority crash window did not execute: ' . $stage_under_test);
 	$window_source = wc_get_order($window_source_id);
 	$window_target = wc_get_order($window_target_id);
+	if ('after_source_line_ownership_before_order_flags' === $stage_under_test) {
+		$partial_lines = $window_source->get_items('line_item');
+		$partial_line = reset($partial_lines);
+		wcos_merge_recovery_assert('' === $partial_line->get_meta('_reduced_stock', true), 'Partial ownership crash did not persist the source line write.');
+		wcos_merge_recovery_assert((bool) $window_source->get_data_store()->get_stock_reduced($window_source_id), 'Partial ownership crash unexpectedly persisted the source order flag.');
+		wcos_merge_recovery_assert(!(bool) $window_target->get_data_store()->get_stock_reduced($window_target_id), 'Partial ownership crash unexpectedly persisted the target order flag.');
+		wcos_merge_recovery_assert($window_stock_before === WCOS_Order_Contract_Snapshot::product_stock($window_source), 'Partial ownership crash changed physical product stock.');
+	}
 	WCOS_Operation_Journal::require_recovery($window_source, $window_operation);
 	$window_source = wc_get_order($window_source->get_id());
 	$window_target = wc_get_order($window_target->get_id());
 	wcos_merge_recovery_assert('manual_reconciliation' === WCOS_Operation_Journal::get($window_source, $window_operation)['status'], 'Pre-authority crash did not fail closed: ' . $stage_under_test);
+	wcos_merge_recovery_assert($window_stock_before === WCOS_Order_Contract_Snapshot::product_stock($window_source), 'Pre-authority recovery changed physical product stock: ' . $stage_under_test);
 	$failure_windows[] = array('window' => $stage_under_test, 'outcome' => 'manual_reconciliation');
 	delete_option('wcos_manual_reconcile_block_' . $window_source->get_id());
 	delete_option('wcos_manual_reconcile_block_' . $window_target->get_id());
@@ -722,7 +819,7 @@ $failure_windows[] = array('window' => 'interruption_during_target_cleanup', 'ou
 $failure_windows[] = array('window' => 'lease_loss', 'outcome' => 'recovery_required');
 $failure_windows[] = array('window' => 'source_divergence', 'outcome' => 'manual_reconciliation');
 $failure_windows[] = array('window' => 'target_divergence', 'outcome' => 'manual_reconciliation');
-wcos_merge_recovery_assert(17 === count($failure_windows), 'Executed Merge crash-window matrix is incomplete.');
+wcos_merge_recovery_assert(18 === count($failure_windows), 'Executed Merge crash-window matrix is incomplete.');
 
 $managed->delete(true);
 $backorder->delete(true);
@@ -732,6 +829,7 @@ $variation_parent->delete(true);
 echo 'merge-recovery-evidence=' . wp_json_encode(array(
 	'storage' => \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled() ? 'hpos' : 'legacy',
 	'stock_matrix' => $matrix,
+	'immutable_drift_matrix' => $immutable_drift_matrix,
 	'retirement_candidates' => $retirement,
 	'failure_windows' => $failure_windows,
 	'merge_gate' => false,

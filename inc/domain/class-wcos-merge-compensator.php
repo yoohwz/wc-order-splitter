@@ -45,6 +45,14 @@ final class WCOS_Merge_Compensator {
 		try {
 			$current_source = WCOS_Merge_Recovery_Snapshot::participant_signature($source);
 			$current_target = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
+			WCOS_Merge_Recovery_Snapshot::assert_immutable_pair(
+				$snapshot,
+				$record,
+				$source,
+				$target,
+				$target_item_ids,
+				$target_tax_item_ids
+			);
 			$forward_state = !empty($context['merge_forward_repair_allowed'])
 				&& in_array($recovery_state, array(
 					WCOS_Merge_Recovery_State_Graph::SOURCE_RETIRED,
@@ -279,7 +287,7 @@ final class WCOS_Merge_Compensator {
 
 	private static function resumable_callbacks(WCOS_Multi_Order_Lease $lease, WC_Order $source, WC_Order $target, array $record, array $snapshot, array $source_after, array $target_after, array $target_item_ids, array $target_tax_item_ids) {
 		$operation_id = sanitize_key((string) $record['operation_id']);
-		$guard = static function($stage, $component_id = 0) use ($lease, $source, $target, $operation_id, $snapshot, $source_after, $target_after, $target_item_ids, $target_tax_item_ids) {
+		$guard = static function($stage, $component_id = 0) use ($lease, $source, $target, $operation_id, $record, $snapshot, $source_after, $target_after, $target_item_ids, $target_tax_item_ids) {
 			WCOS_Merge_Compensator::event($stage, $source, $target, $operation_id);
 			if (!$lease->refresh()) {
 				throw new RuntimeException(__('A participant lease expired during resumable Merge recovery.', 'wc-order-splitter'));
@@ -290,6 +298,7 @@ final class WCOS_Merge_Compensator {
 			if (!$fresh_source instanceof WC_Order || !$fresh_target instanceof WC_Order) {
 				throw new RuntimeException(__('A Merge recovery participant disappeared during a durable write.', 'wc-order-splitter'));
 			}
+			WCOS_Merge_Recovery_Snapshot::assert_immutable_pair($snapshot, $record, $fresh_source, $fresh_target, $target_item_ids, $target_tax_item_ids);
 			WCOS_Merge_Recovery_Snapshot::assert_resumable_participant($snapshot['source'], $source_after, $fresh_source, array(), array());
 			WCOS_Merge_Recovery_Snapshot::assert_resumable_participant($snapshot['target'], $target_after, $fresh_target, $target_item_ids, $target_tax_item_ids);
 		};

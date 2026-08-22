@@ -46,6 +46,15 @@ final class WCOS_Merge_Commit_Guard {
 			throw new RuntimeException(__('Merge pair authority is invalid at a recovery persistence boundary.', 'wc-order-splitter'));
 		}
 		WCOS_Merge_Recovery_Snapshot::assert_valid($snapshot, $fresh_record);
+		$context = isset($fresh_record['context']) && is_array($fresh_record['context']) ? $fresh_record['context'] : array();
+		WCOS_Merge_Recovery_Snapshot::assert_immutable_pair(
+			$snapshot,
+			$fresh_record,
+			$fresh_source,
+			$fresh_target,
+			isset($context['merge_target_item_ids']) ? (array) $context['merge_target_item_ids'] : array(),
+			isset($context['merge_target_tax_item_ids']) ? (array) $context['merge_target_tax_item_ids'] : array()
+		);
 
 		self::assert_signature($fresh_source, $expected_source_signature, 'source');
 		self::assert_signature($fresh_target, $expected_target_signature, 'target');

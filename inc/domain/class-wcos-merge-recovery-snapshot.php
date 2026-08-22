@@ -12,7 +12,7 @@ defined('ABSPATH') || exit;
  */
 final class WCOS_Merge_Recovery_Snapshot {
 
-	const SCHEMA_VERSION = 2;
+	const SCHEMA_VERSION = 3;
 
 	public static function capture(WC_Order $source, WC_Order $target, array $record) {
 		$pair = WCOS_Merge_Journal_Context::pair_from_record($record);
@@ -38,6 +38,8 @@ final class WCOS_Merge_Recovery_Snapshot {
 			'retirement_policy_selected' => false,
 			'source' => self::participant_state($source),
 			'target' => self::participant_state($target),
+			'source_immutable_context' => self::immutable_guard($source),
+			'target_immutable_context' => self::immutable_guard($target),
 		);
 		$snapshot['archive_source_contract_before'] = self::archive_commercial_contract($source);
 		$snapshot['archive_source_signature_before'] = self::contract_signature('merge_archive_commercial_v1', $source->get_id(), $snapshot['archive_source_contract_before']);
@@ -52,7 +54,7 @@ final class WCOS_Merge_Recovery_Snapshot {
 			'active_economic_contract_before', 'active_ownership_before_signature', 'archive_source_contract_before', 'archive_source_signature_before', 'pair_fingerprint',
 			'preflight_policy_version', 'price_precision', 'recovery_fingerprint', 'retirement_candidates',
 			'retirement_policy_schema_version', 'retirement_policy_selected', 'schema_version', 'source',
-			'source_order_id', 'target', 'target_order_id',
+			'source_immutable_context', 'source_order_id', 'target', 'target_immutable_context', 'target_order_id',
 		);
 		$actual_keys = array_keys($snapshot);
 		sort($actual_keys, SORT_STRING);
@@ -71,6 +73,8 @@ final class WCOS_Merge_Recovery_Snapshot {
 		}
 		self::assert_participant_state($snapshot['source'], absint($snapshot['source_order_id']));
 		self::assert_participant_state($snapshot['target'], absint($snapshot['target_order_id']));
+		self::assert_immutable_guard($snapshot['source_immutable_context'], absint($snapshot['source_order_id']));
+		self::assert_immutable_guard($snapshot['target_immutable_context'], absint($snapshot['target_order_id']));
 		if (!hash_equals((string) $snapshot['archive_source_signature_before'], self::contract_signature('merge_archive_commercial_v1', $snapshot['source_order_id'], $snapshot['archive_source_contract_before']))
 			|| !hash_equals((string) $snapshot['active_ownership_before_signature'], self::contract_signature('merge_active_economic_v1', $snapshot['source_order_id'], $snapshot['active_economic_contract_before']))) {
 			throw new RuntimeException(__('The Merge archive or active-ownership snapshot authority is invalid.', 'wc-order-splitter'));
@@ -98,7 +102,7 @@ final class WCOS_Merge_Recovery_Snapshot {
 		$copy = $snapshot;
 		unset($copy['recovery_fingerprint']);
 		return WCOS_Mutation_Fingerprint::create(
-			'merge_pair_recovery_v2',
+			'merge_pair_recovery_v3',
 			isset($copy['source_order_id']) ? absint($copy['source_order_id']) : 0,
 			$copy
 		);
@@ -160,6 +164,30 @@ final class WCOS_Merge_Recovery_Snapshot {
 			$snapshot['active_ownership_before_signature'],
 			self::active_economic_signature(array($target), $snapshot['price_precision'], $snapshot['source_order_id'])
 		);
+	}
+
+	/**
+	 * Prove keyed customer context and all non-Merge-owned participant state are
+	 * unchanged. This guard never restores external state; callers fail closed.
+	 */
+	public static function assert_immutable_pair(
+		array $snapshot,
+		array $record,
+		WC_Order $source,
+		WC_Order $target,
+		array $target_item_ids = array(),
+		array $target_tax_item_ids = array()
+	) {
+		self::assert_valid($snapshot, $record);
+		$pair = WCOS_Merge_Journal_Context::pair_from_record($record);
+		if (!is_array($pair) || !isset($pair['context_authority']) || !is_array($pair['context_authority'])) {
+			throw new RuntimeException(__('Immutable Merge context authority is unavailable.', 'wc-order-splitter'));
+		}
+		WCOS_Merge_Context_Signature::assert_current($source, $pair['context_authority']);
+		WCOS_Merge_Context_Signature::assert_current($target, $pair['context_authority']);
+		self::assert_immutable_participant($snapshot['source_immutable_context'], $source, array(), array());
+		self::assert_immutable_participant($snapshot['target_immutable_context'], $target, $target_item_ids, $target_tax_item_ids);
+		return true;
 	}
 
 	public static function before_signature(array $snapshot, $role) {
@@ -366,6 +394,146 @@ final class WCOS_Merge_Recovery_Snapshot {
 			}
 		}
 		return true;
+	}
+
+	private static function immutable_guard(WC_Order $order) {
+		$item_ids = array();
+		foreach (array('line_item', 'shipping', 'fee', 'tax', 'coupon') as $type) {
+			$item_ids[$type] = array_map('intval', array_keys($order->get_items($type)));
+			sort($item_ids[$type], SORT_NUMERIC);
+		}
+		return array(
+			'schema_version' => 1,
+			'order_id' => (int) $order->get_id(),
+			'item_ids' => $item_ids,
+			'immutable_signature' => self::immutable_signature($order, $item_ids),
+		);
+	}
+
+	private static function assert_immutable_guard($guard, $expected_order_id) {
+		$expected_types = array('coupon', 'fee', 'line_item', 'shipping', 'tax');
+		if (!is_array($guard)) {
+			throw new RuntimeException(__('A Merge immutable-context guard is missing.', 'wc-order-splitter'));
+		}
+		$keys = array_keys($guard);
+		$expected_keys = array('immutable_signature', 'item_ids', 'order_id', 'schema_version');
+		sort($keys, SORT_STRING);
+		sort($expected_keys, SORT_STRING);
+		$types = isset($guard['item_ids']) && is_array($guard['item_ids']) ? array_keys($guard['item_ids']) : array();
+		sort($types, SORT_STRING);
+		if ($keys !== $expected_keys || 1 !== (int) $guard['schema_version']
+			|| absint($guard['order_id']) !== absint($expected_order_id)
+			|| $types !== $expected_types || '' === self::normalized_fingerprint($guard['immutable_signature'])) {
+			throw new RuntimeException(__('A Merge immutable-context guard has an invalid schema.', 'wc-order-splitter'));
+		}
+		foreach ($guard['item_ids'] as $ids) {
+			$normalized = array_values(array_unique(array_filter(array_map('absint', (array) $ids))));
+			sort($normalized, SORT_NUMERIC);
+			if ($normalized !== array_values($ids)) {
+				throw new RuntimeException(__('A Merge immutable-context item authority is non-canonical.', 'wc-order-splitter'));
+			}
+		}
+	}
+
+	private static function assert_immutable_participant(array $guard, WC_Order $order, array $allowed_line_ids, array $allowed_tax_ids) {
+		self::assert_immutable_guard($guard, $order->get_id());
+		$allowed_additions = array(
+			'line_item' => array_values(array_unique(array_filter(array_map('absint', $allowed_line_ids)))),
+			'tax' => array_values(array_unique(array_filter(array_map('absint', $allowed_tax_ids)))),
+		);
+		foreach ($guard['item_ids'] as $type => $baseline) {
+			$current = array_map('intval', array_keys($order->get_items($type)));
+			$allowed = array_values(array_unique(array_merge($baseline, isset($allowed_additions[$type]) ? $allowed_additions[$type] : array())));
+			sort($current, SORT_NUMERIC);
+			sort($allowed, SORT_NUMERIC);
+			if (array_diff($baseline, $current) || array_diff($current, $allowed)) {
+				throw new RuntimeException(__('A non-Merge order item changed outside immutable participant authority.', 'wc-order-splitter'));
+			}
+		}
+		$actual = self::immutable_signature($order, $guard['item_ids']);
+		if (!hash_equals((string) $guard['immutable_signature'], $actual)) {
+			throw new RuntimeException(__('Immutable non-Merge participant context changed after its approved checkpoint.', 'wc-order-splitter'));
+		}
+	}
+
+	private static function immutable_signature(WC_Order $order, array $item_ids) {
+		$items = array();
+		foreach ($item_ids as $type => $ids) {
+			foreach ($ids as $item_id) {
+				$item = $order->get_item($item_id);
+				if (!$item instanceof WC_Order_Item || $item->get_type() !== $type) {
+					throw new RuntimeException(__('An immutable Merge participant item disappeared or changed type.', 'wc-order-splitter'));
+				}
+				$state = array(
+					'id' => (int) $item_id,
+					'type' => (string) $item->get_type(),
+					'name' => (string) $item->get_name(),
+					'business_meta' => WCOS_Order_Item_Meta_Policy::business_metadata($item),
+				);
+				if ($item instanceof WC_Order_Item_Product) {
+					$state += array(
+						'product_id' => (int) $item->get_product_id(),
+						'variation_id' => (int) $item->get_variation_id(),
+						'tax_class' => (string) $item->get_tax_class(),
+					);
+				} elseif ($item instanceof WC_Order_Item_Shipping) {
+					$state += array(
+						'method_id' => (string) $item->get_method_id(),
+						'instance_id' => (int) $item->get_instance_id(),
+						'total' => (string) $item->get_total(),
+						'total_tax' => (string) $item->get_total_tax(),
+						'taxes' => self::canonicalize($item->get_taxes()),
+					);
+				} elseif ($item instanceof WC_Order_Item_Fee) {
+					$state += array(
+						'amount' => (string) $item->get_amount(),
+						'tax_class' => (string) $item->get_tax_class(),
+						'tax_status' => (string) $item->get_tax_status(),
+						'total' => (string) $item->get_total(),
+						'total_tax' => (string) $item->get_total_tax(),
+						'taxes' => self::canonicalize($item->get_taxes()),
+					);
+				} elseif ($item instanceof WC_Order_Item_Tax) {
+					$state += array(
+						'rate_id' => (int) $item->get_rate_id(),
+						'compound' => (bool) $item->get_compound(),
+						'rate_percent' => (string) $item->get_rate_percent(),
+					);
+				} elseif ($item instanceof WC_Order_Item_Coupon) {
+					$state += array(
+						'code' => (string) $item->get_code(),
+						'discount' => (string) $item->get_discount(),
+						'discount_tax' => (string) $item->get_discount_tax(),
+					);
+				}
+				$items[$type][(int) $item_id] = $state;
+			}
+		}
+		$contract = array(
+			'order_id' => (int) $order->get_id(),
+			'type' => (string) $order->get_type(),
+			'currency' => (string) $order->get_currency(),
+			'prices_include_tax' => (bool) $order->get_prices_include_tax(),
+			'transaction_id' => (string) $order->get_transaction_id(),
+			'customer_note' => (string) $order->get_customer_note(),
+			'parent_id' => (int) $order->get_parent_id(),
+			'created_via' => (string) $order->get_created_via(),
+			'items' => $items,
+		);
+		$secret = (string) wp_salt('auth');
+		$document = wp_json_encode(
+			array(
+				'schema_version' => 1,
+				'purpose' => 'merge_immutable_participant_v1',
+				'order_id' => (int) $order->get_id(),
+				'contract' => self::canonicalize($contract),
+			),
+			JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+		);
+		if ('' === $secret || !is_string($document) || '' === $document) {
+			throw new RuntimeException(__('Immutable Merge participant context could not be keyed.', 'wc-order-splitter'));
+		}
+		return hash_hmac('sha256', $document, $secret);
 	}
 
 	private static function participant_state(WC_Order $order) {
