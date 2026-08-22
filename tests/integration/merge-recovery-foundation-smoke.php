@@ -698,7 +698,10 @@ foreach (array('before_forward_relations', 'after_one_reciprocal_relation', 'aft
 	remove_action('wcos_merge_recovery_checkpoint', $window_fault, PHP_INT_MAX);
 	wcos_merge_recovery_assert($hit, 'Forward crash window did not execute: ' . $stage_under_test);
 	$window_source = wc_get_order($window_source->get_id());
-	WCOS_Operation_Journal::fail($window_source, $window_operation);
+	wcos_merge_recovery_assert(
+		WCOS_Operation_Journal::require_recovery($window_source, $window_operation),
+		'Forward crash retry did not dispatch: ' . $stage_under_test
+	);
 	$window_source = wc_get_order($window_source->get_id());
 	$window_target = wc_get_order($window_target->get_id());
 	wcos_merge_recovery_assert('completed' === WCOS_Operation_Journal::get($window_source, $window_operation)['status'], 'Forward crash retry did not complete: ' . $stage_under_test);
