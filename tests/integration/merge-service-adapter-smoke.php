@@ -92,12 +92,15 @@ function wcos_merge_service_order(WC_Product $product, $email, array $reduced_ma
 
 	if ($shipping) {
 		$shipping_item = new WC_Order_Item_Shipping();
-		$shipping_item->set_method_title('Supported target shipping');
-		$shipping_item->set_method_id('flat_rate');
-		$shipping_item->set_instance_id(9);
-		$shipping_item->set_total('3.00');
-		$shipping_item->set_total_tax('0.30');
-		$shipping_item->set_taxes(array('total' => array(701 => '0.30')));
+		$shipping_props = $shipping_item->set_props(array(
+			'method_title' => 'Supported target shipping',
+			'method_id' => 'flat_rate',
+			'instance_id' => 9,
+			'total' => '3.00',
+			'total_tax' => '0.30',
+			'taxes' => array('total' => array(701 => '0.30')),
+		));
+		wcos_merge_service_assert(!is_wp_error($shipping_props), 'Unable to set supported target shipping fixture props.');
 		$shipping_item->add_meta_data('Delivery window', 'morning', true);
 		$order->add_item($shipping_item);
 	}
