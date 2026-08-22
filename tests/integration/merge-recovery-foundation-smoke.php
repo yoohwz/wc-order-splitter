@@ -142,9 +142,10 @@ function wcos_merge_recovery_stage(WC_Order $source, WC_Order $target, $operatio
 	if ($forward) {
 		$retirement_candidate = WCOS_Merge_Retirement_Policy::NON_FORCE_TRASH_ARCHIVE;
 		$snapshot = WCOS_Operation_Journal::get($source, $operation_id)['context']['merge_recovery_snapshot'];
+		$source_id = $source->get_id();
 		do_action('wcos_merge_recovery_checkpoint', 'before_source_retirement', $source, $target, $operation_id);
 		$source->delete(false);
-		$source = wc_get_order($source->get_id());
+		$source = wc_get_order($source_id);
 		wcos_merge_recovery_assert($source instanceof WC_Order && 'trash' === $source->get_status(), 'Non-force retirement did not archive the staged source.');
 		WCOS_Merge_Recovery_Snapshot::assert_archive_preserved($snapshot, $source);
 		do_action('wcos_merge_recovery_checkpoint', 'after_source_retirement', $source, $target, $operation_id);
@@ -576,7 +577,9 @@ function wcos_merge_retirement_observe($candidate, WC_Product $product) {
 	list($source, $target, $target_item_id) = wcos_merge_recovery_stage($source, $target, $operation_id, false);
 	$status_filter = null;
 	if (WCOS_Merge_Retirement_Policy::NON_FORCE_TRASH_ARCHIVE === $candidate) {
+		$source_id = $source->get_id();
 		$source->delete(false);
+		$source = wc_get_order($source_id);
 	} else {
 		register_post_status('wc-merged-evidence', array('public' => false, 'show_in_admin_all_list' => false, 'show_in_admin_status_list' => false));
 		$status_filter = static function($statuses) { $statuses['wc-merged-evidence'] = 'Merged evidence'; return $statuses; };
