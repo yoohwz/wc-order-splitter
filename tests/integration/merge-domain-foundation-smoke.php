@@ -11,6 +11,13 @@ function wcos_merge_foundation_assert($condition, $message) {
 }
 
 function wcos_merge_foundation_order($email, $line_count = 1) {
+	$product = new WC_Product_Simple();
+	$product->set_name('Merge foundation deleted-product fixture');
+	$product->set_regular_price('10.00');
+	$product->set_price('10.00');
+	$product_id = $product->save();
+	wcos_merge_foundation_assert($product_id > 0, 'Unable to create historical product fixture.');
+
 	$order = wc_create_order();
 	$order->set_status('pending');
 	$order->set_currency('USD');
@@ -37,8 +44,7 @@ function wcos_merge_foundation_order($email, $line_count = 1) {
 	for ($index = 0; $index < $line_count; $index++) {
 		$item = new WC_Order_Item_Product();
 		$item->set_name('Persisted configured line');
-		$item->set_product_id(999999);
-		$item->set_variation_id(888888);
+		$item->set_product_id($product_id);
 		$item->set_quantity(1);
 		$item->set_subtotal('10.00');
 		$item->set_total('10.00');
@@ -50,6 +56,7 @@ function wcos_merge_foundation_order($email, $line_count = 1) {
 	}
 	$order->calculate_totals(false);
 	$order->save();
+	$product->delete(true);
 	return wc_get_order($order->get_id());
 }
 
