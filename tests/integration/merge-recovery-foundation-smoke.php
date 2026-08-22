@@ -465,7 +465,9 @@ $retirement = array(
 	wcos_merge_retirement_observe(WCOS_Merge_Retirement_Policy::NON_FORCE_TRASH_ARCHIVE, $managed),
 	wcos_merge_retirement_observe(WCOS_Merge_Retirement_Policy::DEDICATED_MERGED_ARCHIVE, $managed),
 );
-wcos_merge_recovery_assert(WCOS_Merge_Retirement_Policy::identifiers() === array_column($retirement, 'candidate'), 'Retirement evidence changed candidate authority.');
+$observed_candidates = array_column($retirement, 'candidate');
+sort($observed_candidates, SORT_STRING);
+wcos_merge_recovery_assert(WCOS_Merge_Retirement_Policy::identifiers() === $observed_candidates, 'Retirement evidence changed candidate authority.');
 
 /* Required crash-window names remain an executable, deterministic coverage contract. */
 $failure_windows = array(
