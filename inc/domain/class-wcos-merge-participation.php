@@ -85,14 +85,14 @@ final class WCOS_Merge_Participation {
 		if (!$fresh_source instanceof WC_Order || !$fresh_target instanceof WC_Order) {
 			return false;
 		}
-		$fresh_source->delete_meta_data_value(self::SOURCE_TARGET_META, $target_id);
-		$fresh_source->delete_meta_data_value(self::SOURCE_OPERATION_META, $operation_id);
-		$fresh_source->delete_meta_data_value(self::SOURCE_PAIR_FINGERPRINT_META, $pair_fingerprint);
+		self::delete_exact_value($fresh_source, self::SOURCE_TARGET_META, $target_id);
+		self::delete_exact_value($fresh_source, self::SOURCE_OPERATION_META, $operation_id);
+		self::delete_exact_value($fresh_source, self::SOURCE_PAIR_FINGERPRINT_META, $pair_fingerprint);
 		$fresh_source->save_meta_data();
 
 		$remaining_authorities = array();
 		if ('' !== $pair_fingerprint) {
-			$fresh_target->delete_meta_data_value(self::TARGET_AUTHORITY_META, self::authority_pointer($source_id, $operation_id, $pair_fingerprint));
+			self::delete_exact_value($fresh_target, self::TARGET_AUTHORITY_META, self::authority_pointer($source_id, $operation_id, $pair_fingerprint));
 		}
 		foreach (self::meta_values($fresh_target, self::TARGET_AUTHORITY_META) as $pointer) {
 			$authority = self::parse_authority_pointer($pointer);
@@ -107,10 +107,10 @@ final class WCOS_Merge_Participation {
 			$operation_still_referenced = $operation_still_referenced || $operation_id === $authority['operation_id'];
 		}
 		if (!$source_still_referenced) {
-			$fresh_target->delete_meta_data_value(self::TARGET_SOURCE_META, $source_id);
+			self::delete_exact_value($fresh_target, self::TARGET_SOURCE_META, $source_id);
 		}
 		if (!$operation_still_referenced) {
-			$fresh_target->delete_meta_data_value(self::TARGET_OPERATION_META, $operation_id);
+			self::delete_exact_value($fresh_target, self::TARGET_OPERATION_META, $operation_id);
 		}
 		$fresh_target->save_meta_data();
 
@@ -308,6 +308,21 @@ final class WCOS_Merge_Participation {
 			}
 		}
 		$order->add_meta_data($key, $value, false);
+	}
+
+	private static function delete_exact_value(WC_Order $order, $key, $value) {
+		$key = (string) $key;
+		$value = (string) $value;
+		foreach ($order->get_meta_data() as $meta) {
+			if (!is_object($meta) || !method_exists($meta, 'get_data')) {
+				continue;
+			}
+			$data = $meta->get_data();
+			if (isset($data['key']) && $key === (string) $data['key']
+				&& array_key_exists('value', $data) && $value === (string) $data['value']) {
+				$order->delete_meta_data_value($key, $data['value']);
+			}
+		}
 	}
 
 	private static function source_values_match(WC_Order $source, $target_id, $operation_id, $pair_fingerprint) {

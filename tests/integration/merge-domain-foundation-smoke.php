@@ -426,10 +426,13 @@ delete_option('wcos_manual_reconcile_block_' . $target_id);
 
 /* Retry cleanup from the partial state where source metadata is already gone. */
 $fresh_source = wc_get_order($source_id);
-$fresh_source->delete_meta_data_value(WCOS_Merge_Participation::SOURCE_TARGET_META, $target_id);
-$fresh_source->delete_meta_data_value(WCOS_Merge_Participation::SOURCE_OPERATION_META, $operation_id);
-$fresh_source->delete_meta_data_value(WCOS_Merge_Participation::SOURCE_PAIR_FINGERPRINT_META, $report['pair_fingerprint']);
+$fresh_source->delete_meta_data(WCOS_Merge_Participation::SOURCE_TARGET_META);
+$fresh_source->delete_meta_data(WCOS_Merge_Participation::SOURCE_OPERATION_META);
+$fresh_source->delete_meta_data(WCOS_Merge_Participation::SOURCE_PAIR_FINGERPRINT_META);
 $fresh_source->save_meta_data();
+wcos_merge_foundation_assert(empty(wcos_merge_foundation_meta_values(wc_get_order($source_id), WCOS_Merge_Participation::SOURCE_TARGET_META)), 'Partial cleanup fixture retained source target metadata.');
+wcos_merge_foundation_assert(empty(wcos_merge_foundation_meta_values(wc_get_order($source_id), WCOS_Merge_Participation::SOURCE_OPERATION_META)), 'Partial cleanup fixture retained source operation metadata.');
+wcos_merge_foundation_assert(empty(wcos_merge_foundation_meta_values(wc_get_order($source_id), WCOS_Merge_Participation::SOURCE_PAIR_FINGERPRINT_META)), 'Partial cleanup fixture retained source fingerprint metadata.');
 wcos_merge_foundation_assert(in_array($source_id . '|' . $operation_id . '|' . $report['pair_fingerprint'], array_map('strval', wcos_merge_foundation_meta_values(wc_get_order($target_id), WCOS_Merge_Participation::TARGET_AUTHORITY_META)), true), 'Partial cleanup fixture lost target authority before retry.');
 wcos_merge_foundation_assert(WCOS_Merge_Participation::cleanup($source, $target, $operation_id), 'Participation cleanup retry failed.');
 wcos_merge_foundation_assert(WCOS_Merge_Participation::cleanup($source, $target, $operation_id), 'Participation cleanup was not idempotent after retry.');
