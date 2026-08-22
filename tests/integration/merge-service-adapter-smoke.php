@@ -173,7 +173,7 @@ $forward_suites = array(
 	'forward_after_verification_before_commit' => 'after_verification_before_commit',
 	'forward_after_commit_before_complete' => 'after_commit_before_complete',
 );
-wcos_merge_service_assert(in_array($suite, array_merge(array('all', 'core', 'crash_pre', 'crash_post_aux', 'drift_stock'), array_keys($forward_suites)), true), 'Unknown Merge service smoke suite.');
+wcos_merge_service_assert(in_array($suite, array_merge(array('all', 'core', 'crash_pre', 'response_loss', 'lease_loss', 'stock_guard_before', 'stock_guard_after', 'drift_stock'), array_keys($forward_suites)), true), 'Unknown Merge service smoke suite.');
 
 try {
 	$managed = wcos_merge_service_product('Merge managed fixture');
@@ -336,7 +336,7 @@ try {
 	}
 	}
 
-	if (in_array($suite, array('all', 'crash_post_aux'), true)) {
+	if (in_array($suite, array('all', 'response_loss'), true)) {
 	/* Response loss after complete replays the exact bounded result without writes. */
 	list($source, $target) = wcos_merge_service_pair($managed, 'response-loss');
 	$operation_id = 'merge-service-response-loss-' . wp_generate_uuid4();
@@ -358,7 +358,9 @@ try {
 	$result = (new WCOS_Merge_WooCommerce_Adapter())->merge(wc_get_order($source->get_id()), wc_get_order($target->get_id()), $operation_id, 2);
 	wcos_merge_service_assert('completed' === $result['status'], 'Post-complete response loss did not replay safely.');
 	wcos_merge_service_cleanup($source, $target, $operation_id);
+	}
 
+	if (in_array($suite, array('all', 'lease_loss'), true)) {
 	/* Losing both participant leases between durable boundaries stops writes and recovers safely. */
 	list($source, $target) = wcos_merge_service_pair($managed, 'lease-loss');
 	$operation_id = 'merge-service-lease-loss-' . wp_generate_uuid4();
@@ -386,9 +388,12 @@ try {
 	wcos_merge_service_assert(in_array(wcos_merge_service_status($source, $operation_id), array('compensated', 'manual_reconciliation'), true), 'Lease loss did not preserve safe durable authority.');
 	wcos_merge_service_assert($stock_before === WCOS_Order_Contract_Snapshot::product_stock(wc_get_order($source->get_id())), 'Lease-loss recovery changed physical stock.');
 	wcos_merge_service_cleanup($source, $target, $operation_id);
+	}
 
+	if (in_array($suite, array('all', 'stock_guard_before', 'stock_guard_after'), true)) {
 	/* Before-write attempts are blocked; after-write evidence becomes pair-wide manual-only. */
-	foreach (array('blocked_before_write', 'observed_after_write') as $stock_phase) {
+	$stock_phases = 'stock_guard_before' === $suite ? array('blocked_before_write') : ('stock_guard_after' === $suite ? array('observed_after_write') : array('blocked_before_write', 'observed_after_write'));
+	foreach ($stock_phases as $stock_phase) {
 		list($source, $target) = wcos_merge_service_pair($managed, 'stock-guard-' . $stock_phase);
 		$operation_id = 'merge-service-stock-guard-' . $stock_phase . '-' . wp_generate_uuid4();
 		$stock_before = WCOS_Order_Contract_Snapshot::product_stock($source);

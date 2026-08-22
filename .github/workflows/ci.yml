@@ -496,8 +496,17 @@ jobs:
       - name: Verify hardened Merge pre-complete crash contract
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php forward_after_commit_before_complete
 
-      - name: Verify hardened Merge response-loss, lease-loss, and stock-guard contracts
-        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php crash_post_aux
+      - name: Verify hardened Merge response-loss contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php response_loss
+
+      - name: Verify hardened Merge lease-loss contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php lease_loss
+
+      - name: Verify hardened Merge blocked stock-write contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php stock_guard_before
+
+      - name: Verify hardened Merge observed stock-write contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php stock_guard_after
 
       - name: Verify hardened Merge immutable-context and stock contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php drift_stock
