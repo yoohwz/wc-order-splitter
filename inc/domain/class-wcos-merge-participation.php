@@ -45,11 +45,13 @@ final class WCOS_Merge_Participation {
 		self::set_exact_scalar($fresh_source, self::SOURCE_OPERATION_META, $operation_id);
 		self::set_exact_scalar($fresh_source, self::SOURCE_PAIR_FINGERPRINT_META, $pair_fingerprint);
 		$fresh_source->save_meta_data();
+		do_action('wcos_merge_recovery_checkpoint', 'after_one_reciprocal_relation', $fresh_source, $fresh_target, $operation_id);
 
 		self::add_exact_repeatable($fresh_target, self::TARGET_SOURCE_META, $source_id);
 		self::add_exact_repeatable($fresh_target, self::TARGET_OPERATION_META, $operation_id);
 		self::add_exact_repeatable($fresh_target, self::TARGET_AUTHORITY_META, self::authority_pointer($source_id, $operation_id, $pair_fingerprint));
 		$fresh_target->save_meta_data();
+		do_action('wcos_merge_recovery_checkpoint', 'after_both_relations_before_verification', $fresh_source, $fresh_target, $operation_id);
 
 		$source_after = wc_get_order($source_id);
 		$target_after = wc_get_order($target_id);
@@ -291,6 +293,24 @@ final class WCOS_Merge_Participation {
 			}
 			return false;
 		}));
+	}
+
+	/**
+	 * Exact reciprocal relation state for one authoritative pair.
+	 *
+	 * Values are booleans so recovery never treats unrelated target authorities
+	 * as belonging to the operation being repaired.
+	 */
+	public static function state_for_pair(WC_Order $source, WC_Order $target, $operation_id, $pair_fingerprint) {
+		$operation_id = sanitize_key((string) $operation_id);
+		$pair_fingerprint = self::normalized_fingerprint($pair_fingerprint);
+		if ('' === $operation_id || '' === $pair_fingerprint) {
+			return array('source' => false, 'target' => false);
+		}
+		return array(
+			'source' => self::source_values_match($source, $target->get_id(), $operation_id, $pair_fingerprint),
+			'target' => self::target_values_contain($target, $source->get_id(), $operation_id, $pair_fingerprint),
+		);
 	}
 
 	private static function set_exact_scalar(WC_Order $order, $key, $value) {

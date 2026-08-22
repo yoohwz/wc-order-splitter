@@ -144,6 +144,18 @@ final class WCOS_Operation_Lock {
 			);
 	}
 
+	/** Return the in-process token only to the operation that currently owns it. */
+	public static function current_token_for($order_id, $operation_id) {
+		$order_id = absint($order_id);
+		$operation_id = sanitize_key((string) $operation_id);
+		if (!self::is_current_owned_for($order_id, $operation_id)) {
+			return false;
+		}
+		return isset(self::$local_leases[$order_id]['lease_token'])
+			? (string) self::$local_leases[$order_id]['lease_token']
+			: false;
+	}
+
 	public static function assert_current_owned($order_id) {
 		if (!self::is_current_owned($order_id)) {
 			throw new RuntimeException(__('The order mutation lease is no longer owned by this worker.', 'wc-order-splitter'));

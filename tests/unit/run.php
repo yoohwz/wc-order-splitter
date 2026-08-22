@@ -30,6 +30,7 @@ require_once $root . 'class-wcos-mutation-contract.php';
 require_once $root . 'class-wcos-split-plan.php';
 require_once $root . 'class-wcos-merge-retirement-policy.php';
 require_once $root . 'class-wcos-merge-plan.php';
+require_once $root . 'class-wcos-merge-recovery-state-graph.php';
 
 $tests = array();
 
@@ -263,6 +264,35 @@ $tests['merge retirement candidates preserve archive and remain unselected'] = s
 	}
 	WCOS_Merge_Retirement_Policy::assert_archive_preserved(str_repeat('a', 64), str_repeat('a', 64));
 	WCOS_Merge_Retirement_Policy::assert_active_ownership_conserved(str_repeat('b', 64), str_repeat('b', 64));
+};
+
+$tests['merge recovery graph accepts forward and source-first compensation paths'] = static function() {
+	assert_true(WCOS_Merge_Recovery_State_Graph::transition_allowed('no_commercial_write', 'target_persisted'), 'Initial target transition was rejected.');
+	assert_true(WCOS_Merge_Recovery_State_Graph::transition_allowed('source_retired', 'source_relation_persisted'), 'Reciprocal relation transition was rejected.');
+	assert_true(WCOS_Merge_Recovery_State_Graph::transition_allowed('commercial_verified', 'committed'), 'Verified commit transition was rejected.');
+	assert_true(WCOS_Merge_Recovery_State_Graph::transition_allowed('compensating', 'source_restored'), 'Source-first compensation was rejected.');
+	assert_true(WCOS_Merge_Recovery_State_Graph::transition_allowed('source_restored', 'target_restored'), 'Target cleanup after source restore was rejected.');
+	assert_same(false, WCOS_Merge_Recovery_State_Graph::transition_allowed('target_persisted', 'completed'));
+	assert_same(false, WCOS_Merge_Recovery_State_Graph::transition_allowed('compensating', 'target_restored'));
+};
+
+$tests['merge recovery checkpoints are self-verifying'] = static function() {
+	$record = array(
+		'source_order_id' => 40,
+		'operation_id' => 'merge-recovery-unit',
+		'fingerprint' => str_repeat('a', 64),
+		'checkpoints' => array(),
+	);
+	$context = WCOS_Merge_Recovery_State_Graph::seal_context($record, array(
+		'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::NO_WRITE,
+		'merge_source_signature_after' => str_repeat('b', 64),
+	));
+	$record['checkpoints'][] = array('context' => $context);
+	assert_same(WCOS_Merge_Recovery_State_Graph::NO_WRITE, WCOS_Merge_Recovery_State_Graph::assert_record($record));
+	$record['checkpoints'][0]['context']['merge_source_signature_after'] = str_repeat('c', 64);
+	assert_throws(static function() use ($record) {
+		WCOS_Merge_Recovery_State_Graph::assert_record($record);
+	}, RuntimeException::class);
 };
 
 $failures = 0;

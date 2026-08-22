@@ -18,6 +18,8 @@ final class WCOS_Merge_Journal_Context {
 		}
 
 		$source_signature = WCOS_Order_Contract_Snapshot::source_signature($source);
+		$archive_signature = WCOS_Merge_Recovery_Snapshot::archive_commercial_signature($source);
+		$active_signature = WCOS_Merge_Recovery_Snapshot::active_economic_signature(array($source, $target), $price_precision, $source_id);
 		$authority = array(
 			'source_order_id' => $source_id,
 			'target_order_id' => $target_id,
@@ -35,10 +37,10 @@ final class WCOS_Merge_Journal_Context {
 			'retirement_policy_selected' => false,
 			'archive_source_signature_before' => isset($evidence['archive_source_signature_before'])
 				? sanitize_key((string) $evidence['archive_source_signature_before'])
-				: $source_signature,
+				: $archive_signature,
 			'active_ownership_before_signature' => isset($evidence['active_ownership_before_signature'])
 				? sanitize_key((string) $evidence['active_ownership_before_signature'])
-				: '',
+				: $active_signature,
 			'participation_schema_version' => WCOS_Merge_Participation::SCHEMA_VERSION,
 		);
 		$authority = self::canonical_authority($authority);
