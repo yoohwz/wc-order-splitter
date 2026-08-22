@@ -48,10 +48,10 @@ final class WCOS_Mutation_Gateway {
 		return (new WCOS_Duplicate_WooCommerce_Adapter())->preflight($source, $operation_id, $confirmed_precision);
 	}
 
-	public function merge(WC_Order $source, WC_Order $target, $operation_id, $confirmed_precision = null) {
+	public function merge(WC_Order $source, WC_Order $target, $operation_id, $confirmed_precision = null, array $confirmation_authority = array()) {
 		WCOS_Feature_Gates::assert_enabled(WCOS_Feature_Gates::MERGE);
 		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::MERGE, $source, $target);
-		return (new WCOS_Merge_WooCommerce_Adapter())->merge($source, $target, $operation_id, $confirmed_precision);
+		return (new WCOS_Merge_WooCommerce_Adapter())->merge($source, $target, $operation_id, $confirmed_precision, $confirmation_authority);
 	}
 
 	public function merge_preflight(WC_Order $source, WC_Order $target, $operation_id = '', $confirmed_precision = null) {
