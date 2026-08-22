@@ -481,8 +481,23 @@ jobs:
       - name: Verify hardened Merge pre-retirement crash contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php crash_pre
 
-      - name: Verify hardened Merge post-retirement crash contracts
-        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php crash_post
+      - name: Verify hardened Merge before-relations crash contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php forward_before_forward_relations
+
+      - name: Verify hardened Merge partial-relations crash contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php forward_after_one_reciprocal_relation
+
+      - name: Verify hardened Merge post-relations crash contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php forward_after_both_relations_before_verification
+
+      - name: Verify hardened Merge pre-commit crash contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php forward_after_verification_before_commit
+
+      - name: Verify hardened Merge pre-complete crash contract
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php forward_after_commit_before_complete
+
+      - name: Verify hardened Merge response-loss, lease-loss, and stock-guard contracts
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php crash_post_aux
 
       - name: Verify hardened Merge immutable-context and stock contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php drift_stock

@@ -166,7 +166,14 @@ $manage_stock_before = get_option('woocommerce_manage_stock', 'yes');
 update_option('woocommerce_manage_stock', 'yes');
 $products = array();
 $suite = isset($args[0]) ? sanitize_key((string) $args[0]) : 'all';
-wcos_merge_service_assert(in_array($suite, array('all', 'core', 'crash_pre', 'crash_post', 'drift_stock'), true), 'Unknown Merge service smoke suite.');
+$forward_suites = array(
+	'forward_before_forward_relations' => 'before_forward_relations',
+	'forward_after_one_reciprocal_relation' => 'after_one_reciprocal_relation',
+	'forward_after_both_relations_before_verification' => 'after_both_relations_before_verification',
+	'forward_after_verification_before_commit' => 'after_verification_before_commit',
+	'forward_after_commit_before_complete' => 'after_commit_before_complete',
+);
+wcos_merge_service_assert(in_array($suite, array_merge(array('all', 'core', 'crash_pre', 'crash_post_aux', 'drift_stock'), array_keys($forward_suites)), true), 'Unknown Merge service smoke suite.');
 
 try {
 	$managed = wcos_merge_service_product('Merge managed fixture');
@@ -296,15 +303,15 @@ try {
 	wcos_merge_service_cleanup($source, $target, $operation_id);
 	}
 
-	if (in_array($suite, array('all', 'crash_post'), true)) {
+	if ('all' === $suite || isset($forward_suites[$suite])) {
 	/* Post-retirement forward-repair windows complete idempotently on retry. */
-	$forward_windows = array(
+	$forward_windows = 'all' === $suite ? array(
 		'before_forward_relations',
 		'after_one_reciprocal_relation',
 		'after_both_relations_before_verification',
 		'after_verification_before_commit',
 		'after_commit_before_complete',
-	);
+	) : array($forward_suites[$suite]);
 	foreach ($forward_windows as $stage_under_test) {
 		list($source, $target) = wcos_merge_service_pair($managed, 'forward-' . $stage_under_test);
 		$operation_id = 'merge-service-forward-' . $stage_under_test . '-' . wp_generate_uuid4();
@@ -327,7 +334,9 @@ try {
 		wcos_merge_service_assert('completed' === $result['status'], 'Real forward service crash did not complete on retry: ' . $stage_under_test);
 		wcos_merge_service_cleanup($source, $target, $operation_id);
 	}
+	}
 
+	if (in_array($suite, array('all', 'crash_post_aux'), true)) {
 	/* Response loss after complete replays the exact bounded result without writes. */
 	list($source, $target) = wcos_merge_service_pair($managed, 'response-loss');
 	$operation_id = 'merge-service-response-loss-' . wp_generate_uuid4();
