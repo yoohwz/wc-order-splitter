@@ -127,6 +127,10 @@ jobs:
             'inc/domain/class-wcos-merge-context-signature.php' \
             'inc/domain/class-wcos-merge-journal-context.php' \
             'inc/domain/class-wcos-merge-participation.php' \
+            'inc/domain/class-wcos-merge-recovery-snapshot.php' \
+            'inc/domain/class-wcos-merge-recovery-state-graph.php' \
+            'inc/domain/class-wcos-merge-commit-guard.php' \
+            'inc/domain/class-wcos-merge-compensator.php' \
             'inc/domain/class-wcos-merge-preflight.php' \
             'inc/domain/class-wcos-merge-retirement-policy.php' \
             'css/p2-split-strategy-admin.css' \
@@ -183,6 +187,10 @@ jobs:
             'wc-order-splitter/inc/domain/class-wcos-merge-context-signature.php' \
             'wc-order-splitter/inc/domain/class-wcos-merge-journal-context.php' \
             'wc-order-splitter/inc/domain/class-wcos-merge-participation.php' \
+            'wc-order-splitter/inc/domain/class-wcos-merge-recovery-snapshot.php' \
+            'wc-order-splitter/inc/domain/class-wcos-merge-recovery-state-graph.php' \
+            'wc-order-splitter/inc/domain/class-wcos-merge-commit-guard.php' \
+            'wc-order-splitter/inc/domain/class-wcos-merge-compensator.php' \
             'wc-order-splitter/inc/domain/class-wcos-merge-preflight.php' \
             'wc-order-splitter/inc/domain/class-wcos-merge-retirement-policy.php' \
             'wc-order-splitter/css/p2-split-strategy-admin.css' \

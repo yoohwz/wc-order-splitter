@@ -134,6 +134,10 @@ jobs:
           grep -Fq 'class-wcos-merge-context-signature.php' inc/cores/script.php
           grep -Fq 'class-wcos-merge-journal-context.php' inc/cores/script.php
           grep -Fq 'class-wcos-merge-participation.php' inc/cores/script.php
+          grep -Fq 'class-wcos-merge-recovery-snapshot.php' inc/cores/script.php
+          grep -Fq 'class-wcos-merge-recovery-state-graph.php' inc/cores/script.php
+          grep -Fq 'class-wcos-merge-commit-guard.php' inc/cores/script.php
+          grep -Fq 'class-wcos-merge-compensator.php' inc/cores/script.php
           grep -Fq 'class-wcos-merge-preflight.php' inc/cores/script.php
           grep -Fq 'class-wcos-merge-retirement-policy.php' inc/cores/script.php
           grep -Fq "throw new RuntimeException(__('The hardened merge service has not been implemented.'" inc/domain/class-wcos-mutation-gateway.php
@@ -245,6 +249,10 @@ jobs:
             'inc/domain/class-wcos-merge-context-signature.php' \
             'inc/domain/class-wcos-merge-journal-context.php' \
             'inc/domain/class-wcos-merge-participation.php' \
+            'inc/domain/class-wcos-merge-recovery-snapshot.php' \
+            'inc/domain/class-wcos-merge-recovery-state-graph.php' \
+            'inc/domain/class-wcos-merge-commit-guard.php' \
+            'inc/domain/class-wcos-merge-compensator.php' \
             'inc/domain/class-wcos-merge-preflight.php' \
             'inc/domain/class-wcos-merge-retirement-policy.php' \
             'css/p2-split-strategy-admin.css' \
@@ -304,6 +312,10 @@ jobs:
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-context-signature.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-journal-context.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-participation.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-recovery-snapshot.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-recovery-state-graph.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-commit-guard.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-compensator.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-preflight.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-retirement-policy.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/js/p2-split-strategy-admin.js'
@@ -449,6 +461,9 @@ jobs:
 
       - name: Verify hard-off Merge domain foundation contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-domain-foundation-smoke.php
+
+      - name: Verify hard-off Merge recovery and retirement evidence
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-recovery-foundation-smoke.php
 
       - name: Verify duplicate integrity, idempotency, and recovery
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/duplicate-smoke.php
