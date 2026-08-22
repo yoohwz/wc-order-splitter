@@ -349,7 +349,12 @@ wcos_merge_recovery_assert(WCOS_Operation_Journal::checkpoint($multi_source, $mu
 	'merge_target_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($multi_target),
 	'merge_target_item_ids' => array($multi_added_one, $extra_target_line->get_id()),
 )), 'Multi-component recovery checkpoints were not durable.');
-$multi_windows = array('source_line_restored', 'source_tax_restored', 'target_added_line_removed', 'target_tax_restored');
+$multi_windows = array(
+	'before_source_line_restored_checkpoint',
+	'before_source_tax_restored_checkpoint',
+	'before_target_added_line_removed_checkpoint',
+	'before_target_tax_restored_checkpoint',
+);
 $executed_multi_windows = array();
 foreach ($multi_windows as $multi_window_index => $multi_window) {
 	$hit = false;
