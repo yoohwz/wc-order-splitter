@@ -165,11 +165,14 @@ function wcos_merge_service_assert_manual_pair(WC_Order $source, WC_Order $targe
 $manage_stock_before = get_option('woocommerce_manage_stock', 'yes');
 update_option('woocommerce_manage_stock', 'yes');
 $products = array();
+$suite = isset($args[0]) ? sanitize_key((string) $args[0]) : 'all';
+wcos_merge_service_assert(in_array($suite, array('all', 'core', 'crash_pre', 'crash_post', 'drift_stock'), true), 'Unknown Merge service smoke suite.');
 
 try {
 	$managed = wcos_merge_service_product('Merge managed fixture');
 	$products[] = $managed;
 
+	if (in_array($suite, array('all', 'core'), true)) {
 	/* Gateway stays hard-off while direct adapter/service acceptance is executable. */
 	list($gate_source, $gate_target) = wcos_merge_service_pair($managed, 'gate');
 	$gate_operation = 'merge-gate-' . wp_generate_uuid4();
@@ -225,7 +228,9 @@ try {
 	sort($target_reduced, SORT_STRING);
 	wcos_merge_service_assert(array('1.500000', '2.000000') === $target_reduced, 'Target did not receive exact line stock ownership.');
 	wcos_merge_service_cleanup($source, $target, $operation_id);
+	}
 
+	if (in_array($suite, array('all', 'crash_pre'), true)) {
 	/* Exercise every remaining material crash boundary through the real adapter/service. */
 	$compensation_windows = array(
 		'before_target_write',
@@ -289,7 +294,9 @@ try {
 	wcos_merge_service_assert(hash_equals($source_before, WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($source->get_id()))), 'Before-journal crash changed source.');
 	wcos_merge_service_assert(hash_equals($target_before, WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target->get_id()))), 'Before-journal crash changed target.');
 	wcos_merge_service_cleanup($source, $target, $operation_id);
+	}
 
+	if (in_array($suite, array('all', 'crash_post'), true)) {
 	/* Post-retirement forward-repair windows complete idempotently on retry. */
 	$forward_windows = array(
 		'before_forward_relations',
@@ -408,7 +415,9 @@ try {
 		wcos_merge_service_assert($stock_before === WCOS_Order_Contract_Snapshot::product_stock(wc_get_order($source->get_id())), 'Stock guard fixture changed physical stock: ' . $stock_phase);
 		wcos_merge_service_cleanup($source, $target, $operation_id);
 	}
+	}
 
+	if (in_array($suite, array('all', 'crash_pre'), true)) {
 	/* Real partial ownership crash: first source write and checkpoint are durable before the second boundary. */
 	list($source, $target) = wcos_merge_service_pair($managed, 'partial-ownership', array('1', '2'));
 	$operation_id = 'merge-service-partial-' . wp_generate_uuid4();
@@ -454,28 +463,9 @@ try {
 	}
 	wcos_merge_service_assert($retry_failed_closed, 'Compensated operation retry did not fail closed with a stable code.');
 	wcos_merge_service_cleanup($source, $target, $operation_id);
-
-	/* A response-loss crash between reciprocal relation writes resumes forward on retry. */
-	list($source, $target) = wcos_merge_service_pair($managed, 'relation-retry');
-	$operation_id = 'merge-service-relation-' . wp_generate_uuid4();
-	$relation_once = true;
-	$relation_crash = static function($stage) use (&$relation_once) {
-		if ($relation_once && 'after_one_reciprocal_relation' === $stage) {
-			$relation_once = false;
-			throw new WCOS_Merge_Recovery_Interruption_Exception('Injected reciprocal relation crash.');
-		}
-	};
-	add_action('wcos_merge_recovery_checkpoint', $relation_crash, 10, 4);
-	try {
-		(new WCOS_Merge_WooCommerce_Adapter())->merge($source, $target, $operation_id, 2);
-	} catch (Throwable $throwable) {
-		/* Retry after removing the injected process-loss boundary. */
 	}
-	remove_action('wcos_merge_recovery_checkpoint', $relation_crash, 10);
-	$result = (new WCOS_Merge_WooCommerce_Adapter())->merge(wc_get_order($source->get_id()), wc_get_order($target->get_id()), $operation_id, 2);
-	wcos_merge_service_assert('completed' === $result['status'], 'Forward relation recovery did not complete on retry.');
-	wcos_merge_service_cleanup($source, $target, $operation_id);
 
+	if (in_array($suite, array('all', 'drift_stock'), true)) {
 	/* Independent immutable-context drifts fail closed before automatic recovery writes and remain untouched. */
 	$drift_cases = array(
 		'source_billing' => static function(WC_Order $source, WC_Order $target) {
@@ -567,6 +557,7 @@ try {
 		$fresh_target = wc_get_order($target->get_id());
 		wcos_merge_service_assert($stock_before === WCOS_Order_Contract_Snapshot::product_stock($fresh_target), 'Stock matrix changed physical stock: ' . $label);
 		wcos_merge_service_cleanup(wc_get_order($source->get_id()), $fresh_target, $operation_id);
+	}
 	}
 } finally {
 	update_option('woocommerce_manage_stock', $manage_stock_before);

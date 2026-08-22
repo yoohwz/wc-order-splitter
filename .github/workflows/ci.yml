@@ -475,8 +475,17 @@ jobs:
       - name: Verify hard-off Merge recovery and retirement evidence
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-recovery-foundation-smoke.php
 
-      - name: Verify hardened Merge service, adapter, recovery, and stock contracts
-        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php
+      - name: Verify hardened Merge service and adapter core contracts
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php core
+
+      - name: Verify hardened Merge pre-retirement crash contracts
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php crash_pre
+
+      - name: Verify hardened Merge post-retirement crash contracts
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php crash_post
+
+      - name: Verify hardened Merge immutable-context and stock contracts
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php drift_stock
 
       - name: Verify duplicate integrity, idempotency, and recovery
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/duplicate-smoke.php
