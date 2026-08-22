@@ -131,6 +131,8 @@ function wcos_merge_service_pair(WC_Product $product, $label, array $source_mark
 }
 
 function wcos_merge_service_cleanup(WC_Order $source, WC_Order $target, $operation_id) {
+	delete_option('wcos_manual_reconcile_block_' . $source->get_id());
+	delete_option('wcos_manual_reconcile_block_' . $target->get_id());
 	$fresh_source = wc_get_order($source->get_id());
 	if ($fresh_source instanceof WC_Order) {
 		WCOS_Operation_Journal::delete($fresh_source, $operation_id);
@@ -207,6 +209,185 @@ try {
 	sort($target_reduced, SORT_STRING);
 	wcos_merge_service_assert(array('1.500000', '2.000000') === $target_reduced, 'Target did not receive exact line stock ownership.');
 	wcos_merge_service_cleanup($source, $target, $operation_id);
+
+	/* Exercise every remaining material crash boundary through the real adapter/service. */
+	$compensation_windows = array(
+		'before_target_write',
+		'after_first_target_line_persistence',
+		'after_all_target_lines_before_target_money',
+		'after_target_money_tax_persistence',
+		'after_ownership_migration_before_retirement',
+		'before_source_retirement',
+		'after_non_force_source_retirement',
+	);
+	foreach ($compensation_windows as $stage_under_test) {
+		list($source, $target) = wcos_merge_service_pair($managed, 'crash-' . $stage_under_test, array('1', '2'));
+		$operation_id = 'merge-service-crash-' . $stage_under_test . '-' . wp_generate_uuid4();
+		$stock_before = WCOS_Order_Contract_Snapshot::product_stock($source);
+		$hit = false;
+		$crash = static function($stage) use ($stage_under_test, &$hit) {
+			if (!$hit && $stage_under_test === $stage) {
+				$hit = true;
+				throw new WCOS_Merge_Recovery_Interruption_Exception('Injected service crash at ' . $stage_under_test);
+			}
+		};
+		add_action('wcos_merge_mutation_checkpoint', $crash, 10, 4);
+		try {
+			(new WCOS_Merge_WooCommerce_Adapter())->merge($source, $target, $operation_id, 2);
+		} catch (Throwable $throwable) {
+			/* The synchronous recovery result is asserted below. */
+		}
+		remove_action('wcos_merge_mutation_checkpoint', $crash, 10);
+		wcos_merge_service_assert($hit, 'Real service crash boundary did not execute: ' . $stage_under_test);
+		$status = wcos_merge_service_status($source, $operation_id);
+		wcos_merge_service_assert(in_array($status, array('compensated', 'manual_reconciliation'), true), 'Real service crash did not reach a safe outcome: ' . $stage_under_test);
+		$fresh_source = wc_get_order($source->get_id());
+		wcos_merge_service_assert($stock_before === WCOS_Order_Contract_Snapshot::product_stock($fresh_source), 'Real service crash changed physical stock: ' . $stage_under_test);
+		if ('manual_reconciliation' === $status) {
+			wcos_merge_service_assert_manual_pair($source, $target, $operation_id);
+		}
+		wcos_merge_service_cleanup($source, $target, $operation_id);
+	}
+
+	/* A failure before journal authority performs no commercial or journal write. */
+	list($source, $target) = wcos_merge_service_pair($managed, 'before-journal', array('1'));
+	$operation_id = 'merge-service-before-journal-' . wp_generate_uuid4();
+	$source_before = WCOS_Merge_Recovery_Snapshot::participant_signature($source);
+	$target_before = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
+	$before_journal_hit = false;
+	$before_journal = static function($stage) use (&$before_journal_hit) {
+		if ('before_journal_start' === $stage) {
+			$before_journal_hit = true;
+			throw new WCOS_Merge_Recovery_Interruption_Exception('Injected crash before journal start.');
+		}
+	};
+	add_action('wcos_merge_mutation_checkpoint', $before_journal, 10, 4);
+	try {
+		(new WCOS_Merge_WooCommerce_Adapter())->merge($source, $target, $operation_id, 2);
+	} catch (Throwable $throwable) {
+		/* No journal exists yet. */
+	}
+	remove_action('wcos_merge_mutation_checkpoint', $before_journal, 10);
+	wcos_merge_service_assert($before_journal_hit, 'Before-journal service crash did not execute.');
+	wcos_merge_service_assert(null === WCOS_Operation_Journal::get(wc_get_order($source->get_id()), $operation_id), 'Before-journal crash created authority.');
+	wcos_merge_service_assert(hash_equals($source_before, WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($source->get_id()))), 'Before-journal crash changed source.');
+	wcos_merge_service_assert(hash_equals($target_before, WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target->get_id()))), 'Before-journal crash changed target.');
+	wcos_merge_service_cleanup($source, $target, $operation_id);
+
+	/* Post-retirement forward-repair windows complete idempotently on retry. */
+	$forward_windows = array(
+		'before_forward_relations',
+		'after_one_reciprocal_relation',
+		'after_both_relations_before_verification',
+		'after_verification_before_commit',
+		'after_commit_before_complete',
+	);
+	foreach ($forward_windows as $stage_under_test) {
+		list($source, $target) = wcos_merge_service_pair($managed, 'forward-' . $stage_under_test);
+		$operation_id = 'merge-service-forward-' . $stage_under_test . '-' . wp_generate_uuid4();
+		$hit = false;
+		$crash = static function($stage) use ($stage_under_test, &$hit) {
+			if (!$hit && $stage_under_test === $stage) {
+				$hit = true;
+				throw new WCOS_Merge_Recovery_Interruption_Exception('Injected forward crash at ' . $stage_under_test);
+			}
+		};
+		add_action('wcos_merge_recovery_checkpoint', $crash, 10, 4);
+		try {
+			(new WCOS_Merge_WooCommerce_Adapter())->merge($source, $target, $operation_id, 2);
+		} catch (Throwable $throwable) {
+			/* Retry below after removing the one-shot fault. */
+		}
+		remove_action('wcos_merge_recovery_checkpoint', $crash, 10);
+		wcos_merge_service_assert($hit, 'Real forward service crash boundary did not execute: ' . $stage_under_test);
+		$result = (new WCOS_Merge_WooCommerce_Adapter())->merge(wc_get_order($source->get_id()), wc_get_order($target->get_id()), $operation_id, 2);
+		wcos_merge_service_assert('completed' === $result['status'], 'Real forward service crash did not complete on retry: ' . $stage_under_test);
+		wcos_merge_service_cleanup($source, $target, $operation_id);
+	}
+
+	/* Response loss after complete replays the exact bounded result without writes. */
+	list($source, $target) = wcos_merge_service_pair($managed, 'response-loss');
+	$operation_id = 'merge-service-response-loss-' . wp_generate_uuid4();
+	$response_loss_hit = false;
+	$response_loss = static function($stage) use (&$response_loss_hit) {
+		if ('after_complete' === $stage) {
+			$response_loss_hit = true;
+			throw new WCOS_Merge_Recovery_Interruption_Exception('Injected response loss after complete.');
+		}
+	};
+	add_action('wcos_merge_mutation_checkpoint', $response_loss, 10, 4);
+	try {
+		(new WCOS_Merge_WooCommerce_Adapter())->merge($source, $target, $operation_id, 2);
+	} catch (Throwable $throwable) {
+		/* The completed replay is asserted below. */
+	}
+	remove_action('wcos_merge_mutation_checkpoint', $response_loss, 10);
+	wcos_merge_service_assert($response_loss_hit, 'Post-complete response-loss boundary did not execute.');
+	$result = (new WCOS_Merge_WooCommerce_Adapter())->merge(wc_get_order($source->get_id()), wc_get_order($target->get_id()), $operation_id, 2);
+	wcos_merge_service_assert('completed' === $result['status'], 'Post-complete response loss did not replay safely.');
+	wcos_merge_service_cleanup($source, $target, $operation_id);
+
+	/* Losing both participant leases between durable boundaries stops writes and recovers safely. */
+	list($source, $target) = wcos_merge_service_pair($managed, 'lease-loss');
+	$operation_id = 'merge-service-lease-loss-' . wp_generate_uuid4();
+	$stock_before = WCOS_Order_Contract_Snapshot::product_stock($source);
+	$lease_loss_hit = false;
+	$lease_loss = static function($stage, $event_source, $event_target, $event_operation) use (&$lease_loss_hit) {
+		if (!$lease_loss_hit && 'before_target_money_tax_write' === $stage) {
+			$lease_loss_hit = true;
+			foreach (array($event_source->get_id(), $event_target->get_id()) as $order_id) {
+				$token = WCOS_Operation_Lock::current_token_for($order_id, $event_operation);
+				if (false !== $token) {
+					WCOS_Operation_Lock::release($order_id, $token);
+				}
+			}
+		}
+	};
+	add_action('wcos_merge_mutation_checkpoint', $lease_loss, 10, 4);
+	try {
+		(new WCOS_Merge_WooCommerce_Adapter())->merge($source, $target, $operation_id, 2);
+	} catch (Throwable $throwable) {
+		/* Recovery reacquires the canonical pair after the lost lease. */
+	}
+	remove_action('wcos_merge_mutation_checkpoint', $lease_loss, 10);
+	wcos_merge_service_assert($lease_loss_hit, 'Real service lease-loss boundary did not execute.');
+	wcos_merge_service_assert(in_array(wcos_merge_service_status($source, $operation_id), array('compensated', 'manual_reconciliation'), true), 'Lease loss did not preserve safe durable authority.');
+	wcos_merge_service_assert($stock_before === WCOS_Order_Contract_Snapshot::product_stock(wc_get_order($source->get_id())), 'Lease-loss recovery changed physical stock.');
+	wcos_merge_service_cleanup($source, $target, $operation_id);
+
+	/* Before-write attempts are blocked; after-write evidence becomes pair-wide manual-only. */
+	foreach (array('blocked_before_write', 'observed_after_write') as $stock_phase) {
+		list($source, $target) = wcos_merge_service_pair($managed, 'stock-guard-' . $stock_phase);
+		$operation_id = 'merge-service-stock-guard-' . $stock_phase . '-' . wp_generate_uuid4();
+		$stock_before = WCOS_Order_Contract_Snapshot::product_stock($source);
+		$stock_hook_hit = false;
+		$stock_fault = static function($stage) use (&$stock_hook_hit, $stock_phase, $managed) {
+			if (!$stock_hook_hit && 'after_first_target_line_persistence' === $stage) {
+				$stock_hook_hit = true;
+				do_action('blocked_before_write' === $stock_phase ? 'woocommerce_product_before_set_stock' : 'woocommerce_product_set_stock', $managed);
+			}
+		};
+		add_action('wcos_merge_mutation_checkpoint', $stock_fault, 10, 4);
+		try {
+			(new WCOS_Merge_WooCommerce_Adapter())->merge($source, $target, $operation_id, 2);
+		} catch (Throwable $throwable) {
+			/* Stable recovery/manual outcome is asserted below. */
+		}
+		remove_action('wcos_merge_mutation_checkpoint', $stock_fault, 10);
+		wcos_merge_service_assert($stock_hook_hit, 'Real service stock-guard boundary did not execute: ' . $stock_phase);
+		if ('blocked_before_write' === $stock_phase) {
+			try {
+				(new WCOS_Merge_WooCommerce_Adapter())->merge(wc_get_order($source->get_id()), wc_get_order($target->get_id()), $operation_id, 2);
+			} catch (Throwable $throwable) {
+				/* A compensated saga intentionally remains non-restartable. */
+			}
+			wcos_merge_service_assert('compensated' === wcos_merge_service_status($source, $operation_id), 'Blocked stock attempt did not compensate after clean retry.');
+		} else {
+			wcos_merge_service_assert_manual_pair($source, $target, $operation_id);
+		}
+		wcos_merge_service_assert($stock_before === WCOS_Order_Contract_Snapshot::product_stock(wc_get_order($source->get_id())), 'Stock guard fixture changed physical stock: ' . $stock_phase);
+		wcos_merge_service_cleanup($source, $target, $operation_id);
+	}
 
 	/* Real partial ownership crash: first source write and checkpoint are durable before the second boundary. */
 	list($source, $target) = wcos_merge_service_pair($managed, 'partial-ownership', array('1', '2'));
