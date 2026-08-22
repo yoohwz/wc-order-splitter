@@ -113,7 +113,7 @@ jobs:
             fi
           done
 
-          if grep -R --line-number -E 'new[[:space:]]+WCOS_(Split|Duplicate)_Order_Service' inc/backend inc/cores; then
+          if grep -R --line-number -E 'new[[:space:]]+WCOS_(Split|Duplicate|Merge)_(Order_Service|WooCommerce_Adapter)' inc/backend inc/cores; then
             echo 'A production controller bypasses WCOS_Mutation_Gateway.' >&2
             exit 1
           fi
@@ -144,9 +144,10 @@ jobs:
           grep -Fq 'class-wcos-merge-woocommerce-adapter.php' inc/cores/script.php
           grep -Fq 'new WCOS_Merge_WooCommerce_Adapter' inc/domain/class-wcos-mutation-gateway.php
           grep -Fq 'const APPROVED = self::NON_FORCE_TRASH_ARCHIVE;' inc/domain/class-wcos-merge-retirement-policy.php
-          test ! -e inc/backend/class-wcos-merge-admin-controller.php
-          test ! -e inc/backend/class-wcos-merge-confirmation-store.php
-          test ! -e inc/backend/class-wcos-merge-review-store.php
+          grep -Fq 'class-wcos-merge-review-store.php' inc/cores/script.php
+          grep -Fq 'class-wcos-merge-confirmation-store.php' inc/cores/script.php
+          grep -Fq 'class-wcos-merge-admin-controller.php' inc/cores/script.php
+          grep -Fq 'WCOS_Merge_Admin_Controller::bootstrap();' inc/cores/script.php
           grep -Fq 'inc/domain/' AGENTS.md
           grep -Fq 'inc/domain/' docs/order-mutation-v2-contract.md
 
@@ -246,6 +247,9 @@ jobs:
             'inc/backend/class-wcos-split-strategy-review-store.php' \
             'inc/backend/class-wcos-split-strategy-confirmation-store.php' \
             'inc/backend/class-wcos-split-strategy-admin-controller.php' \
+            'inc/backend/class-wcos-merge-review-store.php' \
+            'inc/backend/class-wcos-merge-confirmation-store.php' \
+            'inc/backend/class-wcos-merge-admin-controller.php' \
             'inc/domain/class-wcos-split-strategy-gates.php' \
             'inc/domain/class-wcos-category-split-planner.php' \
             'inc/domain/class-wcos-stock-status-split-planner.php' \
@@ -312,6 +316,9 @@ jobs:
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/backend/class-wcos-split-strategy-review-store.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/backend/class-wcos-split-strategy-confirmation-store.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/backend/class-wcos-split-strategy-admin-controller.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/backend/class-wcos-merge-review-store.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/backend/class-wcos-merge-confirmation-store.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/backend/class-wcos-merge-admin-controller.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-category-split-planner.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-stock-status-split-planner.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-split-strategy-woocommerce-adapter.php'
@@ -432,6 +439,9 @@ jobs:
             if (false !== has_action("wp_ajax_" . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION)) { exit(1); }
             if (false !== has_action("wp_ajax_" . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION)) { exit(1); }
             if (false !== has_action("wp_ajax_" . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION)) { exit(1); }
+            if (false !== has_action("wp_ajax_" . WCOS_Merge_Admin_Controller::REVIEW_ACTION)) { exit(1); }
+            if (false !== has_action("wp_ajax_" . WCOS_Merge_Admin_Controller::CONFIRM_ACTION)) { exit(1); }
+            if (false !== has_action("wp_ajax_" . WCOS_Merge_Admin_Controller::EXECUTE_ACTION)) { exit(1); }
             foreach (array(
               "WC_ORDER_SPLITTER_MUTATIONS_ENABLED",
               "WC_ORDER_SPLITTER_SPLIT_ENABLED",
@@ -477,6 +487,9 @@ jobs:
 
       - name: Verify hardened Merge service and adapter core contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php core
+
+      - name: Verify hard-off Merge Review Confirm Execute authority
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-review-confirm-execute-smoke.php
 
       - name: Verify hardened Merge pre-retirement crash contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php crash_pre
