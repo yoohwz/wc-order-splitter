@@ -7,7 +7,7 @@ defined('ABSPATH') || exit;
  */
 final class WCOS_Merge_Plan {
 
-	const SCHEMA_VERSION = 1;
+	const SCHEMA_VERSION = 2;
 
 	public static function build(WC_Order $source, WC_Order $target) {
 		$source_id = absint($source->get_id());
@@ -71,12 +71,16 @@ final class WCOS_Merge_Plan {
 			'target_order_id' => $target_order_id,
 			'line_policy' => 'fresh_target_line_per_source_line',
 			'coalesce_lines' => false,
-			'retirement_candidates' => WCOS_Merge_Retirement_Policy::identifiers(),
+			'retirement_policy' => WCOS_Merge_Retirement_Policy::approved_identifier(),
 			'lines' => $canonical_lines,
 		);
 	}
 
 	public static function fingerprint(array $plan) {
+		if (!isset($plan['retirement_policy'])
+			|| WCOS_Merge_Retirement_Policy::approved_identifier() !== sanitize_key((string) $plan['retirement_policy'])) {
+			throw new InvalidArgumentException(__('The Merge plan does not bind the approved retirement policy.', 'wc-order-splitter'));
+		}
 		$plan = self::canonicalize(
 			isset($plan['source_order_id']) ? $plan['source_order_id'] : 0,
 			isset($plan['target_order_id']) ? $plan['target_order_id'] : 0,

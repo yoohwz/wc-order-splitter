@@ -20,8 +20,12 @@ final class WCOS_Tax_Item_Synchronizer {
 		return $templates;
 	}
 
-	public static function synchronize(WC_Order $order, array $templates, $precision = null, $preserve_existing_ids = false) {
+	public static function synchronize(WC_Order $order, array $templates, $precision = null, $preserve_existing_ids = false, $context = WCOS_Order_Item_Meta_Policy::CONTEXT_SPLIT) {
 		$precision = null === $precision ? wc_get_price_decimals() : (int) $precision;
+		$context = sanitize_key((string) $context);
+		if (!in_array($context, array(WCOS_Order_Item_Meta_Policy::CONTEXT_SPLIT, WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE), true)) {
+			throw new InvalidArgumentException(__('A supported historical tax synchronization context is required.', 'wc-order-splitter'));
+		}
 		$totals = self::collect($order, $precision);
 		$existing = array();
 		foreach ($order->get_items('tax') as $item) {
@@ -44,7 +48,7 @@ final class WCOS_Tax_Item_Synchronizer {
 				if (!isset($templates[$rate_id])) {
 					throw new RuntimeException(__('A historical tax-rate template is missing from the source order.', 'wc-order-splitter'));
 				}
-				$item = WCOS_Order_Item_Cloner::tax($templates[$rate_id], WCOS_Order_Item_Meta_Policy::CONTEXT_SPLIT);
+				$item = WCOS_Order_Item_Cloner::tax($templates[$rate_id], $context);
 				$order->add_item($item);
 			} else {
 				continue;

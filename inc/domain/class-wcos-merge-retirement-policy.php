@@ -2,17 +2,13 @@
 
 defined('ABSPATH') || exit;
 
-/**
- * Unselected source-retirement candidates and their domain evidence model.
- *
- * This foundation registers no WooCommerce status and performs no lifecycle
- * transition. A later boundary decision must select an evidenced candidate.
- */
+/** Binding source-retirement policy and the retained comparison evidence. */
 final class WCOS_Merge_Retirement_Policy {
 
-	const SCHEMA_VERSION = 1;
+	const SCHEMA_VERSION = 2;
 	const NON_FORCE_TRASH_ARCHIVE = 'non_force_trash_archive';
 	const DEDICATED_MERGED_ARCHIVE = 'dedicated_merged_archive';
+	const APPROVED = self::NON_FORCE_TRASH_ARCHIVE;
 
 	public static function candidates() {
 		return array(
@@ -22,7 +18,7 @@ final class WCOS_Merge_Retirement_Policy {
 				'active_economic_owner_after' => false,
 				'normal_active_status_after' => false,
 				'hard_delete' => false,
-				'production_selected' => false,
+				'production_selected' => true,
 			),
 			self::DEDICATED_MERGED_ARCHIVE => array(
 				'identifier' => self::DEDICATED_MERGED_ARCHIVE,
@@ -39,6 +35,18 @@ final class WCOS_Merge_Retirement_Policy {
 		$identifiers = array_keys(self::candidates());
 		sort($identifiers, SORT_STRING);
 		return $identifiers;
+	}
+
+	public static function approved_identifier() {
+		return self::APPROVED;
+	}
+
+	public static function assert_approved($identifier) {
+		$identifier = sanitize_key((string) $identifier);
+		if (self::APPROVED !== $identifier) {
+			throw new RuntimeException(__('Executable Merge authority requires the approved non-force trash archive policy.', 'wc-order-splitter'));
+		}
+		return self::assert_candidate($identifier);
 	}
 
 	public static function assert_candidate($identifier) {

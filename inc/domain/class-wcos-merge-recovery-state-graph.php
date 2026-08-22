@@ -7,6 +7,7 @@ defined('ABSPATH') || exit;
  */
 final class WCOS_Merge_Recovery_State_Graph {
 	const NO_WRITE = 'no_commercial_write';
+	const TARGET_STAGING = 'target_staging';
 	const TARGET_PERSISTED = 'target_persisted';
 	const SOURCE_OWNERSHIP_MIGRATING = 'source_ownership_migrating';
 	const SOURCE_OWNERSHIP_MIGRATED = 'source_ownership_migrated';
@@ -24,7 +25,7 @@ final class WCOS_Merge_Recovery_State_Graph {
 
 	public static function stages() {
 		return array(
-			self::NO_WRITE, self::TARGET_PERSISTED, self::SOURCE_OWNERSHIP_MIGRATING,
+				self::NO_WRITE, self::TARGET_STAGING, self::TARGET_PERSISTED, self::SOURCE_OWNERSHIP_MIGRATING,
 			self::SOURCE_OWNERSHIP_MIGRATED, self::SOURCE_RETIRED, self::SOURCE_RELATION,
 			self::RELATIONS_COMPLETE, self::VERIFIED, self::COMMITTED, self::COMPLETED,
 			self::COMPENSATING, self::SOURCE_RESTORED, self::TARGET_RESTORED,
@@ -79,7 +80,8 @@ final class WCOS_Merge_Recovery_State_Graph {
 			return true;
 		}
 		$forward = array(
-			self::NO_WRITE => array(self::TARGET_PERSISTED, self::COMPENSATING),
+			self::NO_WRITE => array(self::TARGET_STAGING, self::TARGET_PERSISTED, self::COMPENSATING),
+			self::TARGET_STAGING => array(self::TARGET_STAGING, self::TARGET_PERSISTED, self::COMPENSATING),
 			self::TARGET_PERSISTED => array(self::SOURCE_OWNERSHIP_MIGRATING, self::SOURCE_OWNERSHIP_MIGRATED, self::COMPENSATING),
 			self::SOURCE_OWNERSHIP_MIGRATING => array(self::SOURCE_OWNERSHIP_MIGRATED, self::COMPENSATING),
 			self::SOURCE_OWNERSHIP_MIGRATED => array(self::SOURCE_RETIRED, self::COMPENSATING),

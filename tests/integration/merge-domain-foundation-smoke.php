@@ -112,7 +112,11 @@ wcos_merge_foundation_assert(
 );
 wcos_merge_foundation_assert(
 	WCOS_Merge_Retirement_Policy::identifiers() === $report['retirement_candidates'],
-	'Retirement candidates changed or became selected.'
+	'Retirement comparison evidence changed.'
+);
+wcos_merge_foundation_assert(
+	WCOS_Merge_Retirement_Policy::approved_identifier() === $report['retirement_policy'],
+	'Preflight did not bind the approved non-force trash archive policy.'
 );
 
 /* Keyed compatibility proof contains no durable raw customer context. */
@@ -288,6 +292,13 @@ $verified_pair = WCOS_Merge_Journal_Context::pair_from_record($journal);
 wcos_merge_foundation_assert(is_array($verified_pair), 'Canonical Merge pair authority did not self-verify.');
 wcos_merge_foundation_assert($report['price_precision'] === $verified_pair['price_precision'], 'Pair authority lost price-precision authority.');
 wcos_merge_foundation_assert(WCOS_Merge_Preflight::POLICY_VERSION === $verified_pair['preflight_policy_version'], 'Pair authority lost preflight-policy authority.');
+$unselected_rejected = false;
+try {
+	WCOS_Merge_Journal_Context::assert_executable_policy($journal);
+} catch (RuntimeException $exception) {
+	$unselected_rejected = true;
+}
+wcos_merge_foundation_assert($unselected_rejected, 'An older unselected retirement-policy journal became executable.');
 
 /* Every durable pair-authority field is independently tamper-evident. */
 $authority_tamper_cases = array(

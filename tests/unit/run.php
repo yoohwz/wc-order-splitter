@@ -252,21 +252,30 @@ $tests['merge plan rejects self merge and normalized item collisions'] = static 
 	}, InvalidArgumentException::class);
 };
 
-$tests['merge retirement candidates preserve archive and remain unselected'] = static function() {
+$tests['merge retirement policy binds non-force trash archive'] = static function() {
 	$candidates = WCOS_Merge_Retirement_Policy::candidates();
 	assert_same(array('dedicated_merged_archive', 'non_force_trash_archive'), WCOS_Merge_Retirement_Policy::identifiers());
+	assert_same('non_force_trash_archive', WCOS_Merge_Retirement_Policy::approved_identifier());
 	foreach ($candidates as $candidate) {
 		assert_same(true, $candidate['preserve_commercial_record']);
 		assert_same(false, $candidate['active_economic_owner_after']);
 		assert_same(false, $candidate['normal_active_status_after']);
 		assert_same(false, $candidate['hard_delete']);
-		assert_same(false, $candidate['production_selected']);
 	}
+	assert_same(true, $candidates['non_force_trash_archive']['production_selected']);
+	assert_same(false, $candidates['dedicated_merged_archive']['production_selected']);
+	WCOS_Merge_Retirement_Policy::assert_approved('non_force_trash_archive');
+	assert_throws(static function() {
+		WCOS_Merge_Retirement_Policy::assert_approved('dedicated_merged_archive');
+	}, RuntimeException::class);
 	WCOS_Merge_Retirement_Policy::assert_archive_preserved(str_repeat('a', 64), str_repeat('a', 64));
 	WCOS_Merge_Retirement_Policy::assert_active_ownership_conserved(str_repeat('b', 64), str_repeat('b', 64));
 };
 
 $tests['merge recovery graph accepts forward and source-first compensation paths'] = static function() {
+	assert_true(WCOS_Merge_Recovery_State_Graph::transition_allowed('no_commercial_write', 'target_staging'), 'Initial target staging transition was rejected.');
+	assert_true(WCOS_Merge_Recovery_State_Graph::transition_allowed('target_staging', 'target_staging'), 'Resumable target staging checkpoint was rejected.');
+	assert_true(WCOS_Merge_Recovery_State_Graph::transition_allowed('target_staging', 'target_persisted'), 'Target staging completion was rejected.');
 	assert_true(WCOS_Merge_Recovery_State_Graph::transition_allowed('no_commercial_write', 'target_persisted'), 'Initial target transition was rejected.');
 	assert_true(WCOS_Merge_Recovery_State_Graph::transition_allowed('source_retired', 'source_relation_persisted'), 'Reciprocal relation transition was rejected.');
 	assert_true(WCOS_Merge_Recovery_State_Graph::transition_allowed('commercial_verified', 'committed'), 'Verified commit transition was rejected.');

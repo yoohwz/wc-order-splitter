@@ -41,7 +41,7 @@ final class WCOS_Merge_Preflight {
 			'line_coalescing' => 'never',
 			'historical_tax' => 'preserve_exact',
 			'catalog_recalculation' => 'never',
-			'retirement_policy' => 'unselected_candidates',
+			'retirement_policy' => WCOS_Merge_Retirement_Policy::approved_identifier(),
 		);
 	}
 
@@ -70,6 +70,7 @@ final class WCOS_Merge_Preflight {
 			'price_precision' => $precision,
 			'policy' => self::policy(),
 			'retirement_candidates' => WCOS_Merge_Retirement_Policy::identifiers(),
+			'retirement_policy' => WCOS_Merge_Retirement_Policy::approved_identifier(),
 			'context_authority' => array(),
 			'source_signature' => '',
 			'target_signature' => '',

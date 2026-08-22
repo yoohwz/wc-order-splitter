@@ -48,10 +48,15 @@ final class WCOS_Mutation_Gateway {
 		return (new WCOS_Duplicate_WooCommerce_Adapter())->preflight($source, $operation_id, $confirmed_precision);
 	}
 
-	public function merge(WC_Order $source, WC_Order $target, $operation_id) {
+	public function merge(WC_Order $source, WC_Order $target, $operation_id, $confirmed_precision = null) {
 		WCOS_Feature_Gates::assert_enabled(WCOS_Feature_Gates::MERGE);
 		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::MERGE, $source, $target);
-		throw new RuntimeException(__('The hardened merge service has not been implemented.', 'wc-order-splitter'));
+		return (new WCOS_Merge_WooCommerce_Adapter())->merge($source, $target, $operation_id, $confirmed_precision);
+	}
+
+	public function merge_preflight(WC_Order $source, WC_Order $target, $operation_id = '', $confirmed_precision = null) {
+		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::MERGE, $source, $target);
+		return (new WCOS_Merge_WooCommerce_Adapter())->preflight($source, $target, $operation_id, $confirmed_precision);
 	}
 
 	public function return_order(WC_Order $child, WC_Order $parent, $operation_id) {
