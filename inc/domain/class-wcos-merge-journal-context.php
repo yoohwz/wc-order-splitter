@@ -9,6 +9,7 @@ final class WCOS_Merge_Journal_Context {
 
 	const SCHEMA_VERSION = 3;
 	const TERMINAL_RESULT_SCHEMA_VERSION = 1;
+	const CONFIRMATION_HANDOFF_SCHEMA_VERSION = 1;
 
 	public static function create(WC_Order $source, WC_Order $target, array $plan, array $context_authority, $price_precision, array $evidence = array(), $selected_retirement_policy = '') {
 		$source_id = absint($source->get_id());
@@ -151,6 +152,58 @@ final class WCOS_Merge_Journal_Context {
 		return $pair;
 	}
 
+	public static function create_confirmation_handoff(array $authority, array $pair) {
+		$pair_authority = isset($pair['authority']) && is_array($pair['authority']) ? $pair['authority'] : array();
+		$canonical = self::canonical_confirmation_authority($authority);
+		if (!is_array($canonical)
+			|| !isset($pair['pair_fingerprint'])
+			|| $canonical['source_order_id'] !== absint(isset($pair_authority['source_order_id']) ? $pair_authority['source_order_id'] : 0)
+			|| $canonical['target_order_id'] !== absint(isset($pair_authority['target_order_id']) ? $pair_authority['target_order_id'] : 0)
+			|| !hash_equals($canonical['pair_fingerprint'], self::normalized_fingerprint($pair['pair_fingerprint']))
+			|| !hash_equals($canonical['plan_fingerprint'], self::normalized_fingerprint(isset($pair_authority['plan_fingerprint']) ? $pair_authority['plan_fingerprint'] : ''))
+			|| !hash_equals($canonical['context_authority_fingerprint'], self::normalized_fingerprint(isset($pair_authority['context_authority_fingerprint']) ? $pair_authority['context_authority_fingerprint'] : ''))) {
+			throw new RuntimeException(__('The Merge Confirmation handoff does not match locked pair authority.', 'wc-order-splitter'));
+		}
+		return array(
+			'schema_version' => self::CONFIRMATION_HANDOFF_SCHEMA_VERSION,
+			'authority' => $canonical,
+			'authority_fingerprint' => self::confirmation_authority_fingerprint($canonical),
+		);
+	}
+
+	public static function confirmation_handoff_from_record(array $record) {
+		$pair = self::assert_executable_policy($record);
+		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
+		$handoff = isset($context['merge_confirmation_authority']) && is_array($context['merge_confirmation_authority'])
+			? $context['merge_confirmation_authority'] : array();
+		$expected_keys = array('authority', 'authority_fingerprint', 'schema_version');
+		$actual_keys = array_keys($handoff);
+		sort($actual_keys, SORT_STRING);
+		sort($expected_keys, SORT_STRING);
+		$authority = isset($handoff['authority']) && is_array($handoff['authority'])
+			? self::canonical_confirmation_authority($handoff['authority']) : null;
+		$fingerprint = self::normalized_fingerprint(isset($handoff['authority_fingerprint']) ? $handoff['authority_fingerprint'] : '');
+		if ($actual_keys !== $expected_keys
+			|| (int) (isset($handoff['schema_version']) ? $handoff['schema_version'] : 0) !== self::CONFIRMATION_HANDOFF_SCHEMA_VERSION
+			|| !is_array($authority) || $authority !== $handoff['authority'] || '' === $fingerprint
+			|| !hash_equals($fingerprint, self::confirmation_authority_fingerprint($authority))
+			|| sanitize_key(isset($record['operation_id']) ? (string) $record['operation_id'] : '') !== $authority['operation_id']
+			|| (int) $pair['source_order_id'] !== $authority['source_order_id']
+			|| (int) $pair['target_order_id'] !== $authority['target_order_id']
+			|| !hash_equals((string) $pair['pair_fingerprint'], $authority['pair_fingerprint'])
+			|| !hash_equals((string) $pair['plan_fingerprint'], $authority['plan_fingerprint'])
+			|| !hash_equals((string) $pair['context_authority_fingerprint'], $authority['context_authority_fingerprint'])
+			|| (int) $pair['price_precision'] !== $authority['price_precision']
+			|| (int) $pair['preflight_policy_version'] !== $authority['preflight_policy_version']
+			|| (int) $pair['plan_schema_version'] !== $authority['plan_schema_version']
+			|| (int) $pair['context_signature_version'] !== $authority['context_signature_version']
+			|| (int) $pair['retirement_policy_schema_version'] !== $authority['retirement_policy_schema_version']
+			|| (string) $pair['retirement_policy_identifier'] !== $authority['retirement_policy']) {
+			throw new RuntimeException(__('The durable Merge Confirmation handoff failed authority verification.', 'wc-order-splitter'));
+		}
+		return $authority;
+	}
+
 	public static function is_unsafe_record(array $record) {
 		if (!is_array(self::pair_from_record($record))) {
 			return true;
@@ -232,6 +285,59 @@ final class WCOS_Merge_Journal_Context {
 	private static function terminal_result_fingerprint(array $result) {
 		unset($result['result_fingerprint']);
 		return WCOS_Mutation_Fingerprint::create('merge_terminal_result_v1', absint(isset($result['source_order_id']) ? $result['source_order_id'] : 0), $result);
+	}
+
+	private static function confirmation_authority_fingerprint(array $authority) {
+		return WCOS_Mutation_Fingerprint::create('merge_confirmation_handoff_v1', $authority['source_order_id'], $authority);
+	}
+
+	private static function canonical_confirmation_authority(array $authority) {
+		$expected_keys = array(
+			'confirmation_schema_version', 'context_authority_fingerprint', 'context_signature_version',
+			'merge_service_policy_version', 'operation_id', 'operator_user_id', 'pair_fingerprint',
+			'plan_fingerprint', 'plan_schema_version', 'preflight_policy_version', 'price_precision',
+			'retirement_policy', 'retirement_policy_schema_version', 'source_order_id', 'target_order_id',
+		);
+		$actual_keys = array_keys($authority);
+		sort($actual_keys, SORT_STRING);
+		sort($expected_keys, SORT_STRING);
+		$operation_id = sanitize_key(isset($authority['operation_id']) ? (string) $authority['operation_id'] : '');
+		$source_id = absint(isset($authority['source_order_id']) ? $authority['source_order_id'] : 0);
+		$target_id = absint(isset($authority['target_order_id']) ? $authority['target_order_id'] : 0);
+		$pair_fingerprint = self::normalized_fingerprint(isset($authority['pair_fingerprint']) ? $authority['pair_fingerprint'] : '');
+		$plan_fingerprint = self::normalized_fingerprint(isset($authority['plan_fingerprint']) ? $authority['plan_fingerprint'] : '');
+		$context_fingerprint = self::normalized_fingerprint(isset($authority['context_authority_fingerprint']) ? $authority['context_authority_fingerprint'] : '');
+		$precision = isset($authority['price_precision']) ? (int) $authority['price_precision'] : -1;
+		if ($actual_keys !== $expected_keys || '' === $operation_id || !$source_id || !$target_id || $source_id === $target_id
+			|| !absint(isset($authority['operator_user_id']) ? $authority['operator_user_id'] : 0)
+			|| '' === $pair_fingerprint || '' === $plan_fingerprint || '' === $context_fingerprint
+			|| $precision !== WCOS_Price_Precision_Scope::validate($precision)
+			|| !absint(isset($authority['confirmation_schema_version']) ? $authority['confirmation_schema_version'] : 0)
+			|| (int) $authority['merge_service_policy_version'] !== WCOS_Merge_Order_Service::POLICY_VERSION
+			|| (int) $authority['preflight_policy_version'] !== WCOS_Merge_Preflight::POLICY_VERSION
+			|| (int) $authority['plan_schema_version'] !== WCOS_Merge_Plan::SCHEMA_VERSION
+			|| (int) $authority['context_signature_version'] !== WCOS_Merge_Context_Signature::SCHEMA_VERSION
+			|| (int) $authority['retirement_policy_schema_version'] !== WCOS_Merge_Retirement_Policy::SCHEMA_VERSION
+			|| WCOS_Merge_Retirement_Policy::approved_identifier() !== sanitize_key((string) $authority['retirement_policy'])) {
+			return null;
+		}
+		return array(
+			'operation_id' => $operation_id,
+			'operator_user_id' => absint($authority['operator_user_id']),
+			'source_order_id' => $source_id,
+			'target_order_id' => $target_id,
+			'confirmation_schema_version' => absint($authority['confirmation_schema_version']),
+			'merge_service_policy_version' => WCOS_Merge_Order_Service::POLICY_VERSION,
+			'preflight_policy_version' => WCOS_Merge_Preflight::POLICY_VERSION,
+			'plan_schema_version' => WCOS_Merge_Plan::SCHEMA_VERSION,
+			'plan_fingerprint' => $plan_fingerprint,
+			'context_signature_version' => WCOS_Merge_Context_Signature::SCHEMA_VERSION,
+			'context_authority_fingerprint' => $context_fingerprint,
+			'pair_fingerprint' => $pair_fingerprint,
+			'price_precision' => $precision,
+			'retirement_policy_schema_version' => WCOS_Merge_Retirement_Policy::SCHEMA_VERSION,
+			'retirement_policy' => WCOS_Merge_Retirement_Policy::approved_identifier(),
+		);
 	}
 
 	private static function canonical_ids(array $ids) {

@@ -65,6 +65,11 @@ function wcos_merge_authority_cleanup(WC_Order $source, WC_Order $target, $opera
 	}
 }
 
+function wcos_merge_authority_write_journal(WC_Order $source, $operation_id, array $record) {
+	$key = 'wcos_mutation_op_' . hash('sha256', absint($source->get_id()) . '|' . sanitize_key($operation_id));
+	return update_option($key, $record, false);
+}
+
 $admins = get_users(array('role' => 'administrator', 'number' => 1, 'fields' => 'ID'));
 wcos_merge_authority_assert(!empty($admins), 'Merge authority smoke requires an administrator fixture.');
 $operator_id = absint($admins[0]);
@@ -96,6 +101,7 @@ try {
 	wcos_merge_authority_assert(false === strpos($review_json, '@example.test') && false === strpos($review_json, 'Review Way'), 'Merge Review response exposed customer PII.');
 	$review_record = get_transient('wcos_merge_review_' . hash('sha256', $review['review_id']));
 	wcos_merge_authority_assert(is_array($review_record) && !empty($review_record['token_hash']), 'Merge Review hash authority was not stored.');
+	wcos_merge_authority_assert(WCOS_Merge_Order_Service::POLICY_VERSION === (int) $review_record['authority']['merge_service_policy_version'], 'Merge Review did not bind current Merge service policy authority.');
 	wcos_merge_authority_assert(false === strpos(wp_json_encode($review_record), $review['review_token']), 'Raw Merge Review token was persisted.');
 	$wrong_token_rejected = false;
 	try {
@@ -175,16 +181,25 @@ try {
 	$pairs[] = array($race_source, $race_target, '');
 	$race_request = wcos_merge_authority_request($race_source, $race_target);
 	$race_review = $controller->review_request($race_request);
-	WCOS_Merge_Review_Store::claim($race_source, $race_target, $race_review['review_id'], $race_review['review_token'], $operator_id);
-	$second_claim_rejected = false;
-	try {
-		WCOS_Merge_Review_Store::claim($race_source, $race_target, $race_review['review_id'], $race_review['review_token'], $operator_id);
-	} catch (WCOS_Merge_Review_Exception $exception) {
-		$second_claim_rejected = 'already_consumed' === $exception->get_reason();
+	$race_authority_one = WCOS_Merge_Review_Store::verify($race_source, $race_target, $race_review['review_id'], $race_review['review_token'], $operator_id);
+	$race_authority_two = WCOS_Merge_Review_Store::verify($race_source, $race_target, $race_review['review_id'], $race_review['review_token'], $operator_id);
+	$race_candidate_one = WCOS_Merge_Confirmation_Store::create($race_source, $race_target, $race_authority_one, $operator_id);
+	$race_candidate_two = WCOS_Merge_Confirmation_Store::create($race_source, $race_target, $race_authority_two, $operator_id);
+	wcos_merge_authority_assert(WCOS_Merge_Review_Store::consume($race_review['review_id']), 'The first racing Confirm did not consume the Review.');
+	$second_consumed = WCOS_Merge_Review_Store::consume($race_review['review_id']);
+	if (!$second_consumed) {
+		WCOS_Merge_Confirmation_Store::delete($race_candidate_two['operation_id']);
 	}
-	wcos_merge_authority_assert($second_claim_rejected, 'Two racing Confirm claims acquired one Merge Review.');
-	WCOS_Merge_Review_Store::release_claim($race_review['review_id']);
-	WCOS_Merge_Review_Store::delete($race_review['review_id']);
+	wcos_merge_authority_assert(false === $second_consumed, 'Two racing Confirm candidates consumed one Merge Review.');
+	wcos_merge_authority_assert(is_array(get_transient('wcos_merge_confirm_' . hash('sha256', $race_candidate_one['operation_id']))), 'The winning racing Confirmation did not survive.');
+	wcos_merge_authority_assert(false === get_transient('wcos_merge_confirm_' . hash('sha256', $race_candidate_two['operation_id'])), 'The losing racing Confirmation was not deleted.');
+	global $wpdb;
+	$claim_option_count = (int) $wpdb->get_var($wpdb->prepare(
+		"SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name LIKE %s",
+		$wpdb->esc_like('wcos_merge_review_' . 'claim_') . '%'
+	));
+	wcos_merge_authority_assert(0 === $claim_option_count, 'A persistent Merge Review coordination option remained.');
+	WCOS_Merge_Confirmation_Store::delete($race_candidate_one['operation_id']);
 
 	list($drift_source, $drift_target) = wcos_merge_authority_pair($product, 'drift');
 	$pairs[] = array($drift_source, $drift_target, '');
@@ -267,10 +282,117 @@ try {
 	$journal = WCOS_Operation_Journal::get(wc_get_order($durable_source->get_id()), $durable_confirm['operation_id']);
 	wcos_merge_authority_assert(is_array($journal) && 'completed' === $journal['status'], 'Confirmed Merge source journal is missing.');
 	wcos_merge_authority_assert(false === strpos(wp_json_encode($journal), $durable_confirm['confirmation_token']), 'Raw Confirmation token entered the durable journal.');
+	$handoff = isset($journal['context']['merge_confirmation_authority']) ? $journal['context']['merge_confirmation_authority'] : array();
+	wcos_merge_authority_assert(
+		isset($handoff['schema_version'], $handoff['authority'], $handoff['authority_fingerprint'])
+		&& WCOS_Merge_Journal_Context::CONFIRMATION_HANDOFF_SCHEMA_VERSION === (int) $handoff['schema_version']
+		&& WCOS_Merge_Order_Service::POLICY_VERSION === (int) $handoff['authority']['merge_service_policy_version'],
+		'Confirmed Merge journal is missing bounded service-policy handoff authority.'
+	);
+	wcos_merge_authority_assert(false === strpos(wp_json_encode($handoff), '@example.test'), 'Durable Merge Confirmation handoff stored plaintext customer PII.');
 	wcos_merge_authority_assert(null === WCOS_Operation_Journal::get(wc_get_order($durable_target->get_id()), $durable_confirm['operation_id']), 'A forbidden target shadow journal was created.');
+	$matched_journal_replay = WCOS_Merge_Confirmation_Store::verify(wc_get_order($durable_source->get_id()), wc_get_order($durable_target->get_id()), $durable_confirm['operation_id'], $durable_confirm['confirmation_token'], $operator_id);
+	wcos_merge_authority_assert('completed' === $matched_journal_replay['journal_status'], 'Matching surviving Confirmation did not defer to the completed journal.');
+	$durable_confirm_key = 'wcos_merge_confirm_' . hash('sha256', $durable_confirm['operation_id']);
+	$surviving_confirmation = get_transient($durable_confirm_key);
+	$surviving_confirmation['user_id'] = $operator_id + 100000;
+	set_transient($durable_confirm_key, $surviving_confirmation, WCOS_Merge_Confirmation_Store::TTL);
+	$mismatched_transient_rejected = false;
+	try {
+		WCOS_Merge_Confirmation_Store::verify(wc_get_order($durable_source->get_id()), wc_get_order($durable_target->get_id()), $durable_confirm['operation_id'], $durable_confirm['confirmation_token'], $operator_id);
+	} catch (WCOS_Merge_Confirmation_Exception $exception) {
+		$mismatched_transient_rejected = 'journal_mismatch' === $exception->get_reason();
+	}
+	wcos_merge_authority_assert($mismatched_transient_rejected, 'A surviving mismatched Confirmation overrode durable journal authority.');
+	set_transient($durable_confirm_key, $durable_record, WCOS_Merge_Confirmation_Store::TTL);
+	$original_journal = $journal;
+	foreach (array('operator_user_id' => $operator_id + 100000, 'merge_service_policy_version' => WCOS_Merge_Order_Service::POLICY_VERSION + 1) as $field => $tampered_value) {
+		$tampered_journal = $original_journal;
+		$tampered_journal['context']['merge_confirmation_authority']['authority'][$field] = $tampered_value;
+		wcos_merge_authority_write_journal(wc_get_order($durable_source->get_id()), $durable_confirm['operation_id'], $tampered_journal);
+		$handoff_tamper_rejected = false;
+		try {
+			WCOS_Merge_Confirmation_Store::verify(wc_get_order($durable_source->get_id()), wc_get_order($durable_target->get_id()), $durable_confirm['operation_id'], '', $operator_id);
+		} catch (WCOS_Merge_Confirmation_Exception $exception) {
+			$handoff_tamper_rejected = 'journal_mismatch' === $exception->get_reason();
+		}
+		wcos_merge_authority_assert($handoff_tamper_rejected, 'Durable Merge handoff tamper was trusted for ' . $field . '.');
+		wcos_merge_authority_write_journal(wc_get_order($durable_source->get_id()), $durable_confirm['operation_id'], $original_journal);
+	}
 	WCOS_Merge_Confirmation_Store::delete($durable_confirm['operation_id']);
 	$journal_replay = WCOS_Merge_Confirmation_Store::verify(wc_get_order($durable_source->get_id()), wc_get_order($durable_target->get_id()), $durable_confirm['operation_id'], '', $operator_id);
 	wcos_merge_authority_assert('journal' === $journal_replay['replay_authority'] && 'completed' === $journal_replay['journal_status'], 'Transient loss did not defer to completed source journal authority.');
+
+	list($recovery_source, $recovery_target) = wcos_merge_authority_pair($product, 'recovery-dispatch');
+	$pairs[] = array($recovery_source, $recovery_target, '');
+	$recovery_request = wcos_merge_authority_request($recovery_source, $recovery_target);
+	$recovery_review = $controller->review_request($recovery_request);
+	$recovery_confirm = $controller->confirm_request(array_merge($recovery_request, array('review_id' => $recovery_review['review_id'], 'review_token' => $recovery_review['review_token'])));
+	$pairs[count($pairs) - 1][2] = $recovery_confirm['operation_id'];
+	$recovery_confirmation = WCOS_Merge_Confirmation_Store::verify($recovery_source, $recovery_target, $recovery_confirm['operation_id'], $recovery_confirm['confirmation_token'], $operator_id);
+	$interrupt_before_write = static function($stage) {
+		if ('before_target_write' === $stage) {
+			throw new RuntimeException('deterministic-confirmed-recovery-dispatch');
+		}
+	};
+	remove_action('wcos_mutation_recovery_required', array('WCOS_Mutation_Recovery_Coordinator', 'handle'), 10);
+	add_action('wcos_merge_mutation_checkpoint', $interrupt_before_write, PHP_INT_MAX, 1);
+	try {
+		(new WCOS_Merge_WooCommerce_Adapter())->merge(
+			$recovery_source,
+			$recovery_target,
+			$recovery_confirm['operation_id'],
+			$recovery_confirmation['price_precision'],
+			WCOS_Merge_Confirmation_Store::operation_authority($recovery_confirmation)
+		);
+	} catch (Throwable $throwable) {
+		// Expected deterministic interruption after the confirmed journal and recovery snapshot exist.
+	}
+	remove_action('wcos_merge_mutation_checkpoint', $interrupt_before_write, PHP_INT_MAX);
+	add_action('wcos_mutation_recovery_required', array('WCOS_Mutation_Recovery_Coordinator', 'handle'), 10, 3);
+	$recovery_before = WCOS_Operation_Journal::get(wc_get_order($recovery_source->get_id()), $recovery_confirm['operation_id']);
+	wcos_merge_authority_assert(is_array($recovery_before) && 'recovery_required' === $recovery_before['status'], 'Confirmed recovery fixture did not stop at recovery_required.');
+	$dispatched_closed = false;
+	try {
+		WCOS_Merge_Confirmation_Store::verify(wc_get_order($recovery_source->get_id()), wc_get_order($recovery_target->get_id()), $recovery_confirm['operation_id'], $recovery_confirm['confirmation_token'], $operator_id);
+	} catch (WCOS_Merge_Confirmation_Exception $exception) {
+		$dispatched_closed = 'operation_closed' === $exception->get_reason();
+	}
+	$recovery_after = WCOS_Operation_Journal::get(wc_get_order($recovery_source->get_id()), $recovery_confirm['operation_id']);
+	wcos_merge_authority_assert($dispatched_closed && is_array($recovery_after) && 'compensated' === $recovery_after['status'], 'Recovery replay returned stale recovery_required instead of reloaded compensated authority.');
+	$compensated_closed = false;
+	try {
+		WCOS_Merge_Confirmation_Store::verify(wc_get_order($recovery_source->get_id()), wc_get_order($recovery_target->get_id()), $recovery_confirm['operation_id'], '', $operator_id);
+	} catch (WCOS_Merge_Confirmation_Exception $exception) {
+		$compensated_closed = 'operation_closed' === $exception->get_reason();
+	}
+	wcos_merge_authority_assert($compensated_closed, 'Compensated confirmed Merge journal was replayable.');
+
+	list($manual_source, $manual_target) = wcos_merge_authority_pair($product, 'manual-replay');
+	$pairs[] = array($manual_source, $manual_target, '');
+	$manual_request = wcos_merge_authority_request($manual_source, $manual_target);
+	$manual_review = $controller->review_request($manual_request);
+	$manual_confirm = $controller->confirm_request(array_merge($manual_request, array('review_id' => $manual_review['review_id'], 'review_token' => $manual_review['review_token'])));
+	$pairs[count($pairs) - 1][2] = $manual_confirm['operation_id'];
+	$manual_confirmation = WCOS_Merge_Confirmation_Store::verify($manual_source, $manual_target, $manual_confirm['operation_id'], $manual_confirm['confirmation_token'], $operator_id);
+	(new WCOS_Merge_WooCommerce_Adapter())->merge($manual_source, $manual_target, $manual_confirm['operation_id'], $manual_confirmation['price_precision'], WCOS_Merge_Confirmation_Store::operation_authority($manual_confirmation));
+	$manual_source = wc_get_order($manual_source->get_id());
+	wcos_merge_authority_assert(WCOS_Operation_Journal::mark_manual_reconciliation($manual_source, $manual_confirm['operation_id'], array('reason' => 'confirmed_replay_fixture')), 'Unable to establish confirmed manual-reconciliation authority.');
+	$manual_closed = false;
+	try {
+		WCOS_Merge_Confirmation_Store::verify($manual_source, wc_get_order($manual_target->get_id()), $manual_confirm['operation_id'], '', $operator_id);
+	} catch (WCOS_Merge_Confirmation_Exception $exception) {
+		$manual_closed = 'manual_reconciliation' === $exception->get_reason();
+	}
+	wcos_merge_authority_assert($manual_closed, 'Manual-reconciliation confirmed Merge journal did not fail closed.');
+	wcos_merge_authority_assert(WCOS_Operation_Journal::mark_manual_reconciled($manual_source, $manual_confirm['operation_id'], array('reason' => 'confirmed_replay_fixture_closed')), 'Unable to close confirmed manual-reconciliation authority.');
+	$manual_reconciled_closed = false;
+	try {
+		WCOS_Merge_Confirmation_Store::verify($manual_source, wc_get_order($manual_target->get_id()), $manual_confirm['operation_id'], '', $operator_id);
+	} catch (WCOS_Merge_Confirmation_Exception $exception) {
+		$manual_reconciled_closed = 'operation_closed' === $exception->get_reason();
+	}
+	wcos_merge_authority_assert($manual_reconciled_closed, 'Manual-reconciled confirmed Merge journal was replayable.');
 } finally {
 	foreach ($pairs as $pair) {
 		wcos_merge_authority_cleanup($pair[0], $pair[1], $pair[2]);

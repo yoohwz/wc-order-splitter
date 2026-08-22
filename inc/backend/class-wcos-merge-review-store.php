@@ -54,30 +54,6 @@ final class WCOS_Merge_Review_Store {
 		);
 	}
 
-	public static function claim(WC_Order $source, WC_Order $target, $review_id, $token, $user_id) {
-		$review_id = sanitize_key((string) $review_id);
-		if (!self::is_uuid($review_id) || !absint($user_id)) {
-			throw new WCOS_Merge_Review_Exception('invalid_identity', __('The Merge Review identity is invalid.', 'wc-order-splitter'));
-		}
-		$claim_key = self::claim_key($review_id);
-		if (!add_option($claim_key, time() + self::TTL, '', false)) {
-			$claim_expiry = (int) get_option($claim_key, 0);
-			if (!$claim_expiry || $claim_expiry >= time()) {
-				throw new WCOS_Merge_Review_Exception('already_consumed', __('This Merge Review is already being confirmed or was consumed.', 'wc-order-splitter'));
-			}
-			delete_option($claim_key);
-			if (!add_option($claim_key, time() + self::TTL, '', false)) {
-				throw new WCOS_Merge_Review_Exception('already_consumed', __('This Merge Review is already being confirmed or was consumed.', 'wc-order-splitter'));
-			}
-		}
-		try {
-			return self::verify($source, $target, $review_id, $token, $user_id);
-		} catch (Throwable $throwable) {
-			self::release_claim($review_id);
-			throw $throwable;
-		}
-	}
-
 	public static function verify(WC_Order $source, WC_Order $target, $review_id, $token, $user_id) {
 		$review_id = sanitize_key((string) $review_id);
 		$user_id = absint($user_id);
@@ -109,14 +85,7 @@ final class WCOS_Merge_Review_Store {
 	}
 
 	public static function consume($review_id) {
-		$deleted = self::delete($review_id);
-		self::release_claim($review_id);
-		return $deleted;
-	}
-
-	public static function release_claim($review_id) {
-		$review_id = sanitize_key((string) $review_id);
-		return self::is_uuid($review_id) ? delete_option(self::claim_key($review_id)) : false;
+		return self::delete($review_id);
 	}
 
 	public static function delete($review_id) {
@@ -153,6 +122,7 @@ final class WCOS_Merge_Review_Store {
 			'context_authority' => $pair['context_authority'],
 			'context_authority_fingerprint' => $pair['context_authority_fingerprint'],
 			'price_precision' => $precision,
+			'merge_service_policy_version' => (int) WCOS_Merge_Order_Service::POLICY_VERSION,
 			'preflight_policy_version' => (int) $pair['preflight_policy_version'],
 			'plan_schema_version' => (int) $pair['plan_schema_version'],
 			'context_signature_version' => (int) $pair['context_signature_version'],
@@ -174,7 +144,7 @@ final class WCOS_Merge_Review_Store {
 			throw new WCOS_Merge_Review_Exception('pair_changed', __('The Merge pair is no longer supported. Review it again.', 'wc-order-splitter'));
 		}
 		$current = self::authority_from_report($report, $source->get_id(), $target->get_id());
-		foreach (array('source_signature', 'target_signature', 'plan_fingerprint', 'pair_fingerprint', 'context_authority_fingerprint', 'price_precision', 'preflight_policy_version', 'plan_schema_version', 'context_signature_version', 'retirement_policy_schema_version', 'retirement_policy') as $field) {
+		foreach (array('source_signature', 'target_signature', 'plan_fingerprint', 'pair_fingerprint', 'context_authority_fingerprint', 'price_precision', 'merge_service_policy_version', 'preflight_policy_version', 'plan_schema_version', 'context_signature_version', 'retirement_policy_schema_version', 'retirement_policy') as $field) {
 			if (!array_key_exists($field, $authority) || (string) $authority[$field] !== (string) $current[$field]) {
 				$reason = 'source_signature' === $field ? 'source_changed' : ('target_signature' === $field ? 'target_changed' : 'authority_changed');
 				throw new WCOS_Merge_Review_Exception($reason, __('The Merge pair authority changed after Review. Review the pair again.', 'wc-order-splitter'));
@@ -189,7 +159,7 @@ final class WCOS_Merge_Review_Store {
 		$required = array(
 			'source_order_id', 'target_order_id', 'source_signature', 'target_signature', 'plan', 'plan_fingerprint',
 			'pair_fingerprint', 'context_authority', 'context_authority_fingerprint', 'price_precision',
-			'preflight_policy_version', 'plan_schema_version', 'context_signature_version',
+			'merge_service_policy_version', 'preflight_policy_version', 'plan_schema_version', 'context_signature_version',
 			'retirement_policy_schema_version', 'retirement_policy',
 		);
 		foreach ($required as $field) {
@@ -213,6 +183,7 @@ final class WCOS_Merge_Review_Store {
 		}
 		if ($precision !== (int) $authority['price_precision']
 			|| !hash_equals((string) $authority['plan_fingerprint'], $plan_fingerprint)
+			|| (int) $authority['merge_service_policy_version'] !== (int) WCOS_Merge_Order_Service::POLICY_VERSION
 			|| (int) $authority['preflight_policy_version'] !== (int) WCOS_Merge_Preflight::POLICY_VERSION
 			|| (int) $authority['plan_schema_version'] !== (int) WCOS_Merge_Plan::SCHEMA_VERSION
 			|| (int) $authority['context_signature_version'] !== (int) WCOS_Merge_Context_Signature::SCHEMA_VERSION
@@ -228,10 +199,6 @@ final class WCOS_Merge_Review_Store {
 
 	private static function key($review_id) {
 		return 'wcos_merge_review_' . hash('sha256', sanitize_key((string) $review_id));
-	}
-
-	private static function claim_key($review_id) {
-		return 'wcos_merge_review_claim_' . hash('sha256', sanitize_key((string) $review_id));
 	}
 
 	private static function is_uuid($value) {

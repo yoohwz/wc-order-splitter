@@ -362,7 +362,7 @@ final class WCOS_Merge_Order_Service {
 			'confirmation_schema_version', 'operation_id', 'operator_user_id', 'source_order_id', 'target_order_id',
 			'source_signature', 'target_signature', 'plan', 'plan_fingerprint', 'pair_fingerprint',
 			'context_authority_fingerprint', 'price_precision', 'preflight_policy_version', 'plan_schema_version',
-			'context_signature_version', 'retirement_policy_schema_version', 'retirement_policy',
+			'merge_service_policy_version', 'context_signature_version', 'retirement_policy_schema_version', 'retirement_policy',
 		);
 		foreach ($required as $field) {
 			if (!array_key_exists($field, $authority)) {
@@ -375,6 +375,7 @@ final class WCOS_Merge_Order_Service {
 			|| absint($authority['source_order_id']) !== $source_id
 			|| absint($authority['target_order_id']) !== $target_id
 			|| (int) $authority['price_precision'] !== (int) $precision
+			|| (int) $authority['merge_service_policy_version'] !== self::POLICY_VERSION
 			|| (int) $authority['preflight_policy_version'] !== (int) WCOS_Merge_Preflight::POLICY_VERSION
 			|| (int) $authority['plan_schema_version'] !== (int) WCOS_Merge_Plan::SCHEMA_VERSION
 			|| (int) $authority['context_signature_version'] !== (int) WCOS_Merge_Context_Signature::SCHEMA_VERSION
@@ -388,10 +389,25 @@ final class WCOS_Merge_Order_Service {
 			|| !hash_equals((string) $authority['context_authority_fingerprint'], (string) $pair_authority['context_authority_fingerprint'])) {
 			throw new RuntimeException(__('The Merge Confirmation no longer matches locked server authority.', 'wc-order-splitter'));
 		}
-		return array(
-			'schema_version' => absint($authority['confirmation_schema_version']),
-			'operator_user_id' => absint($authority['operator_user_id']),
-			'confirmed_pair_fingerprint' => sanitize_key((string) $authority['pair_fingerprint']),
+		return WCOS_Merge_Journal_Context::create_confirmation_handoff(
+			array(
+				'operation_id' => $operation_id,
+				'operator_user_id' => absint($authority['operator_user_id']),
+				'source_order_id' => $source_id,
+				'target_order_id' => $target_id,
+				'confirmation_schema_version' => absint($authority['confirmation_schema_version']),
+				'merge_service_policy_version' => self::POLICY_VERSION,
+				'preflight_policy_version' => WCOS_Merge_Preflight::POLICY_VERSION,
+				'plan_schema_version' => WCOS_Merge_Plan::SCHEMA_VERSION,
+				'plan_fingerprint' => sanitize_key((string) $authority['plan_fingerprint']),
+				'context_signature_version' => WCOS_Merge_Context_Signature::SCHEMA_VERSION,
+				'context_authority_fingerprint' => sanitize_key((string) $authority['context_authority_fingerprint']),
+				'pair_fingerprint' => sanitize_key((string) $authority['pair_fingerprint']),
+				'price_precision' => $precision,
+				'retirement_policy_schema_version' => WCOS_Merge_Retirement_Policy::SCHEMA_VERSION,
+				'retirement_policy' => WCOS_Merge_Retirement_Policy::approved_identifier(),
+			),
+			$pair
 		);
 	}
 

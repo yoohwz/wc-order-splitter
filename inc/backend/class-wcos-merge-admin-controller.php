@@ -93,24 +93,17 @@ final class WCOS_Merge_Admin_Controller {
 		list($source, $target) = $this->authorized_pair($request);
 		$review_id = isset($request['review_id']) ? sanitize_key((string) $request['review_id']) : '';
 		$review_token = isset($request['review_token']) ? (string) $request['review_token'] : '';
-		$claimed = false;
 		try {
-			$authority = WCOS_Merge_Review_Store::claim($source, $target, $review_id, $review_token, get_current_user_id());
-			$claimed = true;
+			$authority = WCOS_Merge_Review_Store::verify($source, $target, $review_id, $review_token, get_current_user_id());
 			$confirmation = WCOS_Merge_Confirmation_Store::create($source, $target, $authority, get_current_user_id());
 			if (!WCOS_Merge_Review_Store::consume($review_id)) {
 				WCOS_Merge_Confirmation_Store::delete($confirmation['operation_id']);
-				throw new WCOS_Merge_Review_Exception('consume_failed', __('The Merge Review could not be consumed safely. Review the pair again.', 'wc-order-splitter'));
+				throw new WCOS_Merge_Review_Exception('already_consumed', __('This Merge Review was already consumed. Review the pair again.', 'wc-order-splitter'));
 			}
-			$claimed = false;
 		} catch (WCOS_Merge_Review_Exception $exception) {
 			throw $this->review_exception($exception);
 		} catch (WCOS_Merge_Confirmation_Exception $exception) {
 			throw $this->confirmation_exception($exception);
-		} finally {
-			if ($claimed) {
-				WCOS_Merge_Review_Store::release_claim($review_id);
-			}
 		}
 
 		return array(

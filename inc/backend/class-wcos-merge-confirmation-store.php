@@ -131,6 +131,7 @@ final class WCOS_Merge_Confirmation_Store {
 			'pair_fingerprint' => sanitize_key((string) $record['pair_fingerprint']),
 			'context_authority_fingerprint' => sanitize_key((string) $record['context_authority_fingerprint']),
 			'price_precision' => WCOS_Price_Precision_Scope::validate($record['price_precision']),
+			'merge_service_policy_version' => absint($record['merge_service_policy_version']),
 			'preflight_policy_version' => absint($record['preflight_policy_version']),
 			'plan_schema_version' => absint($record['plan_schema_version']),
 			'context_signature_version' => absint($record['context_signature_version']),
@@ -147,20 +148,39 @@ final class WCOS_Merge_Confirmation_Store {
 	private static function durable_replay(WC_Order $source, WC_Order $target, $operation_id, $user_id, array $journal) {
 		try {
 			$pair = WCOS_Merge_Journal_Context::assert_executable_policy($journal);
+			$confirmed = WCOS_Merge_Journal_Context::confirmation_handoff_from_record($journal);
 		} catch (Throwable $throwable) {
 			throw new WCOS_Merge_Confirmation_Exception('journal_mismatch', __('The durable Merge journal authority is invalid.', 'wc-order-splitter'));
 		}
 		$context = isset($journal['context']) && is_array($journal['context']) ? $journal['context'] : array();
-		$confirmed = isset($context['merge_confirmation_authority']) && is_array($context['merge_confirmation_authority'])
-			? $context['merge_confirmation_authority'] : array();
 		if (absint($pair['source_order_id']) !== $source->get_id()
 			|| absint($pair['target_order_id']) !== $target->get_id()
 			|| sanitize_key(isset($journal['operation_id']) ? (string) $journal['operation_id'] : '') !== $operation_id
 			|| absint(isset($confirmed['operator_user_id']) ? $confirmed['operator_user_id'] : 0) !== $user_id
-			|| sanitize_key(isset($confirmed['confirmed_pair_fingerprint']) ? (string) $confirmed['confirmed_pair_fingerprint'] : '') !== $pair['pair_fingerprint']) {
+			|| (int) $confirmed['confirmation_schema_version'] !== self::SCHEMA_VERSION
+			|| (int) $confirmed['merge_service_policy_version'] !== WCOS_Merge_Order_Service::POLICY_VERSION) {
 			throw new WCOS_Merge_Confirmation_Exception('journal_mismatch', __('The durable Merge journal does not match this operation, operator, and participant pair.', 'wc-order-splitter'));
 		}
 		$status = sanitize_key(isset($journal['status']) ? (string) $journal['status'] : '');
+		if (in_array($status, array('recovery_required', 'recovering', 'started', 'committed', 'failed', 'compensating'), true)) {
+			WCOS_Operation_Journal::require_recovery($source, $operation_id, array('reason' => 'confirmation_replay'));
+			$source = wc_get_order($source->get_id());
+			$journal = $source instanceof WC_Order ? WCOS_Operation_Journal::get($source, $operation_id) : null;
+			if (!is_array($journal)) {
+				throw new WCOS_Merge_Confirmation_Exception('journal_mismatch', __('The authoritative Merge journal disappeared during recovery dispatch.', 'wc-order-splitter'));
+			}
+			try {
+				$pair = WCOS_Merge_Journal_Context::assert_executable_policy($journal);
+				$reloaded_confirmed = WCOS_Merge_Journal_Context::confirmation_handoff_from_record($journal);
+			} catch (Throwable $throwable) {
+				throw new WCOS_Merge_Confirmation_Exception('journal_mismatch', __('The reloaded durable Merge journal authority is invalid.', 'wc-order-splitter'));
+			}
+			if ($confirmed !== $reloaded_confirmed) {
+				throw new WCOS_Merge_Confirmation_Exception('journal_mismatch', __('The durable Merge Confirmation authority changed during recovery dispatch.', 'wc-order-splitter'));
+			}
+			$context = isset($journal['context']) && is_array($journal['context']) ? $journal['context'] : array();
+			$status = sanitize_key(isset($journal['status']) ? (string) $journal['status'] : '');
+		}
 		if ('manual_reconciliation' === $status) {
 			throw new WCOS_Merge_Confirmation_Exception('manual_reconciliation', __('This Merge operation requires manual reconciliation.', 'wc-order-splitter'));
 		}
@@ -168,11 +188,12 @@ final class WCOS_Merge_Confirmation_Store {
 			throw new WCOS_Merge_Confirmation_Exception('operation_closed', __('This Merge operation is closed and cannot be replayed.', 'wc-order-splitter'));
 		}
 		if ('completed' === $status) {
-			$result = WCOS_Merge_Journal_Context::terminal_result_from_record($journal);
-		} elseif (in_array($status, array('recovery_required', 'recovering', 'started', 'committed', 'failed', 'compensating'), true)) {
-			if (!WCOS_Operation_Journal::require_recovery($source, $operation_id, array('reason' => 'confirmation_replay'))) {
-				throw new WCOS_Merge_Confirmation_Exception('recovery_required', __('The durable Merge operation requires recovery.', 'wc-order-splitter'));
+			try {
+				$result = WCOS_Merge_Journal_Context::terminal_result_from_record($journal);
+			} catch (Throwable $throwable) {
+				throw new WCOS_Merge_Confirmation_Exception('journal_mismatch', __('The durable Merge terminal result failed authority verification.', 'wc-order-splitter'));
 			}
+		} elseif (in_array($status, array('recovery_required', 'recovering', 'started', 'committed', 'failed', 'compensating'), true)) {
 			$result = array();
 		} else {
 			throw new WCOS_Merge_Confirmation_Exception('journal_mismatch', __('The durable Merge journal has an unsupported state.', 'wc-order-splitter'));
@@ -191,6 +212,7 @@ final class WCOS_Merge_Confirmation_Store {
 			'pair_fingerprint' => (string) $pair['pair_fingerprint'],
 			'context_authority_fingerprint' => (string) $pair['context_authority_fingerprint'],
 			'price_precision' => (int) $pair['price_precision'],
+			'merge_service_policy_version' => (int) $confirmed['merge_service_policy_version'],
 			'preflight_policy_version' => (int) $pair['preflight_policy_version'],
 			'plan_schema_version' => (int) $pair['plan_schema_version'],
 			'context_signature_version' => (int) $pair['context_signature_version'],
@@ -199,11 +221,13 @@ final class WCOS_Merge_Confirmation_Store {
 			'replay_authority' => 'journal',
 			'journal_status' => $status,
 			'terminal_result' => $result,
+			'recovery_state' => 'completed' === $status ? 'terminal' : 'recovery_pending',
+			'retryable' => 'completed' !== $status,
 		);
 	}
 
 	private static function assert_confirmation_matches_durable(array $record, array $durable) {
-		foreach (array('operation_id', 'user_id', 'source_order_id', 'target_order_id', 'source_signature', 'target_signature', 'plan_fingerprint', 'pair_fingerprint', 'context_authority_fingerprint', 'price_precision', 'preflight_policy_version', 'plan_schema_version', 'context_signature_version', 'retirement_policy_schema_version', 'retirement_policy') as $field) {
+		foreach (array('operation_id', 'user_id', 'source_order_id', 'target_order_id', 'source_signature', 'target_signature', 'plan_fingerprint', 'pair_fingerprint', 'context_authority_fingerprint', 'price_precision', 'merge_service_policy_version', 'preflight_policy_version', 'plan_schema_version', 'context_signature_version', 'retirement_policy_schema_version', 'retirement_policy') as $field) {
 			if (!isset($record[$field], $durable[$field]) || (string) $record[$field] !== (string) $durable[$field]) {
 				throw new WCOS_Merge_Confirmation_Exception('journal_mismatch', __('Temporary Merge Confirmation no longer matches durable journal authority.', 'wc-order-splitter'));
 			}
@@ -214,7 +238,7 @@ final class WCOS_Merge_Confirmation_Store {
 	}
 
 	private static function assert_complete(array $record) {
-		$required = array('operation_id', 'user_id', 'source_order_id', 'target_order_id', 'source_signature', 'target_signature', 'plan', 'plan_fingerprint', 'pair_fingerprint', 'context_authority_fingerprint', 'price_precision', 'preflight_policy_version', 'plan_schema_version', 'context_signature_version', 'retirement_policy_schema_version', 'retirement_policy');
+		$required = array('operation_id', 'user_id', 'source_order_id', 'target_order_id', 'source_signature', 'target_signature', 'plan', 'plan_fingerprint', 'pair_fingerprint', 'context_authority_fingerprint', 'price_precision', 'merge_service_policy_version', 'preflight_policy_version', 'plan_schema_version', 'context_signature_version', 'retirement_policy_schema_version', 'retirement_policy');
 		foreach ($required as $field) {
 			if (!array_key_exists($field, $record) || (is_string($record[$field]) && '' === $record[$field])) {
 				throw new WCOS_Merge_Confirmation_Exception('authority_incomplete', __('The Merge Confirmation is missing frozen server authority.', 'wc-order-splitter'));
@@ -239,6 +263,7 @@ final class WCOS_Merge_Confirmation_Store {
 		if ($precision !== (int) $record['price_precision']
 			|| !hash_equals((string) $record['plan_fingerprint'], $plan_fingerprint)
 			|| WCOS_Merge_Retirement_Policy::approved_identifier() !== sanitize_key((string) $record['retirement_policy'])
+			|| (int) $record['merge_service_policy_version'] !== (int) WCOS_Merge_Order_Service::POLICY_VERSION
 			|| (int) $record['preflight_policy_version'] !== (int) WCOS_Merge_Preflight::POLICY_VERSION
 			|| (int) $record['plan_schema_version'] !== (int) WCOS_Merge_Plan::SCHEMA_VERSION
 			|| (int) $record['context_signature_version'] !== (int) WCOS_Merge_Context_Signature::SCHEMA_VERSION
