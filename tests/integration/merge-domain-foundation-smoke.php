@@ -129,6 +129,20 @@ try {
 	wcos_merge_foundation_assert(false !== strpos($exception->getMessage(), 'signature'), 'Unexpected keyed-signature failure.');
 }
 
+/* Preflight never publishes arbitrary extension exception text or PII. */
+$pii_exception_filter = static function() use ($email) {
+	throw new RuntimeException('Extension failure for ' . $email . ' at 37 Foundation Way, +1 555 0100');
+};
+add_filter('wcos_order_item_meta_classification', $pii_exception_filter, PHP_INT_MAX, 6);
+$pii_exception_report = WCOS_Merge_Preflight::report($source, $target);
+remove_filter('wcos_order_item_meta_classification', $pii_exception_filter, PHP_INT_MAX);
+wcos_merge_foundation_assert('incompatible_pair_context' === $pii_exception_report['reason'], 'Extension exception used an unstable preflight reason.');
+wcos_merge_foundation_assert('The order pair failed a hardened Merge compatibility check.' === $pii_exception_report['message'], 'Extension exception used an unstable preflight message.');
+$pii_exception_json = wp_json_encode($pii_exception_report);
+foreach (array($email, '37 Foundation Way', '+1 555 0100') as $pii) {
+	wcos_merge_foundation_assert(false === strpos($pii_exception_json, $pii), 'Extension exception PII entered preflight evidence.');
+}
+
 $registered_source = wcos_merge_foundation_order('registered@example.test', 1);
 $registered_target = wcos_merge_foundation_order('registered@example.test', 1);
 $registered_source->set_customer_id(707);
@@ -267,10 +281,49 @@ $lease->assert_owned();
 
 /* One source journal is authority; scalar participation closes the blocker crash window. */
 $report = WCOS_Merge_Preflight::assert_supported(wc_get_order($source_id), wc_get_order($target_id));
-$context = WCOS_Merge_Journal_Context::create($source, $target, $report['plan'], $report['context_authority']);
+$context = WCOS_Merge_Journal_Context::create($source, $target, $report['plan'], $report['context_authority'], $report['price_precision']);
 wcos_merge_foundation_assert(WCOS_Operation_Journal::start($source, $operation_id, 'merge', $context, $report['pair_fingerprint']), 'Source Merge journal did not start.');
+$journal = WCOS_Operation_Journal::get($source, $operation_id);
+$verified_pair = WCOS_Merge_Journal_Context::pair_from_record($journal);
+wcos_merge_foundation_assert(is_array($verified_pair), 'Canonical Merge pair authority did not self-verify.');
+wcos_merge_foundation_assert($report['price_precision'] === $verified_pair['price_precision'], 'Pair authority lost price-precision authority.');
+wcos_merge_foundation_assert(WCOS_Merge_Preflight::POLICY_VERSION === $verified_pair['preflight_policy_version'], 'Pair authority lost preflight-policy authority.');
+
+/* Every durable pair-authority field is independently tamper-evident. */
+$authority_tamper_cases = array(
+	'source_order_id' => static function(&$record) { $record['context']['merge_pair']['authority']['source_order_id']++; },
+	'target_order_id' => static function(&$record) { $record['context']['merge_pair']['authority']['target_order_id']++; },
+	'source_signature' => static function(&$record) { $record['context']['merge_pair']['authority']['source_signature'] = str_repeat('1', 64); },
+	'target_signature' => static function(&$record) { $record['context']['merge_pair']['authority']['target_signature'] = str_repeat('2', 64); },
+	'plan_schema_version' => static function(&$record) { $record['context']['merge_pair']['authority']['plan_schema_version']++; },
+	'plan_fingerprint' => static function(&$record) { $record['context']['merge_pair']['authority']['plan_fingerprint'] = str_repeat('3', 64); },
+	'price_precision' => static function(&$record) { $record['context']['merge_pair']['authority']['price_precision']++; },
+	'preflight_policy_version' => static function(&$record) { $record['context']['merge_pair']['authority']['preflight_policy_version']++; },
+	'context_signature_version' => static function(&$record) { $record['context']['merge_pair']['authority']['context_signature_version']++; },
+	'context_authority' => static function(&$record) { $record['context']['merge_pair']['authority']['context_authority']['billing_context_digest'] = str_repeat('4', 64); },
+	'context_authority_fingerprint' => static function(&$record) { $record['context']['merge_pair']['authority']['context_authority_fingerprint'] = str_repeat('5', 64); },
+	'retirement_policy_schema_version' => static function(&$record) { $record['context']['merge_pair']['authority']['retirement_policy_schema_version']++; },
+	'retirement_candidates' => static function(&$record) { $record['context']['merge_pair']['authority']['retirement_candidates'][] = 'unreviewed'; },
+	'retirement_policy_selected' => static function(&$record) { $record['context']['merge_pair']['authority']['retirement_policy_selected'] = true; },
+	'archive_source_signature_before' => static function(&$record) { $record['context']['merge_pair']['authority']['archive_source_signature_before'] = str_repeat('6', 64); },
+	'active_ownership_before_signature' => static function(&$record) { $record['context']['merge_pair']['authority']['active_ownership_before_signature'] = str_repeat('7', 64); },
+	'participation_schema_version' => static function(&$record) { $record['context']['merge_pair']['authority']['participation_schema_version']++; },
+	'pair_schema_version' => static function(&$record) { $record['context']['merge_pair']['schema_version']++; },
+	'pair_fingerprint' => static function(&$record) { $record['context']['merge_pair']['pair_fingerprint'] = str_repeat('8', 64); },
+	'journal_fingerprint' => static function(&$record) { $record['fingerprint'] = str_repeat('9', 64); },
+	'journal_source_order_id' => static function(&$record) { $record['source_order_id']++; },
+	'journal_price_precision' => static function(&$record) { $record['context']['price_precision']++; },
+);
+foreach ($authority_tamper_cases as $field => $tamper) {
+	$tampered_record = $journal;
+	$tamper($tampered_record);
+	wcos_merge_foundation_assert(null === WCOS_Merge_Journal_Context::pair_from_record($tampered_record), 'Tampered pair authority field was accepted: ' . $field);
+}
+
+$unrelated_pointer = '424242|unrelated-operation|' . str_repeat('f', 64);
 $target->add_meta_data(WCOS_Merge_Participation::TARGET_SOURCE_META, 424242, false);
 $target->add_meta_data(WCOS_Merge_Participation::TARGET_OPERATION_META, 'unrelated-operation', false);
+$target->add_meta_data(WCOS_Merge_Participation::TARGET_AUTHORITY_META, $unrelated_pointer, false);
 $target->save_meta_data();
 wcos_merge_foundation_assert(WCOS_Merge_Participation::persist($source, $target, $operation_id, $report['pair_fingerprint']), 'Pair participation did not persist.');
 wcos_merge_foundation_assert(WCOS_Merge_Participation::persist($source, $target, $operation_id, $report['pair_fingerprint']), 'Pair participation was not idempotent.');
@@ -282,6 +335,50 @@ wcos_merge_foundation_assert(in_array($operation_id, WCOS_Manual_Reconciliation_
 wcos_merge_foundation_assert(in_array($operation_id, WCOS_Manual_Reconciliation_Blocker::active_operation_ids($fresh_target), true), 'Target crash window did not dereference the source journal.');
 $discovered_target_ids = array_map(static function($order) { return $order->get_id(); }, WCOS_Merge_Participation::find_targets($source_id, $operation_id));
 wcos_merge_foundation_assert(in_array($target_id, $discovered_target_ids, true), 'Relation discovery did not find the target in the active storage mode.');
+
+/* Invalid journal identity and corrupt participation remain blocking authority. */
+$journal_option_key = 'wcos_mutation_op_' . hash('sha256', $source_id . '|' . sanitize_key($operation_id));
+$journal_mismatch_cases = array(
+	'type' => static function(&$record) { $record['type'] = 'split'; },
+	'source' => static function(&$record) { $record['source_order_id']++; },
+	'target' => static function(&$record) { $record['context']['merge_pair']['authority']['target_order_id']++; },
+	'pair' => static function(&$record) { $record['context']['merge_pair']['pair_fingerprint'] = str_repeat('a', 64); },
+	'fingerprint' => static function(&$record) { $record['fingerprint'] = str_repeat('b', 64); },
+	'operation' => static function(&$record) { $record['operation_id'] = 'different-operation'; },
+);
+foreach ($journal_mismatch_cases as $field => $tamper) {
+	$tampered_record = $journal;
+	$tamper($tampered_record);
+	update_option($journal_option_key, $tampered_record, false);
+	wcos_merge_foundation_assert(in_array($operation_id, WCOS_Manual_Reconciliation_Blocker::active_operation_ids(wc_get_order($source_id)), true), 'Source failed open for journal mismatch: ' . $field);
+	wcos_merge_foundation_assert(in_array($operation_id, WCOS_Manual_Reconciliation_Blocker::active_operation_ids(wc_get_order($target_id)), true), 'Target failed open for journal mismatch: ' . $field);
+	wcos_merge_foundation_assert('manual_reconciliation_required' === WCOS_Merge_Preflight::report(wc_get_order($source_id), wc_get_order($target_id))['reason'], 'Merge preflight failed open for journal mismatch: ' . $field);
+	wcos_merge_foundation_assert('manual_reconciliation_required' === WCOS_Duplicate_Preflight::report(wc_get_order($source_id))['reason'], 'Duplicate preflight failed open for journal mismatch: ' . $field);
+	wcos_merge_foundation_assert('manual_reconciliation_required' === (new WCOS_Split_WooCommerce_Adapter())->preflight(wc_get_order($source_id))['reason'], 'Split preflight failed open for journal mismatch: ' . $field);
+}
+update_option($journal_option_key, $journal, false);
+
+$malformed_pointer = $source_id . '|' . $operation_id . '|malformed';
+$fresh_target->add_meta_data(WCOS_Merge_Participation::TARGET_AUTHORITY_META, $malformed_pointer, false);
+$fresh_target->save_meta_data();
+wcos_merge_foundation_assert(!empty(WCOS_Merge_Participation::unresolved_operation_ids(wc_get_order($target_id))), 'Malformed target participation failed open.');
+wcos_merge_foundation_assert('manual_reconciliation_required' === WCOS_Merge_Preflight::report(wc_get_order($source_id), wc_get_order($target_id))['reason'], 'Merge preflight ignored malformed participation.');
+wcos_merge_foundation_assert('manual_reconciliation_required' === WCOS_Duplicate_Preflight::report(wc_get_order($target_id))['reason'], 'Duplicate preflight ignored malformed participation.');
+wcos_merge_foundation_assert('manual_reconciliation_required' === (new WCOS_Split_WooCommerce_Adapter())->preflight(wc_get_order($target_id))['reason'], 'Split preflight ignored malformed participation.');
+$fresh_target = wc_get_order($target_id);
+$fresh_target->delete_meta_data_value(WCOS_Merge_Participation::TARGET_AUTHORITY_META, $malformed_pointer);
+$fresh_target->save_meta_data();
+$conflicting_operation = 'merge-conflict-' . wp_generate_uuid4();
+$fresh_source = wc_get_order($source_id);
+$fresh_source->add_meta_data(WCOS_Merge_Participation::SOURCE_OPERATION_META, $conflicting_operation, false);
+$fresh_source->save_meta_data();
+wcos_merge_foundation_assert(!empty(WCOS_Merge_Participation::unresolved_operation_ids(wc_get_order($source_id))), 'Conflicting source participation failed open.');
+wcos_merge_foundation_assert('manual_reconciliation_required' === WCOS_Merge_Preflight::report(wc_get_order($source_id), wc_get_order($target_id))['reason'], 'Merge preflight ignored conflicting participation.');
+wcos_merge_foundation_assert('manual_reconciliation_required' === WCOS_Duplicate_Preflight::report(wc_get_order($source_id))['reason'], 'Duplicate preflight ignored conflicting participation.');
+wcos_merge_foundation_assert('manual_reconciliation_required' === (new WCOS_Split_WooCommerce_Adapter())->preflight(wc_get_order($source_id))['reason'], 'Split preflight ignored conflicting participation.');
+$fresh_source = wc_get_order($source_id);
+$fresh_source->delete_meta_data_value(WCOS_Merge_Participation::SOURCE_OPERATION_META, $conflicting_operation);
+$fresh_source->save_meta_data();
 
 wcos_merge_foundation_assert(WCOS_Manual_Reconciliation_Blocker::block_participant($source, $source, $operation_id, 'source', $target_id, $report['pair_fingerprint']), 'Source participant blocker did not persist.');
 wcos_merge_foundation_assert(in_array($operation_id, WCOS_Manual_Reconciliation_Blocker::active_operation_ids($fresh_target), true), 'Missing target blocker after source persistence did not fail closed through participation.');
@@ -327,10 +424,19 @@ wcos_merge_foundation_assert(WCOS_Manual_Reconciliation_Blocker::block_participa
 wcos_merge_foundation_assert(!WCOS_Operation_Journal_Retention::is_expired_terminal_record($old_record, time()), 'Retention discarded proof while only the target blocker remained.');
 delete_option('wcos_manual_reconcile_block_' . $target_id);
 
-wcos_merge_foundation_assert(WCOS_Merge_Participation::cleanup($source, $target, $operation_id), 'Participation cleanup failed.');
+/* Retry cleanup from the partial state where source metadata is already gone. */
+$fresh_source = wc_get_order($source_id);
+$fresh_source->delete_meta_data_value(WCOS_Merge_Participation::SOURCE_TARGET_META, $target_id);
+$fresh_source->delete_meta_data_value(WCOS_Merge_Participation::SOURCE_OPERATION_META, $operation_id);
+$fresh_source->delete_meta_data_value(WCOS_Merge_Participation::SOURCE_PAIR_FINGERPRINT_META, $report['pair_fingerprint']);
+$fresh_source->save_meta_data();
+wcos_merge_foundation_assert(in_array($source_id . '|' . $operation_id . '|' . $report['pair_fingerprint'], array_map('strval', wcos_merge_foundation_meta_values(wc_get_order($target_id), WCOS_Merge_Participation::TARGET_AUTHORITY_META)), true), 'Partial cleanup fixture lost target authority before retry.');
+wcos_merge_foundation_assert(WCOS_Merge_Participation::cleanup($source, $target, $operation_id), 'Participation cleanup retry failed.');
+wcos_merge_foundation_assert(WCOS_Merge_Participation::cleanup($source, $target, $operation_id), 'Participation cleanup was not idempotent after retry.');
 $fresh_target = wc_get_order($target_id);
 wcos_merge_foundation_assert(in_array('424242', array_map('strval', wcos_merge_foundation_meta_values($fresh_target, WCOS_Merge_Participation::TARGET_SOURCE_META)), true), 'Cleanup removed an unrelated source relation.');
 wcos_merge_foundation_assert(in_array('unrelated-operation', array_map('strval', wcos_merge_foundation_meta_values($fresh_target, WCOS_Merge_Participation::TARGET_OPERATION_META)), true), 'Cleanup removed an unrelated operation relation.');
+wcos_merge_foundation_assert(in_array($unrelated_pointer, array_map('strval', wcos_merge_foundation_meta_values($fresh_target, WCOS_Merge_Participation::TARGET_AUTHORITY_META)), true), 'Cleanup removed an unrelated authority pointer.');
 wcos_merge_foundation_assert($lease->release(), 'Pair lease did not release safely.');
 
 /* Cleanup test records after terminal journal proof is no longer referenced. */
@@ -343,7 +449,7 @@ $orphan_source = wcos_merge_foundation_order($email, 1);
 $orphan_target = wcos_merge_foundation_order($email, 1);
 $orphan_report = WCOS_Merge_Preflight::assert_supported($orphan_source, $orphan_target);
 $orphan_operation = 'merge-orphan-' . wp_generate_uuid4();
-$orphan_context = WCOS_Merge_Journal_Context::create($orphan_source, $orphan_target, $orphan_report['plan'], $orphan_report['context_authority']);
+$orphan_context = WCOS_Merge_Journal_Context::create($orphan_source, $orphan_target, $orphan_report['plan'], $orphan_report['context_authority'], $orphan_report['price_precision']);
 wcos_merge_foundation_assert(WCOS_Operation_Journal::start($orphan_source, $orphan_operation, 'merge', $orphan_context, $orphan_report['pair_fingerprint']), 'Orphan journal fixture did not start.');
 wcos_merge_foundation_assert(WCOS_Manual_Reconciliation_Blocker::block_participant($orphan_source, $orphan_source, $orphan_operation, 'source', $orphan_target->get_id(), $orphan_report['pair_fingerprint']), 'Orphan source blocker did not persist.');
 $orphan_target->delete(true);

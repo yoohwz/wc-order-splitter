@@ -11,6 +11,7 @@ defined('ABSPATH') || exit;
 final class WCOS_Merge_Participation {
 
 	const SCHEMA_VERSION = 1;
+	const CORRUPT_OPERATION_ID = 'merge_participation_corrupt';
 	const SOURCE_TARGET_META = '_wcos_merged_into_order_id';
 	const SOURCE_OPERATION_META = '_wcos_merge_operation_id';
 	const SOURCE_PAIR_FINGERPRINT_META = '_wcos_merge_pair_fingerprint';
@@ -69,21 +70,25 @@ final class WCOS_Merge_Participation {
 		}
 		WCOS_Operation_Lock::assert_current_owned_for($source_id, $operation_id);
 		WCOS_Operation_Lock::assert_current_owned_for($target_id, $operation_id);
+		$record = WCOS_Operation_Journal::get($source, $operation_id);
+		$pair = is_array($record) ? WCOS_Merge_Journal_Context::pair_from_record($record) : null;
+		if (!is_array($pair)
+			|| $source_id !== $pair['source_order_id']
+			|| $target_id !== $pair['target_order_id']
+			|| $operation_id !== sanitize_key(isset($record['operation_id']) ? (string) $record['operation_id'] : '')) {
+			return false;
+		}
+		$pair_fingerprint = $pair['pair_fingerprint'];
 
 		$fresh_source = wc_get_order($source_id);
 		$fresh_target = wc_get_order($target_id);
 		if (!$fresh_source instanceof WC_Order || !$fresh_target instanceof WC_Order) {
 			return false;
 		}
-		$pair_fingerprint = sanitize_key((string) $fresh_source->get_meta(self::SOURCE_PAIR_FINGERPRINT_META, true));
-		if ((int) $fresh_source->get_meta(self::SOURCE_TARGET_META, true) === $target_id
-			&& (string) $fresh_source->get_meta(self::SOURCE_OPERATION_META, true) === $operation_id
-			&& '' !== $pair_fingerprint) {
-			$fresh_source->delete_meta_data(self::SOURCE_TARGET_META);
-			$fresh_source->delete_meta_data(self::SOURCE_OPERATION_META);
-			$fresh_source->delete_meta_data(self::SOURCE_PAIR_FINGERPRINT_META);
-			$fresh_source->save_meta_data();
-		}
+		$fresh_source->delete_meta_data_value(self::SOURCE_TARGET_META, $target_id);
+		$fresh_source->delete_meta_data_value(self::SOURCE_OPERATION_META, $operation_id);
+		$fresh_source->delete_meta_data_value(self::SOURCE_PAIR_FINGERPRINT_META, $pair_fingerprint);
+		$fresh_source->save_meta_data();
 
 		$remaining_authorities = array();
 		if ('' !== $pair_fingerprint) {
@@ -108,6 +113,29 @@ final class WCOS_Merge_Participation {
 			$fresh_target->delete_meta_data_value(self::TARGET_OPERATION_META, $operation_id);
 		}
 		$fresh_target->save_meta_data();
+
+		$source_after = wc_get_order($source_id);
+		$target_after = wc_get_order($target_id);
+		if (!$source_after instanceof WC_Order || !$target_after instanceof WC_Order) {
+			return false;
+		}
+		$owned_pointer = self::authority_pointer($source_id, $operation_id, $pair_fingerprint);
+		if (in_array((string) $target_id, array_map('strval', self::meta_values($source_after, self::SOURCE_TARGET_META)), true)
+			|| in_array($operation_id, array_map('strval', self::meta_values($source_after, self::SOURCE_OPERATION_META)), true)
+			|| in_array($pair_fingerprint, array_map('strval', self::meta_values($source_after, self::SOURCE_PAIR_FINGERPRINT_META)), true)
+			|| in_array($owned_pointer, array_map('strval', self::meta_values($target_after, self::TARGET_AUTHORITY_META)), true)) {
+			return false;
+		}
+
+		$remaining = self::parsed_target_authorities($target_after);
+		if (empty($remaining['source_ids'][$source_id])
+			&& in_array((string) $source_id, array_map('strval', self::meta_values($target_after, self::TARGET_SOURCE_META)), true)) {
+			return false;
+		}
+		if (empty($remaining['operation_ids'][$operation_id])
+			&& in_array($operation_id, array_map('strval', self::meta_values($target_after, self::TARGET_OPERATION_META)), true)) {
+			return false;
+		}
 		return true;
 	}
 
@@ -117,10 +145,18 @@ final class WCOS_Merge_Participation {
 			return array();
 		}
 		$authorities = array();
-		$target_id = absint($participant->get_meta(self::SOURCE_TARGET_META, true));
-		$source_operation = sanitize_key((string) $participant->get_meta(self::SOURCE_OPERATION_META, true));
-		$source_pair_fingerprint = sanitize_key((string) $participant->get_meta(self::SOURCE_PAIR_FINGERPRINT_META, true));
-		if ($target_id && '' !== $source_operation && '' !== $source_pair_fingerprint) {
+		$source_target_values = self::meta_values($participant, self::SOURCE_TARGET_META);
+		$source_operation_values = self::meta_values($participant, self::SOURCE_OPERATION_META);
+		$source_fingerprint_values = self::meta_values($participant, self::SOURCE_PAIR_FINGERPRINT_META);
+		$has_source_evidence = !empty($source_target_values) || !empty($source_operation_values) || !empty($source_fingerprint_values);
+		$target_id = 1 === count($source_target_values) ? absint(reset($source_target_values)) : 0;
+		$source_operation = 1 === count($source_operation_values) ? sanitize_key((string) reset($source_operation_values)) : '';
+		$source_pair_fingerprint = 1 === count($source_fingerprint_values) ? self::normalized_fingerprint(reset($source_fingerprint_values)) : '';
+		if ($has_source_evidence && $target_id && '' !== $source_operation && '' !== $source_pair_fingerprint
+			&& 1 === count($source_target_values) && 1 === count($source_operation_values) && 1 === count($source_fingerprint_values)
+			&& (string) reset($source_target_values) === (string) $target_id
+			&& (string) reset($source_operation_values) === $source_operation
+			&& (string) reset($source_fingerprint_values) === $source_pair_fingerprint) {
 			$authorities[] = array(
 				'participant_order_id' => $participant_id,
 				'participant_role' => 'source',
@@ -129,13 +165,29 @@ final class WCOS_Merge_Participation {
 				'operation_id' => $source_operation,
 				'pair_fingerprint' => $source_pair_fingerprint,
 			);
+		} elseif ($has_source_evidence) {
+			$authorities = array_merge($authorities, self::corrupt_authorities($participant_id, $source_operation_values));
 		}
 
-		foreach (self::meta_values($participant, self::TARGET_AUTHORITY_META) as $pointer) {
+		$target_source_values = self::meta_values($participant, self::TARGET_SOURCE_META);
+		$target_operation_values = self::meta_values($participant, self::TARGET_OPERATION_META);
+		$target_pointer_values = self::meta_values($participant, self::TARGET_AUTHORITY_META);
+		$parsed_targets = array();
+		$target_pointer_keys = array();
+		foreach ($target_pointer_values as $pointer) {
 			$parts = self::parse_authority_pointer($pointer);
 			if (empty($parts)) {
+				$pointer_parts = explode('|', (string) $pointer);
+				$operation_values = isset($pointer_parts[1]) ? array($pointer_parts[1]) : array();
+				$authorities = array_merge($authorities, self::corrupt_authorities($participant_id, $operation_values));
 				continue;
 			}
+			$key = $parts['source_order_id'] . '|' . $parts['operation_id'];
+			if (isset($target_pointer_keys[$key]) && $target_pointer_keys[$key] !== $parts['pair_fingerprint']) {
+				$authorities = array_merge($authorities, self::corrupt_authorities($participant_id, array($parts['operation_id'])));
+			}
+			$target_pointer_keys[$key] = $parts['pair_fingerprint'];
+			$parsed_targets[] = $parts;
 			$authorities[] = array(
 				'participant_order_id' => $participant_id,
 				'participant_role' => 'target',
@@ -145,6 +197,24 @@ final class WCOS_Merge_Participation {
 				'pair_fingerprint' => $parts['pair_fingerprint'],
 			);
 		}
+		$indexed_source_ids = self::normalized_scalar_set($target_source_values, 'absint');
+		$indexed_operation_ids = self::normalized_scalar_set($target_operation_values, 'sanitize_key');
+		$pointer_source_ids = array();
+		$pointer_operation_ids = array();
+		foreach ($parsed_targets as $parts) {
+			$pointer_source_ids[] = $parts['source_order_id'];
+			$pointer_operation_ids[] = $parts['operation_id'];
+		}
+		$pointer_source_ids = self::normalized_scalar_set($pointer_source_ids, 'absint');
+		$pointer_operation_ids = self::normalized_scalar_set($pointer_operation_ids, 'sanitize_key');
+		if ($indexed_source_ids !== $pointer_source_ids || $indexed_operation_ids !== $pointer_operation_ids
+			|| count($target_source_values) !== count($indexed_source_ids)
+			|| count($target_operation_values) !== count($indexed_operation_ids)
+			|| !self::scalar_values_are_canonical($target_source_values, 'absint')
+			|| !self::scalar_values_are_canonical($target_operation_values, 'sanitize_key')
+			|| count($target_pointer_values) !== count(array_unique(array_map('strval', $target_pointer_values)))) {
+			$authorities = array_merge($authorities, self::corrupt_authorities($participant_id, $target_operation_values));
+		}
 
 		return self::unique_authorities($authorities);
 	}
@@ -152,6 +222,10 @@ final class WCOS_Merge_Participation {
 	public static function unresolved_operation_ids(WC_Order $participant) {
 		$active = array();
 		foreach (self::authorities($participant) as $authority) {
+			if ('corrupt' === $authority['participant_role']) {
+				$active[] = $authority['operation_id'];
+				continue;
+			}
 			$source = wc_get_order($authority['journal_source_order_id']);
 			if (!$source instanceof WC_Order) {
 				$active[] = $authority['operation_id'];
@@ -162,14 +236,14 @@ final class WCOS_Merge_Participation {
 				$active[] = $authority['operation_id'];
 				continue;
 			}
-			if (WCOS_Merge_Journal_Context::validates_participant(
+			if (!WCOS_Merge_Journal_Context::validates_participant(
 				$record,
 				$authority['participant_order_id'],
 				$authority['participant_role'],
 				$authority['peer_order_id'],
 				$authority['pair_fingerprint'],
 				$authority['operation_id']
-			) && WCOS_Merge_Journal_Context::is_unsafe_record($record)) {
+			) || WCOS_Merge_Journal_Context::is_unsafe_record($record)) {
 				$active[] = $authority['operation_id'];
 			}
 		}
@@ -265,6 +339,67 @@ final class WCOS_Merge_Participation {
 			return array();
 		}
 		return compact('source_order_id', 'operation_id', 'pair_fingerprint');
+	}
+
+	private static function parsed_target_authorities(WC_Order $target) {
+		$source_ids = array();
+		$operation_ids = array();
+		foreach (self::meta_values($target, self::TARGET_AUTHORITY_META) as $pointer) {
+			$authority = self::parse_authority_pointer($pointer);
+			if (empty($authority)) {
+				continue;
+			}
+			$source_ids[$authority['source_order_id']] = true;
+			$operation_ids[$authority['operation_id']] = true;
+		}
+		return array('source_ids' => $source_ids, 'operation_ids' => $operation_ids);
+	}
+
+	private static function corrupt_authorities($participant_id, array $operation_values) {
+		$operation_ids = self::normalized_scalar_set($operation_values, 'sanitize_key');
+		if (empty($operation_ids)) {
+			$operation_ids = array(self::CORRUPT_OPERATION_ID);
+		}
+		$authorities = array();
+		foreach ($operation_ids as $operation_id) {
+			$authorities[] = array(
+				'participant_order_id' => absint($participant_id),
+				'participant_role' => 'corrupt',
+				'peer_order_id' => 0,
+				'journal_source_order_id' => 0,
+				'operation_id' => $operation_id,
+				'pair_fingerprint' => '',
+			);
+		}
+		return $authorities;
+	}
+
+	private static function normalized_scalar_set(array $values, $normalizer) {
+		$normalized = array();
+		foreach ($values as $value) {
+			$value = call_user_func($normalizer, $value);
+			if (0 === $value || '' === $value) {
+				continue;
+			}
+			$normalized[] = $value;
+		}
+		$normalized = array_values(array_unique($normalized));
+		sort($normalized, SORT_STRING);
+		return $normalized;
+	}
+
+	private static function scalar_values_are_canonical(array $values, $normalizer) {
+		foreach ($values as $value) {
+			if ((string) $value !== (string) call_user_func($normalizer, $value)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static function normalized_fingerprint($value) {
+		$value = sanitize_key((string) $value);
+		return 64 === strlen($value) && ctype_xdigit($value) ? strtolower($value) : '';
 	}
 
 	private static function meta_values(WC_Order $order, $key) {

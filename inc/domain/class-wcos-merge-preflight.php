@@ -140,19 +140,23 @@ final class WCOS_Merge_Preflight {
 			WCOS_Order_Totals_Rebuilder::assert_consistent($source, $precision);
 			WCOS_Order_Totals_Rebuilder::assert_consistent($target, $precision);
 			$plan = WCOS_Merge_Plan::build($source, $target);
-			$journal_context = WCOS_Merge_Journal_Context::create($source, $target, $plan, $context_authority);
+			$journal_context = WCOS_Merge_Journal_Context::create($source, $target, $plan, $context_authority, $precision);
 		} catch (Throwable $throwable) {
-			return self::reject($report, 'incompatible_pair_context', $throwable->getMessage());
+			return self::reject(
+				$report,
+				'incompatible_pair_context',
+				__('The order pair failed a hardened Merge compatibility check.', 'wc-order-splitter')
+			);
 		}
 
-		$pair = $journal_context['merge_pair'];
+		$pair = $journal_context['merge_pair']['authority'];
 		$report['supported'] = true;
 		$report['reason'] = 'supported';
 		$report['message'] = __('This pair is compatible with the initial hard-off Merge safety tranche.', 'wc-order-splitter');
 		$report['context_authority'] = $context_authority;
 		$report['source_signature'] = $pair['source_signature'];
 		$report['target_signature'] = $pair['target_signature'];
-		$report['pair_fingerprint'] = $pair['pair_fingerprint'];
+		$report['pair_fingerprint'] = $journal_context['merge_pair']['pair_fingerprint'];
 		$report['plan'] = $plan;
 		return $report;
 	}

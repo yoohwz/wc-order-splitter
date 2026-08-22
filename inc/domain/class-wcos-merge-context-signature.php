@@ -17,6 +17,7 @@ final class WCOS_Merge_Context_Signature {
 	const PURPOSE_BILLING_CONTEXT = 'merge_billing_context_v1';
 	const PURPOSE_SHIPPING_CONTEXT = 'merge_shipping_context_v1';
 	const PURPOSE_PAYMENT_CONTEXT = 'merge_payment_context_v1';
+	const PURPOSE_CONTEXT_AUTHORITY = 'merge_context_authority_v1';
 
 	public static function compatibility(WC_Order $source, WC_Order $target) {
 		$source_customer_id = absint($source->get_customer_id());
@@ -103,6 +104,10 @@ final class WCOS_Merge_Context_Signature {
 			|| '' === $payment_digest || !hash_equals($payment_digest, self::payment_digest($order))) {
 			throw new RuntimeException(__('The Merge customer, address, or payment context signature changed.', 'wc-order-splitter'));
 		}
+	}
+
+	public static function authority_fingerprint(array $authority) {
+		return self::digest(self::PURPOSE_CONTEXT_AUTHORITY, $authority);
 	}
 
 	private static function normalized_guest_email(WC_Order $order) {
