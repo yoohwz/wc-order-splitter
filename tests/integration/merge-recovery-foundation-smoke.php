@@ -40,10 +40,11 @@ function wcos_merge_recovery_order(WC_Product $product, $email, $quantity, $redu
 	$order->set_payment_method_title('Cash on delivery');
 	$item = new WC_Order_Item_Product();
 	$item->set_name('Historical Merge line');
-	$item->set_product_id($product->get_id());
 	if ($product instanceof WC_Product_Variation) {
-		$item->set_variation_id($product->get_id());
 		$item->set_product_id($product->get_parent_id());
+		$item->set_variation_id($product->get_id());
+	} else {
+		$item->set_product_id($product->get_id());
 	}
 	$item->set_quantity($quantity);
 	$item->set_subtotal('12.34');
@@ -104,11 +105,13 @@ function wcos_merge_recovery_money_add($left, $right) {
 
 /** Test-only commercial staging; no production Merge service calls this helper. */
 function wcos_merge_recovery_stage(WC_Order $source, WC_Order $target, $operation_id, $forward) {
-	$source_line = reset($source->get_items('line_item'));
+	$source_lines = $source->get_items('line_item');
+	$source_line = reset($source_lines);
 	$source_reduced = $source_line->get_meta('_reduced_stock', true);
 	$clone = WCOS_Order_Item_Cloner::product($source_line, array(), true, WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE);
 	$target->add_item($clone);
-	$target_tax = reset($target->get_items('tax'));
+	$target_taxes = $target->get_items('tax');
+	$target_tax = reset($target_taxes);
 	wcos_merge_recovery_assert($target_tax instanceof WC_Order_Item_Tax, 'Target historical tax row is unavailable.');
 	$target_tax->set_tax_total(wcos_merge_recovery_money_add($target_tax->get_tax_total(), $source_line->get_total_tax()));
 	$target_tax->save();
@@ -171,7 +174,8 @@ function wcos_merge_recovery_run_case($label, WC_Product $product, $quantity, $r
 			'retirement_policy_selected' => false,
 		)), 'Test-only retirement boundary could not be checkpointed.');
 	}
-	$source_line = reset($source->get_items('line_item'));
+	$source_lines = $source->get_items('line_item');
+	$source_line = reset($source_lines);
 	$target_line = $target->get_item($target_item_id);
 	wcos_merge_recovery_assert('' === $source_line->get_meta('_reduced_stock', true), 'Source retained duplicated reduced-stock ownership.');
 	if (null !== $reduced_stock) {
@@ -272,7 +276,8 @@ $ambiguous_target = wcos_merge_recovery_order($managed, $ambiguous_source->get_b
 $ambiguous_operation = 'merge-ambiguous-' . wp_generate_uuid4();
 $ambiguous_record = wcos_merge_recovery_start($ambiguous_source, $ambiguous_target, $ambiguous_operation);
 list($ambiguous_source, $ambiguous_target) = wcos_merge_recovery_stage($ambiguous_source, $ambiguous_target, $ambiguous_operation, false);
-$external_line = reset($ambiguous_target->get_items('line_item'));
+$external_lines = $ambiguous_target->get_items('line_item');
+$external_line = reset($external_lines);
 $external_line->set_quantity(9);
 $external_line->save();
 wcos_merge_recovery_assert(WCOS_Operation_Journal::require_recovery($ambiguous_source, $ambiguous_operation), 'Ambiguous recovery did not dispatch.');
@@ -362,7 +367,8 @@ function wcos_merge_retirement_observe($candidate, WC_Product $product) {
 	$order_id = $order->get_id();
 	$commercial_before = WCOS_Order_Contract_Snapshot::aggregate(array($order));
 	$stock_before = WCOS_Order_Contract_Snapshot::product_stock($order);
-	$source_line = reset($order->get_items('line_item'));
+	$source_lines = $order->get_items('line_item');
+	$source_line = reset($source_lines);
 	$target_line = WCOS_Order_Item_Cloner::product($source_line, array(), true, WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE);
 	$target->add_item($target_line);
 	$target->save();
