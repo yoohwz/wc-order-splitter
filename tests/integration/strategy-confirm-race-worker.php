@@ -11,13 +11,6 @@ if ('' === $label || !is_array($fixture) || empty($fixture['order_id']) || empty
 	exit(2);
 }
 
-$reflection = new ReflectionClass('WCOS_Split_Strategy_Gates');
-$states_property = $reflection->getProperty('states');
-$states_property->setAccessible(true);
-$states = $states_property->getValue();
-$states[WCOS_Split_Strategy_Gates::CATEGORY] = true;
-$states_property->setValue(null, $states);
-
 wp_set_current_user(absint($fixture['user_id']));
 $order_id = absint($fixture['order_id']);
 $nonce = wp_create_nonce('wcos_split_strategy_order_' . $order_id);

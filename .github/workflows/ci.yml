@@ -84,7 +84,7 @@ jobs:
           grep -Fq 'self::RETURN_ORDER => false' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::MANUAL_QUANTITY => true' inc/domain/class-wcos-split-strategy-gates.php
-          grep -Fq 'self::CATEGORY => false' inc/domain/class-wcos-split-strategy-gates.php
+          grep -Fq 'self::CATEGORY => true' inc/domain/class-wcos-split-strategy-gates.php
           grep -Fq 'self::STOCK_STATUS => false' inc/domain/class-wcos-split-strategy-gates.php
           grep -Fq 'Legacy mutation handlers are deliberately never loaded here.' inc/cores/script.php
 
@@ -188,7 +188,7 @@ jobs:
           grep -Fq 'self::RETURN_ORDER => false' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::MANUAL_QUANTITY => true' inc/domain/class-wcos-split-strategy-gates.php
-          grep -Fq 'self::CATEGORY => false' inc/domain/class-wcos-split-strategy-gates.php
+          grep -Fq 'self::CATEGORY => true' inc/domain/class-wcos-split-strategy-gates.php
           grep -Fq 'self::STOCK_STATUS => false' inc/domain/class-wcos-split-strategy-gates.php
           test ! -d inc/mutation-v2
 
@@ -326,7 +326,7 @@ jobs:
           unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::RETURN_ORDER => false'
           unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::BULK_RETURN => false'
           unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::MANUAL_QUANTITY => true'
-          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::CATEGORY => false'
+          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::CATEGORY => true'
           unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::STOCK_STATUS => false'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/backend/class-wcos-duplicate-admin-controller.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-duplicate-woocommerce-adapter.php'
@@ -455,11 +455,11 @@ jobs:
               if (WCOS_Feature_Gates::enabled($disabled_workflow)) { exit(1); }
             }
             if (!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::MANUAL_QUANTITY)) { exit(1); }
-            if (WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY)) { exit(1); }
+            if (!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY)) { exit(1); }
             if (WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS)) { exit(1); }
-            if (false !== has_action("wp_ajax_" . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION)) { exit(1); }
-            if (false !== has_action("wp_ajax_" . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION)) { exit(1); }
-            if (false !== has_action("wp_ajax_" . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION)) { exit(1); }
+            if (false === has_action("wp_ajax_" . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION)) { exit(1); }
+            if (false === has_action("wp_ajax_" . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION)) { exit(1); }
+            if (false === has_action("wp_ajax_" . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION)) { exit(1); }
             foreach (array(
               WCOS_Merge_Admin_Controller::SEARCH_ACTION,
               WCOS_Merge_Admin_Controller::REVIEW_ACTION,
