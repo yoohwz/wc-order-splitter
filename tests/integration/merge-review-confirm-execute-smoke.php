@@ -167,6 +167,23 @@ try {
 	}
 	wcos_merge_authority_assert($second_gate_rejected && null === WCOS_Operation_Journal::get(wc_get_order($source->get_id()), $confirm['operation_id']), 'Repeated gate-off Execute changed operation authority.');
 
+	list($surface_source, $surface_target) = wcos_merge_authority_pair($product, 'first-execute-surface');
+	$pairs[] = array($surface_source, $surface_target, '');
+	$surface_request = wcos_merge_authority_request($surface_source, $surface_target);
+	$surface_review = $controller->review_request($surface_request);
+	$surface_confirm = $controller->confirm_request(array_merge($surface_request, array('review_id' => $surface_review['review_id'], 'review_token' => $surface_review['review_token'])));
+	$pairs[count($pairs) - 1][2] = $surface_confirm['operation_id'];
+	$surface_source->set_status('on-hold');
+	$surface_source->save();
+	$first_execute_status_rejected = false;
+	try {
+		$controller->execute_request(array_merge($surface_request, array('operation_id' => $surface_confirm['operation_id'], 'confirmation_token' => $surface_confirm['confirmation_token'])));
+	} catch (WCOS_Merge_Transport_Exception $exception) {
+		$first_execute_status_rejected = 'status_disabled' === $exception->get_error_code();
+	}
+	wcos_merge_authority_assert($first_execute_status_rejected, 'First Execute without a durable journal bypassed current surface-status eligibility.');
+	wcos_merge_authority_assert(null === WCOS_Operation_Journal::get(wc_get_order($surface_source->get_id()), $surface_confirm['operation_id']), 'Rejected first Execute created a durable journal.');
+
 	$original_confirm_record = $confirm_record;
 	$confirm_record['price_precision'] = 3;
 	set_transient('wcos_merge_confirm_' . hash('sha256', $confirm['operation_id']), $confirm_record, WCOS_Merge_Confirmation_Store::TTL);
@@ -293,6 +310,34 @@ try {
 	);
 	wcos_merge_authority_assert(false === strpos(wp_json_encode($handoff), '@example.test'), 'Durable Merge Confirmation handoff stored plaintext customer PII.');
 	wcos_merge_authority_assert(null === WCOS_Operation_Journal::get(wc_get_order($durable_target->get_id()), $durable_confirm['operation_id']), 'A forbidden target shadow journal was created.');
+	$durable_source = wc_get_order($durable_source->get_id());
+	$durable_target = wc_get_order($durable_target->get_id());
+	wcos_merge_authority_assert('trash' === $durable_source->get_status(), 'Completed confirmed Merge did not retire the source to trash.');
+	$durable_target->set_status('on-hold');
+	$durable_target->save();
+	$durable_target = wc_get_order($durable_target->get_id());
+	$replay_journal_before = wp_json_encode(WCOS_Operation_Journal::get($durable_source, $durable_confirm['operation_id']));
+	$replay_source_before = WCOS_Merge_Recovery_Snapshot::participant_signature($durable_source);
+	$replay_target_before = WCOS_Merge_Recovery_Snapshot::participant_signature($durable_target);
+	$replay_target_line_ids_before = array_map('absint', array_keys($durable_target->get_items('line_item')));
+	$replay_target_tax_ids_before = array_map('absint', array_keys($durable_target->get_items('tax')));
+	$replay_stock_before = $product->get_stock_quantity();
+	$controller_replay_reached_gateway = false;
+	try {
+		$controller->execute_request(array_merge($durable_request, array('operation_id' => $durable_confirm['operation_id'], 'confirmation_token' => $durable_confirm['confirmation_token'])));
+	} catch (WCOS_Merge_Transport_Exception $exception) {
+		$controller_replay_reached_gateway = 'workflow_disabled' === $exception->get_error_code();
+	}
+	wcos_merge_authority_assert($controller_replay_reached_gateway, 'Completed Merge controller replay was blocked by stale source/target surface status before the gateway.');
+	$durable_source = wc_get_order($durable_source->get_id());
+	$durable_target = wc_get_order($durable_target->get_id());
+	wcos_merge_authority_assert($replay_journal_before === wp_json_encode(WCOS_Operation_Journal::get($durable_source, $durable_confirm['operation_id'])), 'Controller replay changed or created durable journal authority.');
+	wcos_merge_authority_assert($replay_source_before === WCOS_Merge_Recovery_Snapshot::participant_signature($durable_source), 'Controller replay changed retired-source item, tax, relation, lifecycle, or stock ownership.');
+	wcos_merge_authority_assert($replay_target_before === WCOS_Merge_Recovery_Snapshot::participant_signature($durable_target), 'Controller replay changed target item, tax, relation, lifecycle, or stock ownership.');
+	wcos_merge_authority_assert($replay_target_line_ids_before === array_map('absint', array_keys($durable_target->get_items('line_item'))), 'Controller replay created a second target line item operation.');
+	wcos_merge_authority_assert($replay_target_tax_ids_before === array_map('absint', array_keys($durable_target->get_items('tax'))), 'Controller replay created a second target tax operation.');
+	wcos_merge_authority_assert($replay_stock_before === wc_get_product($product->get_id())->get_stock_quantity(), 'Controller replay changed physical stock ownership.');
+	wcos_merge_authority_assert(null === WCOS_Operation_Journal::get($durable_target, $durable_confirm['operation_id']), 'Controller replay created a target shadow journal.');
 	$matched_journal_replay = WCOS_Merge_Confirmation_Store::verify(wc_get_order($durable_source->get_id()), wc_get_order($durable_target->get_id()), $durable_confirm['operation_id'], $durable_confirm['confirmation_token'], $operator_id);
 	wcos_merge_authority_assert('completed' === $matched_journal_replay['journal_status'], 'Matching surviving Confirmation did not defer to the completed journal.');
 	$durable_confirm_key = 'wcos_merge_confirm_' . hash('sha256', $durable_confirm['operation_id']);

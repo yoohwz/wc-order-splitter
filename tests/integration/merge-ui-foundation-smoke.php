@@ -64,6 +64,11 @@ try {
 	$address = '46 Private Search Lane';
 	$source = wcos_merge_ui_order($email, $address);
 	$targets[] = wcos_merge_ui_order('merge-ui-target-' . wp_generate_uuid4() . '@example.test', 'Target Secret Street');
+	$targets[0]->set_date_created(time() - DAY_IN_SECONDS);
+	$targets[0]->save();
+	for ($index = 0; $index <= WCOS_Merge_Admin_Controller::SEARCH_SCAN_LIMIT; $index++) {
+		$targets[] = wcos_merge_ui_order('merge-ui-newer-' . $index . '-' . wp_generate_uuid4() . '@example.test', 'Newer Private Street');
+	}
 
 	ob_start();
 	$controller->render_launcher($source);
@@ -87,6 +92,16 @@ try {
 		'term' => (string) $targets[0]->get_id(),
 		'page' => 1,
 	);
+	$browse = $controller->search_request(array_merge($request, array('term' => '')));
+	$old_target_in_browse = false;
+	foreach ($browse['results'] as $result) {
+		if ($targets[0]->get_id() === (int) $result['id']) {
+			$old_target_in_browse = true;
+		}
+	}
+	wcos_merge_ui_assert(!$old_target_in_browse, 'Old-target fixture was not outside the bounded recent browse window.');
+	wcos_merge_ui_assert(count($browse['results']) <= WCOS_Merge_Admin_Controller::SEARCH_LIMIT, 'Target browse exceeded its result limit.');
+
 	$search = $controller->search_request($request);
 	$found_target = null;
 	foreach ($search['results'] as $result) {
@@ -96,6 +111,7 @@ try {
 		}
 	}
 	wcos_merge_ui_assert(is_array($found_target), 'Bounded target search did not find the exact target identity.');
+	wcos_merge_ui_assert(1 === count($search['results']) && false === $search['more'], 'Exact old-target search was not bounded to one result.');
 	wcos_merge_ui_assert(array('id', 'number', 'status', 'currency') === array_keys($found_target), 'Target search returned fields outside the PII-free selector contract.');
 	$search_json = wp_json_encode($search);
 	wcos_merge_ui_assert(false === strpos($search_json, '@example.test'), 'Target search exposed customer email.');
@@ -103,8 +119,10 @@ try {
 	wcos_merge_ui_assert(false === strpos($search_json, 'Private payment'), 'Target search exposed payment identity.');
 	wcos_merge_ui_assert(false === strpos($search_json, '"id":' . $source->get_id()), 'Target search included the current source order.');
 
-	$bounded = $controller->search_request(array_merge($request, array('term' => '')));
-	wcos_merge_ui_assert(count($bounded['results']) <= WCOS_Merge_Admin_Controller::SEARCH_LIMIT, 'Target search exceeded its result limit.');
+	$hash_search = $controller->search_request(array_merge($request, array('term' => '#' . $targets[0]->get_id())));
+	wcos_merge_ui_assert(1 === count($hash_search['results']) && $targets[0]->get_id() === (int) $hash_search['results'][0]['id'], 'Hash-prefixed exact old-target ID did not resolve.');
+	$source_search = $controller->search_request(array_merge($request, array('term' => (string) $source->get_id())));
+	wcos_merge_ui_assert(empty($source_search['results']), 'Exact target search did not exclude the source order.');
 
 	$bad_nonce = $request;
 	$bad_nonce['nonce'] = 'invalid';

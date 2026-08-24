@@ -90,6 +90,13 @@ final class WCOS_Merge_Admin_Controller {
 	private function search_targets(WC_Order $source, $term = '', $page = 1) {
 		$term = strtolower(trim((string) $term));
 		$page = max(1, min(self::SEARCH_MAX_PAGE, (int) $page));
+		if (preg_match('/^#?([1-9][0-9]*)$/D', $term, $matches)) {
+			$target = wc_get_order(absint($matches[1]));
+			return array(
+				'results' => $this->is_searchable_target($source, $target) ? array($this->search_result($target)) : array(),
+				'more' => false,
+			);
+		}
 		$statuses = array_map(
 			function ($status) { return 0 === strpos((string) $status, 'wc-') ? substr((string) $status, 3) : (string) $status; },
 			(array) get_option('order_splitter_status_allowed', array('wc-processing'))
@@ -107,7 +114,7 @@ final class WCOS_Merge_Admin_Controller {
 		);
 		$matches = array();
 		foreach ((array) $orders as $order) {
-			if (!$order instanceof WC_Order || $order->get_id() === $source->get_id() || !current_user_can('edit_shop_order', $order->get_id())) {
+			if (!$this->is_searchable_target($source, $order)) {
 				continue;
 			}
 			$id = (string) $order->get_id();
@@ -115,12 +122,7 @@ final class WCOS_Merge_Admin_Controller {
 			if ('' !== $term && false === strpos(strtolower($id), $term) && false === strpos(strtolower($number), ltrim($term, '#'))) {
 				continue;
 			}
-			$matches[] = array(
-				'id' => $order->get_id(),
-				'number' => $number,
-				'status' => (string) $order->get_status(),
-				'currency' => (string) $order->get_currency(),
-			);
+			$matches[] = $this->search_result($order);
 		}
 		$offset = ($page - 1) * self::SEARCH_LIMIT;
 		return array(
@@ -188,13 +190,18 @@ final class WCOS_Merge_Admin_Controller {
 
 	public function execute_request(array $request) {
 		$this->reject_client_authority($request, array('action', 'nonce', 'source_order_id', 'target_order_id', 'operation_id', 'confirmation_token'));
-		list($source, $target) = $this->authorized_pair($request);
 		$operation_id = isset($request['operation_id']) ? sanitize_key((string) $request['operation_id']) : '';
 		$token = isset($request['confirmation_token']) ? (string) $request['confirmation_token'] : '';
-		try {
-			$confirmation = WCOS_Merge_Confirmation_Store::verify($source, $target, $operation_id, $token, get_current_user_id());
-		} catch (WCOS_Merge_Confirmation_Exception $exception) {
-			throw $this->confirmation_exception($exception);
+		list($source, $target) = $this->authorized_pair($request, false);
+		$journal = WCOS_Operation_Journal::get($source, $operation_id);
+		if (is_array($journal)) {
+			// Durable replay authority is fully self-verified before stale UI status is relaxed.
+			$confirmation = $this->verified_confirmation($source, $target, $operation_id, $token);
+		} else {
+			// A first Execute remains bound to the current source/target surface eligibility.
+			$this->assert_status_enabled($source);
+			$this->assert_status_enabled($target);
+			$confirmation = $this->verified_confirmation($source, $target, $operation_id, $token);
 		}
 
 		try {
@@ -347,7 +354,7 @@ final class WCOS_Merge_Admin_Controller {
 		return (string) ob_get_clean();
 	}
 
-	private function authorized_source(array $request) {
+	private function authorized_source(array $request, $require_status = true) {
 		$source_id = isset($request['source_order_id']) ? absint($request['source_order_id']) : 0;
 		if (!$source_id) {
 			throw new WCOS_Merge_Transport_Exception('invalid_source', __('A valid Merge source order is required.', 'wc-order-splitter'), 400, false);
@@ -365,12 +372,14 @@ final class WCOS_Merge_Admin_Controller {
 		} catch (Throwable $throwable) {
 			throw new WCOS_Merge_Transport_Exception('authorization_failed', __('You are not allowed to merge this source order.', 'wc-order-splitter'), 403, false);
 		}
-		$this->assert_status_enabled($source);
+		if ($require_status) {
+			$this->assert_status_enabled($source);
+		}
 		return $source;
 	}
 
-	private function authorized_pair(array $request) {
-		$source = $this->authorized_source($request);
+	private function authorized_pair(array $request, $require_status = true) {
+		$source = $this->authorized_source($request, $require_status);
 		$target_id = isset($request['target_order_id']) ? absint($request['target_order_id']) : 0;
 		if (!$target_id || $source->get_id() === $target_id) {
 			throw new WCOS_Merge_Transport_Exception('invalid_pair', __('Merge requires two distinct order IDs.', 'wc-order-splitter'), 400, false);
@@ -384,13 +393,44 @@ final class WCOS_Merge_Admin_Controller {
 		} catch (Throwable $throwable) {
 			throw new WCOS_Merge_Transport_Exception('authorization_failed', __('You are not allowed to merge this order pair.', 'wc-order-splitter'), 403, false);
 		}
-		$this->assert_status_enabled($target);
+		if ($require_status) {
+			$this->assert_status_enabled($target);
+		}
 		return array($source, $target);
 	}
 
-	private function assert_status_enabled(WC_Order $order) {
+	private function verified_confirmation(WC_Order $source, WC_Order $target, $operation_id, $token) {
+		try {
+			return WCOS_Merge_Confirmation_Store::verify($source, $target, $operation_id, $token, get_current_user_id());
+		} catch (WCOS_Merge_Confirmation_Exception $exception) {
+			throw $this->confirmation_exception($exception);
+		}
+	}
+
+	private function is_searchable_target(WC_Order $source, $target) {
+		return $target instanceof WC_Order
+			&& 'shop_order' === $target->get_type()
+			&& $target->get_id() !== $source->get_id()
+			&& current_user_can('edit_shop_order', $target->get_id())
+			&& $this->status_enabled($target);
+	}
+
+	private function search_result(WC_Order $order) {
+		return array(
+			'id' => $order->get_id(),
+			'number' => (string) $order->get_order_number(),
+			'status' => (string) $order->get_status(),
+			'currency' => (string) $order->get_currency(),
+		);
+	}
+
+	private function status_enabled(WC_Order $order) {
 		$allowed = (array) get_option('order_splitter_status_allowed', array('wc-processing'));
-		if (!in_array('wc-' . $order->get_status(), $allowed, true)) {
+		return in_array('wc-' . $order->get_status(), $allowed, true);
+	}
+
+	private function assert_status_enabled(WC_Order $order) {
+		if (!$this->status_enabled($order)) {
 			throw new WCOS_Merge_Transport_Exception('status_disabled', __('This order status is disabled in the Order Splitter settings.', 'wc-order-splitter'), 409, false);
 		}
 	}
