@@ -59,6 +59,109 @@ Meaning: read-only recovery of issue/PR/branch/CI/current checkpoint and report 
 
 Meaning: resolve the latest explicit review findings for the task and apply only the authorized correction tranche. If there is no unambiguous changes-required review, stop with `REVIEW_FINDINGS_REQUIRED`.
 
+## Command execution surfaces
+
+The execution surface is part of the command contract. A handoff must always say whether the operator should send the command to ChatGPT, Codex, or use the GitHub UI.
+
+| Surface | Command | Meaning |
+| --- | --- | --- |
+| Codex | `Chạy <TASK_ID>` / `Run <TASK_ID>` | Resolve and execute the canonical task from its current authorized starting state. |
+| Codex | `Tiếp tục <TASK_ID>` / `Continue <TASK_ID>` | Recover and resume Codex execution from the latest canonical checkpoint. |
+| Codex | `Review <TASK_ID>` | Perform executor self-review/readiness only; never independent Technical Review. |
+| Codex | `Sửa <TASK_ID>` / `Fix <TASK_ID>` | Apply only the latest authenticated changes-required tranche. |
+| Codex | `Verify <TASK_ID>` | Perform the read-only verification authorized by the current task state. |
+| Codex | `Status <TASK_ID>` | Recover and report repository/task state without mutation. |
+| ChatGPT | `Technical Review <TASK_ID>` | Resolve the canonical Issue/PR, exact head and CI, then perform independent Technical Review. |
+| ChatGPT | `Status <TASK_ID>` | Perform read-only governance/status recovery. |
+| ChatGPT | `Continue <TASK_ID>` | Resume the architect/governor workflow from the latest canonical checkpoint. |
+| ChatGPT | `Human Gate <TASK_ID>` | Request explicit human approval for the currently technically accepted exact head. ChatGPT must re-resolve authority and drift, record the exact GitHub Human Gate, and merge only when the task contract already permits it. |
+
+`Human Gate <TASK_ID>` is intentionally different from `Merge <TASK_ID>`. It is valid only when the authenticated human operator issues it and an exact technically accepted head exists. It never implies tag, release, publication, or deployment authority. ChatGPT must fail closed if the accepted authority is absent or the head/base has drifted. A bare `Merge <TASK_ID>` or `Release <TASK_ID>` remains insufficient Human Gate authority.
+
+## Mandatory next-action footer
+
+Every meaningful Codex task-state response, governance/review/handoff response from ChatGPT, and deterministic stop signal must end with exactly one primary next action in this format:
+
+```text
+NEXT_ACTION_HINT
+Who: <Human | ChatGPT | Codex | None>
+Where: <ChatGPT | Codex | GitHub UI | None>
+Command: <exact command | None>
+Expected: <expected signal/outcome>
+```
+
+Rules:
+
+- Present exactly one primary next action unless the task is genuinely blocked on a human choice among alternatives.
+- `Where` is mandatory and cannot be `None` whenever `Command` is not `None`.
+- Commands must be copy/paste-ready and as short as safely possible.
+- Never suggest a command that bypasses task resolution, CI, independent review, Human Gate, release freeze, publication approval, or exact-head authority.
+- If the operator cannot execute the next checkpoint yet, use `Command: None` and name the actual blocking authority in `Expected`; never invent a fake command.
+- The footer is navigation only. It cannot change scope, authority, precedence, or the meaning of a governance signal.
+- A completed task with no further action must end exactly with:
+
+```text
+NEXT_ACTION_HINT
+Who: None
+Where: None
+Command: None
+Expected: Task complete.
+```
+
+### Canonical handoffs
+
+Codex implementation and readiness complete:
+
+```text
+TECHNICAL_REVIEW_REQUIRED: <TASK_ID> <task-specific readiness statement>.
+
+NEXT_ACTION_HINT
+Who: Human
+Where: ChatGPT
+Command: Technical Review <TASK_ID>
+Expected: ChatGPT independently reviews the exact PR head and returns TECHNICAL_ACCEPTED or TECHNICAL_CHANGES_REQUIRED.
+```
+
+ChatGPT returns changes required:
+
+```text
+NEXT_ACTION_HINT
+Who: Human
+Where: Codex
+Command: Sửa <TASK_ID>
+Expected: Codex applies only the recorded correction tranche and returns to TECHNICAL_REVIEW_REQUIRED.
+```
+
+ChatGPT technically accepts the exact head and merge Human Gate is next:
+
+```text
+NEXT_ACTION_HINT
+Who: Human
+Where: ChatGPT
+Command: Human Gate <TASK_ID>
+Expected: ChatGPT revalidates the exact accepted head, records the Human Gate, and merges only if the task contract permits.
+```
+
+Post-merge verification must be handed to Codex only when ChatGPT cannot complete the required verification through available GitHub authority:
+
+```text
+NEXT_ACTION_HINT
+Who: Human
+Where: Codex
+Command: Verify <TASK_ID>
+Expected: Codex returns the exact post-merge CI or artifact verification signal required by the task.
+```
+
+### Deterministic stop-signal routing
+
+- `TASK_BRANCH_SYNC_REQUIRED`: route to ChatGPT with `Continue <TASK_ID>` or `Status <TASK_ID>` when authority review is needed.
+- `TECHNICAL_CHANGES_REQUIRED`: route to Codex with `Sửa <TASK_ID>`.
+- `HUMAN_GATE_REQUIRED` after exact-head technical acceptance: route to ChatGPT with `Human Gate <TASK_ID>`.
+- `RELEASE_FREEZE_REQUIRED`: use `Command: None` and state that release-freeze authority is required; do not suggest a release command.
+- `GOVERNANCE_SIGNAL_UNTRUSTED` or `GOVERNANCE_AUTHORITY_REQUIRED`: route to ChatGPT governance review with `Continue <TASK_ID>` or `Status <TASK_ID>`, never to mutation, merge, release, or publication.
+
+When a deterministic stop has no currently authorized executable action, `Who`, `Where`, and `Command` may all be `None`, but `Expected` must identify the authority or external state required to continue.
+
 ## Task ID
 
 A task ID is a stable identifier present in the canonical GitHub Issue title/body, for example:
