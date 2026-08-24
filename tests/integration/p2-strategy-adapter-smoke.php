@@ -7,41 +7,9 @@ if (!defined('ABSPATH')) {
 wcos_p2_adapter_assert(class_exists('WCOS_Split_Strategy_WooCommerce_Adapter'), 'Strategy Split adapter was not loaded by the plugin bootstrap.');
 wcos_p2_adapter_assert(method_exists('WCOS_Mutation_Gateway', 'split_strategy'), 'Strategy Split gateway boundary is missing.');
 wcos_p2_adapter_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Production Category strategy gate is not enabled.');
-wcos_p2_adapter_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Stock-status strategy was enabled by the adapter foundation.');
+wcos_p2_adapter_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Production Stock-status strategy gate is not enabled.');
 
 $strategy_adapter = new WCOS_Split_Strategy_WooCommerce_Adapter();
-$strategy_gateway = new WCOS_Mutation_Gateway();
-
-/* Production gateway must remain hard-off for Stock-status. */
-$gateway_product_a = wcos_p2_adapter_product('WCOS strategy gateway A', '5.00');
-$gateway_product_b = wcos_p2_adapter_product('WCOS strategy gateway B', '4.00');
-$gateway_order = wc_create_order();
-$gateway_order->set_status('pending');
-$gateway_order->set_currency('USD');
-$gateway_item_a = $gateway_order->add_product($gateway_product_a, 2);
-$gateway_item_b = $gateway_order->add_product($gateway_product_b, 1);
-$gateway_order->calculate_totals(false);
-$gateway_order->save();
-
-$blocked_strategy = WCOS_Split_Strategy_Gates::STOCK_STATUS;
-	$blocked_operation = 'p2-strategy-gateway-' . $blocked_strategy . '-' . wp_generate_uuid4();
-	$blocked = false;
-	try {
-		$strategy_gateway->split_strategy(
-			wc_get_order($gateway_order->get_id()),
-			$blocked_strategy,
-			array('child-1' => array($gateway_item_a => '2.000000')),
-			$blocked_operation
-		);
-	} catch (RuntimeException $exception) {
-		$blocked = false !== strpos($exception->getMessage(), 'not enabled for production use');
-	}
-	wcos_p2_adapter_assert($blocked, 'Strategy gateway allowed a hard-off production strategy: ' . $blocked_strategy);
-	wcos_p2_adapter_assert(null === WCOS_Operation_Journal::get($gateway_order, $blocked_operation), 'Hard-off strategy gateway created a mutation journal.');
-	wcos_p2_adapter_assert(0 === count(wcos_p2_adapter_children($gateway_order->get_id(), $blocked_operation)), 'Hard-off strategy gateway created a child order.');
-$gateway_order->delete(true);
-wp_delete_post($gateway_product_a->get_id(), true);
-wp_delete_post($gateway_product_b->get_id(), true);
 
 /* Category Review -> frozen plan -> whole-line adapter execution. */
 $category_suffix = strtolower(wp_generate_password(6, false, false));

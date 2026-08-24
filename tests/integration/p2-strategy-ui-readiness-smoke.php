@@ -6,12 +6,12 @@ if (!defined('ABSPATH')) {
 
 wcos_p2_adapter_assert(method_exists('WCOS_Split_Strategy_Admin_Controller', 'bootstrap'), 'Strategy UI gate-aware bootstrap is missing.');
 wcos_p2_adapter_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Production Category strategy gate is not enabled.');
-wcos_p2_adapter_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Production Stock-status strategy gate is not hard-off.');
+wcos_p2_adapter_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Production Stock-status strategy gate is not enabled.');
 $ui_controller = WCOS_Split_Strategy_Admin_Controller::bootstrap();
-wcos_p2_adapter_assert($ui_controller instanceof WCOS_Split_Strategy_Admin_Controller, 'Production Category strategy UI did not bootstrap.');
-wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION, array($ui_controller, 'ajax_review')), 'Production Category Review route is not registered.');
-wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION, array($ui_controller, 'ajax_confirm')), 'Production Category Confirm route is not registered.');
-wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION, array($ui_controller, 'ajax_execute')), 'Production Category Execute route is not registered.');
+wcos_p2_adapter_assert($ui_controller instanceof WCOS_Split_Strategy_Admin_Controller, 'Production strategy UI did not bootstrap.');
+wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION, array($ui_controller, 'ajax_review')), 'Production strategy Review route is not registered.');
+wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION, array($ui_controller, 'ajax_confirm')), 'Production strategy Confirm route is not registered.');
+wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION, array($ui_controller, 'ajax_execute')), 'Production strategy Execute route is not registered.');
 
 $ui_previous_user = get_current_user_id();
 $ui_allowed_statuses = get_option('order_splitter_status_allowed', array('wc-processing'));
@@ -38,20 +38,19 @@ try {
 	update_option('order_splitter_status_allowed', array('wc-pending'));
 	wp_set_current_user($ui_admin_id);
 
-	wcos_p2_adapter_assert(false !== has_action('woocommerce_order_item_add_action_buttons', array($ui_controller, 'render_launcher')), 'Production Category UI did not register its order launcher callback.');
+	wcos_p2_adapter_assert(false !== has_action('woocommerce_order_item_add_action_buttons', array($ui_controller, 'render_launcher')), 'Production strategy UI did not register its order launcher callback.');
 
 	ob_start();
 	$ui_controller->render_launcher(wc_get_order($ui_order_id));
 	$launcher_html = (string) ob_get_clean();
 	wcos_p2_adapter_assert(false !== strpos($launcher_html, 'wcos-strategy-launcher'), 'Strategy launcher markup is missing.');
 	wcos_p2_adapter_assert(false !== strpos($launcher_html, 'Split by category'), 'Category strategy launcher is missing.');
-	wcos_p2_adapter_assert(false === strpos($launcher_html, 'Split by stock status'), 'Hard-off Stock-status strategy launcher was exposed.');
+	wcos_p2_adapter_assert(false !== strpos($launcher_html, 'Split by stock status'), 'Stock-status strategy launcher is missing.');
 	wcos_p2_adapter_assert(false !== strpos($launcher_html, 'aria-haspopup="dialog"'), 'Strategy launchers do not expose dialog semantics.');
 	wcos_p2_adapter_assert(false !== strpos($launcher_html, 'aria-controls="wcos-strategy-dialog-' . $ui_order_id . '-category"'), 'Category launcher is not bound to its source dialog.');
-	wcos_p2_adapter_assert(false === strpos($launcher_html, 'aria-controls="wcos-strategy-dialog-' . $ui_order_id . '-stock_status"'), 'Hard-off Stock-status launcher retained dialog authority.');
-	wcos_p2_adapter_assert('' === $ui_controller->dialog_html(wc_get_order($ui_order_id), WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Hard-off Stock-status source dialog was exposed.');
+	wcos_p2_adapter_assert(false !== strpos($launcher_html, 'aria-controls="wcos-strategy-dialog-' . $ui_order_id . '-stock_status"'), 'Stock-status launcher is not bound to its source dialog.');
 
-	foreach (array(WCOS_Split_Strategy_Gates::CATEGORY) as $ui_strategy) {
+	foreach (array(WCOS_Split_Strategy_Gates::CATEGORY, WCOS_Split_Strategy_Gates::STOCK_STATUS) as $ui_strategy) {
 		$dialog_html = $ui_controller->dialog_html(wc_get_order($ui_order_id), $ui_strategy);
 		wcos_p2_adapter_assert(false !== strpos($dialog_html, 'role="dialog"'), 'Strategy source dialog is missing role=dialog: ' . $ui_strategy);
 		wcos_p2_adapter_assert(false !== strpos($dialog_html, 'aria-modal="true"'), 'Strategy source dialog is missing aria-modal: ' . $ui_strategy);
@@ -131,7 +130,7 @@ try {
 }
 
 wcos_p2_adapter_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Production Category gate changed during strategy UI acceptance.');
-wcos_p2_adapter_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Stock-status gate changed during strategy UI acceptance.');
+wcos_p2_adapter_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Production Stock-status gate changed during strategy UI acceptance.');
 wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION), 'Strategy Review AJAX remained registered after UI test cleanup.');
 wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION), 'Strategy Confirm AJAX remained registered after UI test cleanup.');
 wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION), 'Strategy Execute AJAX remained registered after UI test cleanup.');
