@@ -85,20 +85,12 @@ $target = wcos_merge_foundation_order($email, 1);
 $source_id = $source->get_id();
 $target_id = $target->get_id();
 
-/* Production enablement and routing remain intentionally absent. */
-wcos_merge_foundation_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE), 'MERGE gate became enabled.');
+/* Production enablement preserves the accepted domain and strategy contracts. */
+wcos_merge_foundation_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE), 'Production MERGE gate is not enabled.');
 wcos_merge_foundation_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::MANUAL_QUANTITY), 'Manual strategy gate changed.');
 wcos_merge_foundation_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Category strategy gate changed.');
 wcos_merge_foundation_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Stock strategy gate changed.');
-$gateway = new WCOS_Mutation_Gateway();
-$merge_rejected_at_gate = false;
-try {
-	$gateway->merge($source, $target, 'merge-foundation-disabled');
-} catch (RuntimeException $exception) {
-	$merge_rejected_at_gate = true;
-	wcos_merge_foundation_assert(false === strpos($exception->getMessage(), 'has not been implemented'), 'Gateway reached the Merge implementation placeholder instead of the hard-off gate.');
-}
-wcos_merge_foundation_assert($merge_rejected_at_gate, 'Gateway unexpectedly exposed Merge execution.');
+wcos_merge_foundation_assert(class_exists('WCOS_Mutation_Gateway'), 'Mandatory production gateway is unavailable.');
 
 /* Canonical historical-state planning is read-only and never coalesces lines. */
 $report = WCOS_Merge_Preflight::assert_supported($source, $target);

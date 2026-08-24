@@ -42,7 +42,7 @@ jobs:
           grep -Fq 'return WCOS_Feature_Gates::any_enabled();' inc/cores/safety.php
           grep -Fq 'self::SPLIT => true' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::DUPLICATE => true' inc/domain/class-wcos-feature-gates.php
-          grep -Fq 'self::MERGE => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::MERGE => true' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::RETURN_ORDER => false' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::MANUAL_QUANTITY => true' inc/domain/class-wcos-split-strategy-gates.php
@@ -61,6 +61,10 @@ jobs:
           if grep -R --line-number -E 'WC_ORDER_SPLITTER_(MUTATIONS|SPLIT|DUPLICATE|MERGE|RETURN|BULK_RETURN)_ENABLED' \
             wc-order-splitter.php inc/cores inc/domain; then
             echo 'Externally overrideable mutation gates must not return.' >&2
+            exit 1
+          fi
+          if grep -R --line-number --fixed-strings 'wc-merged' wc-order-splitter.php inc; then
+            echo 'A custom production merged order status was introduced.' >&2
             exit 1
           fi
 

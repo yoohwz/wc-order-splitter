@@ -77,12 +77,11 @@ wp_set_current_user($operator_id);
 $original_allowed_statuses = get_option('order_splitter_status_allowed', array('wc-processing'));
 update_option('order_splitter_status_allowed', array('wc-pending'));
 
-wcos_merge_authority_assert(false === WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE), 'Merge gate unexpectedly enabled.');
-wcos_merge_authority_assert(null === WCOS_Merge_Admin_Controller::bootstrap(), 'Hard-off Merge controller bootstrapped.');
+wcos_merge_authority_assert(true === WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE), 'Production Merge gate is not enabled.');
 $controller = new WCOS_Merge_Admin_Controller();
-wcos_merge_authority_assert(false === $controller->register_hooks(), 'Hard-off Merge controller registered hooks.');
+wcos_merge_authority_assert(true === $controller->register_hooks(), 'Enabled Merge controller did not register hooks.');
 foreach (array(WCOS_Merge_Admin_Controller::SEARCH_ACTION, WCOS_Merge_Admin_Controller::REVIEW_ACTION, WCOS_Merge_Admin_Controller::CONFIRM_ACTION, WCOS_Merge_Admin_Controller::EXECUTE_ACTION) as $action) {
-	wcos_merge_authority_assert(false === has_action('wp_ajax_' . $action), 'A hard-off Merge AJAX hook is production-visible.');
+	wcos_merge_authority_assert(false !== has_action('wp_ajax_' . $action), 'An enabled Merge AJAX hook is missing.');
 }
 
 $product = new WC_Product_Simple();
@@ -147,25 +146,29 @@ try {
 	}
 	wcos_merge_authority_assert($replay_rejected, 'A consumed Merge Review produced another Confirmation.');
 
-	$source_before = WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($source->get_id()));
-	$target_before = WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($target->get_id()));
-	$gate_rejected = false;
-	try {
-		$controller->execute_request(array_merge($request, array('operation_id' => $confirm['operation_id'], 'confirmation_token' => $confirm['confirmation_token'])));
-	} catch (WCOS_Merge_Transport_Exception $exception) {
-		$gate_rejected = 'workflow_disabled' === $exception->get_error_code();
-	}
-	wcos_merge_authority_assert($gate_rejected, 'Controller Execute did not stop at the Merge gateway hard-off boundary.');
-	wcos_merge_authority_assert(null === WCOS_Operation_Journal::get(wc_get_order($source->get_id()), $confirm['operation_id']), 'Gate-off Execute created a Merge journal.');
-	wcos_merge_authority_assert($source_before === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($source->get_id())), 'Gate-off Execute changed the source.');
-	wcos_merge_authority_assert($target_before === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($target->get_id())), 'Gate-off Execute changed the target.');
-	$second_gate_rejected = false;
-	try {
-		$controller->execute_request(array_merge($request, array('operation_id' => $confirm['operation_id'], 'confirmation_token' => $confirm['confirmation_token'])));
-	} catch (WCOS_Merge_Transport_Exception $exception) {
-		$second_gate_rejected = 'workflow_disabled' === $exception->get_error_code();
-	}
-	wcos_merge_authority_assert($second_gate_rejected && null === WCOS_Operation_Journal::get(wc_get_order($source->get_id()), $confirm['operation_id']), 'Repeated gate-off Execute changed operation authority.');
+	$source_line_ids = array_map('absint', array_keys($source->get_items('line_item')));
+	$target_line_ids_before = array_map('absint', array_keys($target->get_items('line_item')));
+	$execute = $controller->execute_request(array_merge($request, array('operation_id' => $confirm['operation_id'], 'confirmation_token' => $confirm['confirmation_token'])));
+	wcos_merge_authority_assert('completed' === $execute['status'], 'Enabled controller Execute did not complete.');
+	$source = wc_get_order($source->get_id());
+	$target = wc_get_order($target->get_id());
+	$journal = WCOS_Operation_Journal::get($source, $confirm['operation_id']);
+	wcos_merge_authority_assert(is_array($journal) && 'completed' === $journal['status'], 'Enabled controller Execute did not create one completed source journal.');
+	wcos_merge_authority_assert('trash' === $source->get_status(), 'Enabled controller Execute did not retire the source.');
+	$target_line_ids_after = array_map('absint', array_keys($target->get_items('line_item')));
+	$fresh_line_ids = array_values(array_diff($target_line_ids_after, $target_line_ids_before));
+	wcos_merge_authority_assert(count($source_line_ids) === count($fresh_line_ids), 'Enabled controller Execute did not create one fresh target line per source line.');
+	wcos_merge_authority_assert(empty(array_intersect($source_line_ids, $fresh_line_ids)), 'Enabled controller Execute re-parented a persisted source line.');
+	$source_after = WCOS_Merge_Recovery_Snapshot::participant_signature($source);
+	$target_after = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
+	$journal_after = wp_json_encode($journal);
+	$execute_replay = $controller->execute_request(array_merge($request, array('operation_id' => $confirm['operation_id'], 'confirmation_token' => $confirm['confirmation_token'])));
+	wcos_merge_authority_assert($execute === $execute_replay, 'Enabled controller same-operation replay did not return the stable result.');
+	$source = wc_get_order($source->get_id());
+	$target = wc_get_order($target->get_id());
+	wcos_merge_authority_assert($journal_after === wp_json_encode(WCOS_Operation_Journal::get($source, $confirm['operation_id'])), 'Enabled controller replay changed durable journal authority.');
+	wcos_merge_authority_assert($source_after === WCOS_Merge_Recovery_Snapshot::participant_signature($source), 'Enabled controller replay changed retired source state.');
+	wcos_merge_authority_assert($target_after === WCOS_Merge_Recovery_Snapshot::participant_signature($target), 'Enabled controller replay changed target state.');
 
 	list($surface_source, $surface_target) = wcos_merge_authority_pair($product, 'first-execute-surface');
 	$pairs[] = array($surface_source, $surface_target, '');
@@ -191,7 +194,7 @@ try {
 	try {
 		WCOS_Merge_Confirmation_Store::verify($source, $target, $confirm['operation_id'], $confirm['confirmation_token'], $operator_id);
 	} catch (WCOS_Merge_Confirmation_Exception $exception) {
-		$precision_drift_rejected = in_array($exception->get_reason(), array('authority_changed', 'pair_changed'), true);
+		$precision_drift_rejected = in_array($exception->get_reason(), array('authority_changed', 'pair_changed', 'journal_mismatch'), true);
 	}
 	wcos_merge_authority_assert($precision_drift_rejected, 'Merge Confirmation precision drift was accepted.');
 	set_transient('wcos_merge_confirm_' . hash('sha256', $confirm['operation_id']), $original_confirm_record, WCOS_Merge_Confirmation_Store::TTL);
@@ -322,13 +325,8 @@ try {
 	$replay_target_line_ids_before = array_map('absint', array_keys($durable_target->get_items('line_item')));
 	$replay_target_tax_ids_before = array_map('absint', array_keys($durable_target->get_items('tax')));
 	$replay_stock_before = $product->get_stock_quantity();
-	$controller_replay_reached_gateway = false;
-	try {
-		$controller->execute_request(array_merge($durable_request, array('operation_id' => $durable_confirm['operation_id'], 'confirmation_token' => $durable_confirm['confirmation_token'])));
-	} catch (WCOS_Merge_Transport_Exception $exception) {
-		$controller_replay_reached_gateway = 'workflow_disabled' === $exception->get_error_code();
-	}
-	wcos_merge_authority_assert($controller_replay_reached_gateway, 'Completed Merge controller replay was blocked by stale source/target surface status before the gateway.');
+	$controller_replay = $controller->execute_request(array_merge($durable_request, array('operation_id' => $durable_confirm['operation_id'], 'confirmation_token' => $durable_confirm['confirmation_token'])));
+	wcos_merge_authority_assert('completed' === $controller_replay['status'], 'Completed Merge controller replay did not reach the enabled gateway.');
 	$durable_source = wc_get_order($durable_source->get_id());
 	$durable_target = wc_get_order($durable_target->get_id());
 	wcos_merge_authority_assert($replay_journal_before === wp_json_encode(WCOS_Operation_Journal::get($durable_source, $durable_confirm['operation_id'])), 'Controller replay changed or created durable journal authority.');

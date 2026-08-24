@@ -180,19 +180,7 @@ try {
 	$products[] = $managed;
 
 	if (in_array($suite, array('all', 'core'), true)) {
-	/* Gateway stays hard-off while direct adapter/service acceptance is executable. */
-	list($gate_source, $gate_target) = wcos_merge_service_pair($managed, 'gate');
-	$gate_operation = 'merge-gate-' . wp_generate_uuid4();
-	$gate_rejected = false;
-	try {
-		(new WCOS_Mutation_Gateway())->merge($gate_source, $gate_target, $gate_operation, 2);
-	} catch (RuntimeException $exception) {
-		$gate_rejected = true;
-	}
-	wcos_merge_service_assert($gate_rejected, 'MERGE=false did not stop the gateway before delegation.');
-	wcos_merge_service_assert(null === WCOS_Operation_Journal::get($gate_source, $gate_operation), 'Hard-off gateway created journal state.');
-	$gate_source->delete(true);
-	$gate_target->delete(true);
+	wcos_merge_service_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE), 'Production Merge gate is not enabled for adapter evidence.');
 
 	/* Success: identical source lines stay distinct, historical tax/shipping survive, retry is stable. */
 	list($source, $target) = wcos_merge_service_pair($managed, 'success', array('1.5', '2'), true, true);

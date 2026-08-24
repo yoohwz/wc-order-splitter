@@ -22,7 +22,7 @@ final class WCOS_Feature_Gates {
 	private static $states = array(
 		self::SPLIT => true,
 		self::DUPLICATE => true,
-		self::MERGE => false,
+		self::MERGE => true,
 		self::RETURN_ORDER => false,
 		self::BULK_RETURN => false,
 	);

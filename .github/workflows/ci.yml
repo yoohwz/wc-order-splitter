@@ -80,7 +80,7 @@ jobs:
           grep -Fq 'return WCOS_Feature_Gates::any_enabled();' inc/cores/safety.php
           grep -Fq 'self::SPLIT => true' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::DUPLICATE => true' inc/domain/class-wcos-feature-gates.php
-          grep -Fq 'self::MERGE => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::MERGE => true' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::RETURN_ORDER => false' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::MANUAL_QUANTITY => true' inc/domain/class-wcos-split-strategy-gates.php
@@ -91,6 +91,10 @@ jobs:
           if grep -R --line-number -E 'WC_ORDER_SPLITTER_(MUTATIONS|SPLIT|DUPLICATE|MERGE|RETURN|BULK_RETURN)_ENABLED' \
             wc-order-splitter.php inc/cores inc/domain; then
             echo 'An externally overrideable mutation gate returned to runtime source.' >&2
+            exit 1
+          fi
+          if grep -R --line-number --fixed-strings 'wc-merged' wc-order-splitter.php inc; then
+            echo 'A custom production merged order status was introduced.' >&2
             exit 1
           fi
 
@@ -174,7 +178,7 @@ jobs:
           grep -Fq 'return WCOS_Feature_Gates::any_enabled();' inc/cores/safety.php
           grep -Fq 'self::SPLIT => true' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::DUPLICATE => true' inc/domain/class-wcos-feature-gates.php
-          grep -Fq 'self::MERGE => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::MERGE => true' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::RETURN_ORDER => false' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::MANUAL_QUANTITY => true' inc/domain/class-wcos-split-strategy-gates.php
@@ -193,6 +197,10 @@ jobs:
           if grep -R --line-number -E 'WC_ORDER_SPLITTER_(MUTATIONS|SPLIT|DUPLICATE|MERGE|RETURN|BULK_RETURN)_ENABLED' \
             wc-order-splitter.php inc/cores inc/domain; then
             echo 'Externally overrideable mutation gates must not return.' >&2
+            exit 1
+          fi
+          if grep -R --line-number --fixed-strings 'wc-merged' wc-order-splitter.php inc; then
+            echo 'A custom production merged order status was introduced.' >&2
             exit 1
           fi
 
@@ -308,7 +316,7 @@ jobs:
           test "$archive_version" = "$archive_stable_tag"
           unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::SPLIT => true'
           unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::DUPLICATE => true'
-          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::MERGE => false'
+          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::MERGE => true'
           unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::RETURN_ORDER => false'
           unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::BULK_RETURN => false'
           unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::MANUAL_QUANTITY => true'
@@ -419,7 +427,7 @@ jobs:
           npx wp-env run cli wp option update woocommerce_custom_orders_table_enabled yes
           npx wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled yes
 
-      - name: Verify plugin, storage mode, and Split + Duplicate production state
+      - name: Verify plugin, storage mode, and enabled production gate state
         shell: bash
         run: |
           set -euo pipefail
@@ -431,10 +439,10 @@ jobs:
             if (("legacy" === $expected && $hpos) || ("legacy" !== $expected && !$hpos)) { exit(1); }
             if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT)) { exit(1); }
             if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::DUPLICATE)) { exit(1); }
+            if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE)) { exit(1); }
             if (!WCOS_Feature_Gates::any_enabled()) { exit(1); }
             if (!WC_Order_Splitter_Safety_Guard::mutations_enabled()) { exit(1); }
             foreach (array(
-              WCOS_Feature_Gates::MERGE,
               WCOS_Feature_Gates::RETURN_ORDER,
               WCOS_Feature_Gates::BULK_RETURN
             ) as $disabled_workflow) {
@@ -446,10 +454,39 @@ jobs:
             if (false !== has_action("wp_ajax_" . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION)) { exit(1); }
             if (false !== has_action("wp_ajax_" . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION)) { exit(1); }
             if (false !== has_action("wp_ajax_" . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION)) { exit(1); }
-            if (false !== has_action("wp_ajax_" . WCOS_Merge_Admin_Controller::SEARCH_ACTION)) { exit(1); }
-            if (false !== has_action("wp_ajax_" . WCOS_Merge_Admin_Controller::REVIEW_ACTION)) { exit(1); }
-            if (false !== has_action("wp_ajax_" . WCOS_Merge_Admin_Controller::CONFIRM_ACTION)) { exit(1); }
-            if (false !== has_action("wp_ajax_" . WCOS_Merge_Admin_Controller::EXECUTE_ACTION)) { exit(1); }
+            foreach (array(
+              WCOS_Merge_Admin_Controller::SEARCH_ACTION,
+              WCOS_Merge_Admin_Controller::REVIEW_ACTION,
+              WCOS_Merge_Admin_Controller::CONFIRM_ACTION,
+              WCOS_Merge_Admin_Controller::EXECUTE_ACTION
+            ) as $merge_action) {
+              if (false === has_action("wp_ajax_" . $merge_action)) { exit(1); }
+            }
+            $has_controller_method = static function($hook, $method) {
+              global $wp_filter;
+              if (empty($wp_filter[$hook]) || empty($wp_filter[$hook]->callbacks)) { return false; }
+              foreach ($wp_filter[$hook]->callbacks as $callbacks) {
+                foreach ($callbacks as $callback) {
+                  $function = isset($callback["function"]) ? $callback["function"] : null;
+                  if (is_array($function)
+                    && isset($function[0], $function[1])
+                    && $function[0] instanceof WCOS_Merge_Admin_Controller
+                    && $method === $function[1]) { return true; }
+                }
+              }
+              return false;
+            };
+            foreach (array(
+              "wp_ajax_" . WCOS_Merge_Admin_Controller::SEARCH_ACTION => "ajax_search",
+              "wp_ajax_" . WCOS_Merge_Admin_Controller::REVIEW_ACTION => "ajax_review",
+              "wp_ajax_" . WCOS_Merge_Admin_Controller::CONFIRM_ACTION => "ajax_confirm",
+              "wp_ajax_" . WCOS_Merge_Admin_Controller::EXECUTE_ACTION => "ajax_execute",
+              "woocommerce_order_item_add_action_buttons" => "render_launcher",
+              "admin_footer" => "render_dialog",
+              "admin_enqueue_scripts" => "enqueue_assets"
+            ) as $hook => $method) {
+              if (!$has_controller_method($hook, $method)) { exit(1); }
+            }
             foreach (array(
               "WC_ORDER_SPLITTER_MUTATIONS_ENABLED",
               "WC_ORDER_SPLITTER_SPLIT_ENABLED",
@@ -469,13 +506,14 @@ jobs:
               "wp_ajax_split_order_by_category",
               "wp_ajax_split_order_by_stock_status",
               "wp_ajax_merge_order",
+              "wp_ajax_yoos_merge_order_action",
               "woocommerce_order_action_yoos_duplicate_order",
               "woocommerce_order_action_yoos_return_order"
             );
             foreach ($legacy_hooks as $hook) {
               if (false !== has_action($hook)) { exit(1); }
             }
-            echo "storage-and-split-duplicate-production-state-ok\n";
+            echo "storage-and-enabled-production-state-ok\n";
           '
 
       - name: Verify mutation lease and durable journal controls
@@ -487,19 +525,22 @@ jobs:
       - name: Verify governance, authorization, and metadata policy
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/governance-smoke.php
 
-      - name: Verify hard-off Merge domain foundation contracts
+      - name: Verify Merge domain foundation contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-domain-foundation-smoke.php
 
-      - name: Verify hard-off Merge recovery and retirement evidence
+      - name: Verify Merge recovery and retirement evidence
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-recovery-foundation-smoke.php
 
       - name: Verify hardened Merge service and adapter core contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php core
 
-      - name: Verify hard-off Merge Review Confirm Execute authority
+      - name: Verify enabled Merge Review Confirm Execute authority
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-review-confirm-execute-smoke.php
 
-      - name: Verify hard-off Merge UI launcher foundation
+      - name: Verify enabled Merge permissions and unsupported envelope
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-production-enabled-smoke.php
+
+      - name: Verify enabled Merge UI launcher foundation
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-ui-foundation-smoke.php
 
       - name: Verify hardened Merge pre-retirement crash contracts
