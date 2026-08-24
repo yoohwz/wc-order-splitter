@@ -394,8 +394,8 @@ final class WCOS_Split_Strategy_Admin_Controller {
 					</section>
 
 					<div class="wcos-strategy-status" role="status" aria-live="polite"></div>
-					<div class="notice notice-error wcos-strategy-error" role="alert" tabindex="-1" hidden></div>
-					<div class="notice notice-success wcos-strategy-result" tabindex="-1" hidden></div>
+					<div class="wcos-strategy-error" role="alert" tabindex="-1" hidden></div>
+					<div class="wcos-strategy-result" tabindex="-1" hidden></div>
 
 					<div class="wcos-strategy-dialog__actions">
 						<button type="button" class="button wcos-strategy-cancel"><?php esc_html_e('Close', 'wc-order-splitter'); ?></button>

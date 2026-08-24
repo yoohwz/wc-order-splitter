@@ -18,8 +18,8 @@ foreach (array(
 	'feedbackBox.appendChild(statusBox);',
 	'feedbackBox.appendChild(errorBox);',
 	'feedbackBox.appendChild(resultBox);',
-	"errorBox.classList.add('inline');",
-	"resultBox.classList.add('inline');",
+	"errorBox.classList.add('notice', 'notice-error', 'inline');",
+	"resultBox.classList.add('notice', 'notice-success', 'inline');",
 	'footer.appendChild(reviewButton);',
 	'footer.appendChild(confirmButton);',
 	'footer.appendChild(executeButton);',
@@ -41,6 +41,21 @@ wcos_p2_adapter_assert(
 	'Strategy Review button unexpectedly depends on server footer markup rather than the cloned workflow control.'
 );
 wcos_p2_adapter_assert(false === strpos($js, '.innerHTML'), 'Strategy modal feedback reintroduced innerHTML rendering.');
+
+$controller = file_get_contents($root . '/inc/backend/class-wcos-split-strategy-admin-controller.php');
+wcos_p2_adapter_assert(is_string($controller) && '' !== $controller, 'Unable to read strategy controller feedback template.');
+wcos_p2_adapter_assert(
+	false !== strpos($controller, '<div class="wcos-strategy-error" role="alert" tabindex="-1" hidden></div>'),
+	'Strategy source template lost its alert semantics.'
+);
+wcos_p2_adapter_assert(
+	false !== strpos($controller, '<div class="wcos-strategy-result" tabindex="-1" hidden></div>'),
+	'Strategy source template lost its result region.'
+);
+wcos_p2_adapter_assert(
+	false === strpos($controller, '<div class="notice notice-error wcos-strategy-error"'),
+	'Strategy source template reintroduced a WordPress admin notice class that is removed before modal binding.'
+);
 
 $css = file_get_contents($root . '/css/p2-split-strategy-admin.css');
 wcos_p2_adapter_assert(is_string($css) && '' !== $css, 'Unable to read strategy admin CSS for modal feedback acceptance.');

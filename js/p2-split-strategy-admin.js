@@ -435,8 +435,8 @@
                     feedbackBox.appendChild(errorBox);
                     feedbackBox.appendChild(resultBox);
                     statusBox.hidden = true;
-                    errorBox.classList.add('inline');
-                    resultBox.classList.add('inline');
+                    errorBox.classList.add('notice', 'notice-error', 'inline');
+                    resultBox.classList.add('notice', 'notice-success', 'inline');
 
                     footer.appendChild(reviewButton);
                     footer.appendChild(confirmButton);
