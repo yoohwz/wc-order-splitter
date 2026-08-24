@@ -18,12 +18,12 @@ function wcos_strategy_transport_expect($code, $http_status, callable $callback,
 wcos_p2_adapter_assert(class_exists('WCOS_Split_Strategy_Review_Store'), 'Strategy Review store was not loaded.');
 wcos_p2_adapter_assert(class_exists('WCOS_Split_Strategy_Admin_Controller'), 'Strategy transport controller contract was not loaded.');
 wcos_p2_adapter_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Production Category strategy gate is not enabled.');
-wcos_p2_adapter_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Production Stock-status strategy gate is not hard-off.');
+wcos_p2_adapter_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Production Stock-status strategy gate is not enabled.');
 $transport_controller = WCOS_Split_Strategy_Admin_Controller::bootstrap();
-wcos_p2_adapter_assert($transport_controller instanceof WCOS_Split_Strategy_Admin_Controller, 'Production Category transport controller did not bootstrap.');
-wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION, array($transport_controller, 'ajax_review')), 'Production Category Review AJAX route was not registered.');
-wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION, array($transport_controller, 'ajax_confirm')), 'Production Category Confirm AJAX route was not registered.');
-wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION, array($transport_controller, 'ajax_execute')), 'Production Category Execute AJAX route was not registered.');
+wcos_p2_adapter_assert($transport_controller instanceof WCOS_Split_Strategy_Admin_Controller, 'Production strategy transport controller did not bootstrap.');
+wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION, array($transport_controller, 'ajax_review')), 'Production strategy Review AJAX route was not registered.');
+wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION, array($transport_controller, 'ajax_confirm')), 'Production strategy Confirm AJAX route was not registered.');
+wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION, array($transport_controller, 'ajax_execute')), 'Production strategy Execute AJAX route was not registered.');
 
 $transport_previous_user = get_current_user_id();
 $transport_allowed_statuses = get_option('order_splitter_status_allowed', array('wc-processing'));
@@ -81,30 +81,11 @@ $stock_order->calculate_totals(false);
 $stock_order->save();
 $stock_order_id = $stock_order->get_id();
 
-$strategy_reflection = new ReflectionClass('WCOS_Split_Strategy_Gates');
-$strategy_states_property = $strategy_reflection->getProperty('states');
-$strategy_states_property->setAccessible(true);
-$release_strategy_states = $strategy_states_property->getValue();
-
 try {
 	update_option('order_splitter_status_allowed', array('wc-pending'));
 	update_option('order_splitter_shop_manager_permission', 'no');
 	wp_set_current_user($transport_admin_id);
 	$transport_nonce = wp_create_nonce('wcos_split_strategy_order_' . $transport_order_id);
-
-	/* Real production state blocks Stock-status before any transport write. */
-	wcos_strategy_transport_expect(
-		'strategy_disabled',
-		503,
-		static function() use ($transport_controller, $transport_order_id, $transport_nonce) {
-			$transport_controller->review_request(array(
-				'order_id' => $transport_order_id,
-				'nonce' => $transport_nonce,
-				'strategy' => WCOS_Split_Strategy_Gates::STOCK_STATUS,
-			));
-		},
-		'Hard-off Stock-status transport was directly usable.'
-	);
 
 	wcos_strategy_transport_expect(
 		'invalid_nonce',
@@ -285,8 +266,8 @@ try {
 	wcos_p2_adapter_assert(1 === count(wcos_p2_adapter_children($transport_order_id, $confirm_response['operation_id'])), 'Category transport replay created duplicate children.');
 
 	wcos_strategy_transport_expect(
-		'strategy_disabled',
-		503,
+		'confirmation_strategy_mismatch',
+		409,
 		static function() use ($transport_controller, $transport_order_id, $transport_nonce, $confirm_response) {
 			$transport_controller->execute_request(array(
 				'order_id' => $transport_order_id,
@@ -296,15 +277,10 @@ try {
 				'confirmation_token' => '',
 			));
 		},
-		'Durable Category operation bypassed the hard-off Stock-status gate.'
+		'Durable Category operation was replayable as Stock-status.'
 	);
 
-	/* Test-only scope retains future Stock-status transport coverage after proving production fail-closed state. */
-	$future_strategy_states = $release_strategy_states;
-	$future_strategy_states[WCOS_Split_Strategy_Gates::STOCK_STATUS] = true;
-	$strategy_states_property->setValue(null, $future_strategy_states);
-
-	/* Stock-status goes through the same Review -> Confirm -> Execute transport. */
+	/* Production Stock-status goes through the same Review -> Confirm -> Execute transport. */
 	$stock_nonce = wp_create_nonce('wcos_split_strategy_order_' . $stock_order_id);
 	$stock_review_response = $transport_controller->review_request(array(
 		'order_id' => $stock_order_id,
@@ -339,7 +315,6 @@ try {
 	$stock_journal = WCOS_Operation_Journal::get($stock_source, $stock_confirm_response['operation_id']);
 	wcos_p2_adapter_assert(is_array($stock_journal) && WCOS_Split_Strategy_Gates::STOCK_STATUS === $stock_journal['context']['strategy_authority']['strategy'], 'Stock-status transport journal lost semantic strategy authority.');
 } finally {
-	$strategy_states_property->setValue(null, $release_strategy_states);
 	wp_set_current_user($transport_previous_user);
 	update_option('order_splitter_status_allowed', $transport_allowed_statuses);
 	update_option('order_splitter_shop_manager_permission', $transport_manager_permission);
@@ -397,10 +372,10 @@ try {
 	}
 }
 
-wcos_p2_adapter_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Production Category strategy gate was not restored after transport acceptance.');
-wcos_p2_adapter_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Stock-status strategy gate was not restored after transport acceptance.');
-wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION, array($transport_controller, 'ajax_review')), 'Production Category Review AJAX route was lost after transport acceptance.');
-wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION, array($transport_controller, 'ajax_confirm')), 'Production Category Confirm AJAX route was lost after transport acceptance.');
-wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION, array($transport_controller, 'ajax_execute')), 'Production Category Execute AJAX route was lost after transport acceptance.');
+wcos_p2_adapter_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Production Category strategy gate changed during transport acceptance.');
+wcos_p2_adapter_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Production Stock-status strategy gate changed during transport acceptance.');
+wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION, array($transport_controller, 'ajax_review')), 'Production strategy Review AJAX route was lost after transport acceptance.');
+wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION, array($transport_controller, 'ajax_confirm')), 'Production strategy Confirm AJAX route was lost after transport acceptance.');
+wcos_p2_adapter_assert(false !== has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION, array($transport_controller, 'ajax_execute')), 'Production strategy Execute AJAX route was lost after transport acceptance.');
 
-echo "p2-category-production-transport-ok\n";
+echo "p2-production-strategy-transport-ok\n";

@@ -8,7 +8,7 @@ wcos_p2_adapter_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT), '
 wcos_p2_adapter_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::DUPLICATE), 'Hardened Duplicate production gate was lost while planner foundation is tested.');
 wcos_p2_adapter_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::MANUAL_QUANTITY), 'Manual quantity Split strategy gate is not enabled.');
 wcos_p2_adapter_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Production Category strategy gate is not enabled.');
-wcos_p2_adapter_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Stock-status strategy was production-enabled by the planner foundation.');
+wcos_p2_adapter_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Production Stock-status strategy gate is not enabled.');
 wcos_p2_adapter_assert(!class_exists('WCOS_Category_Split_Admin_Controller'), 'Category planner foundation unexpectedly exposed an admin controller.');
 wcos_p2_adapter_assert(!class_exists('WCOS_Stock_Status_Split_Admin_Controller'), 'Stock-status planner foundation unexpectedly exposed an admin controller.');
 wcos_p2_adapter_assert(!method_exists('WCOS_Mutation_Gateway', 'category_split'), 'Category planner foundation unexpectedly exposed a mutation gateway method.');
