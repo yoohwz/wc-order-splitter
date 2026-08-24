@@ -88,7 +88,7 @@ $target_id = $target->get_id();
 /* Production enablement preserves the accepted domain and strategy contracts. */
 wcos_merge_foundation_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE), 'Production MERGE gate is not enabled.');
 wcos_merge_foundation_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::MANUAL_QUANTITY), 'Manual strategy gate changed.');
-wcos_merge_foundation_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Category strategy gate changed.');
+wcos_merge_foundation_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Production Category strategy gate is not enabled.');
 wcos_merge_foundation_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Stock strategy gate changed.');
 wcos_merge_foundation_assert(class_exists('WCOS_Mutation_Gateway'), 'Mandatory production gateway is unavailable.');
 
