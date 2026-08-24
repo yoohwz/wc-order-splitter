@@ -47,7 +47,7 @@ final class WCOS_Admin_Backbone_Modal_Assets {
 			return;
 		}
 
-		foreach (array('wcos-split-admin', 'wcos-duplicate-admin', 'wcos-split-strategy-admin') as $handle) {
+		foreach (array('wcos-split-admin', 'wcos-duplicate-admin', 'wcos-split-strategy-admin', 'wcos-merge-admin') as $handle) {
 			if (!isset($scripts->registered[$handle])) {
 				continue;
 			}

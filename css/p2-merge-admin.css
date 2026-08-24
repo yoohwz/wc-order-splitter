@@ -1,0 +1,90 @@
+.wcos-merge-launcher-description {
+	margin-left: 8px;
+}
+
+.wcos-merge-dialog[hidden],
+.wcos-merge-review[hidden],
+.wcos-merge-error[hidden],
+.wcos-merge-result[hidden] {
+	display: none !important;
+}
+
+.wcos-merge-backbone-modal .wc-backbone-modal-content {
+	max-width: 720px;
+}
+
+.wcos-merge-backbone-modal .wcos-merge-target-field,
+.wcos-merge-backbone-modal .wcos-merge-policy,
+.wcos-merge-backbone-modal .wcos-merge-review {
+	margin-bottom: 18px;
+}
+
+.wcos-merge-backbone-modal .wcos-merge-target-field label,
+.wcos-merge-backbone-modal .wcos-merge-policy h3,
+.wcos-merge-backbone-modal .wcos-merge-review h3 {
+	display: block;
+	margin: 0 0 8px;
+	font-weight: 600;
+}
+
+.wcos-merge-backbone-modal .wcos-merge-policy {
+	padding: 12px 14px;
+	border-left: 4px solid #dba617;
+	background: #fcf9e8;
+}
+
+.wcos-merge-backbone-modal .wcos-merge-policy p,
+.wcos-merge-backbone-modal .wcos-merge-target-field .description {
+	margin: 6px 0 0;
+}
+
+.wcos-merge-backbone-modal .wcos-merge-review-summary {
+	display: grid;
+	grid-template-columns: minmax(150px, 0.7fr) minmax(220px, 1.3fr);
+	gap: 6px 16px;
+	margin: 0 0 14px;
+}
+
+.wcos-merge-backbone-modal .wcos-merge-review-summary dt {
+	font-weight: 600;
+}
+
+.wcos-merge-backbone-modal .wcos-merge-review-summary dd {
+	margin: 0;
+}
+
+.wcos-merge-backbone-modal .wcos-merge-confirm-label {
+	display: flex;
+	gap: 8px;
+	align-items: flex-start;
+}
+
+.wcos-merge-backbone-modal .wcos-merge-status {
+	min-height: 24px;
+	margin: 8px 0;
+}
+
+.wcos-merge-backbone-modal .wcos-merge-error,
+.wcos-merge-backbone-modal .wcos-merge-result {
+	margin: 12px 0 0;
+	padding: 10px 12px;
+}
+
+.wcos-merge-backbone-modal .wcos-merge-result p {
+	margin: 0 0 6px;
+}
+
+.wcos-merge-backbone-modal .wcos-merge-result p:last-child {
+	margin-bottom: 0;
+}
+
+@media (max-width: 782px) {
+	.wcos-merge-backbone-modal .wcos-merge-review-summary {
+		grid-template-columns: 1fr;
+		gap: 3px;
+	}
+
+	.wcos-merge-backbone-modal .wcos-merge-review-summary dd {
+		margin-bottom: 8px;
+	}
+}
