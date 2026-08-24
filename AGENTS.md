@@ -40,7 +40,7 @@ A short `Merge` or `Release` command never implies Human Gate. Merge/release aut
 
 Every meaningful Codex task-state response and every deterministic stop signal must end with exactly one `NEXT_ACTION_HINT` footer in the canonical format defined by `docs/codex-short-command-protocol.md`. The footer must identify who acts next, whether the command belongs in ChatGPT, Codex, or the GitHub UI, the exact copy/paste-ready command, and the expected signal or outcome.
 
-The footer is navigation only. It must not widen task authority, bypass CI or review, imply Human Gate or release/publication approval, or let Codex treat its executor-side `Review` as independent ChatGPT Technical Review. When no authorized action is available, the footer must name the actual blocking authority without inventing a command. Completed tasks must use the deterministic `None` footer.
+The footer is navigation only. It must not widen task authority, bypass CI or review, imply Human Gate or release/publication approval, or let Codex treat its executor-side `Review` as independent ChatGPT Technical Review. When no authorized action is available, the footer must name the actual blocking authority without inventing a command. Completed tasks must use the deterministic `None` footer only when no further authorized next action exists. If the canonical task contract explicitly identifies an authorized next milestone, the footer may point the operator to it, but Codex must not automatically start unrelated or merely inferred work.
 
 ## Approved production baseline
 
