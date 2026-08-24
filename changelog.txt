@@ -2,6 +2,16 @@
 
 == Changelog ==
 
+= 1.4.15 (Aug 24, 2026) =
+* New: Enabled hardened single-source Merge for supported WooCommerce source/target order pairs.
+* Safety: Added server-owned Search -> Review -> Confirm -> Execute authority, pair authorization, dual-order leases, a durable source-keyed journal, and fail-closed rejection of unsupported participant state.
+* Integrity: Merge creates fresh target items without re-parenting or line coalescing, preserves historical quantities, money, and per-rate tax state, and preserves existing target-owned shipping under the accepted policy without current-catalog repricing or tax recalculation.
+* Stock: Merge keeps physical inventory neutral while transferring WooCommerce `_reduced_stock` operational ownership to the active target exactly once.
+* Recovery: Added deterministic replay, recovery, and compensation without a target shadow journal; the source uses non-force trash/archive retirement and the target remains active.
+* Compatibility: Validated Merge with WooCommerce 11.0.1 across legacy, HPOS-only, and HPOS compatibility/synchronization storage, with WordPress 7.1 compatibility evidence.
+* Architecture/UI: Added a shared WooCommerce Backbone modal flow for hardened Merge review and confirmation.
+* Safety boundary: Return, Bulk Return, Category Split, and Stock-status Split remain disabled; unsupported Merge pairs fail closed.
+
 = 1.4.14 (Aug 19, 2026) =
 * New: Enabled the hardened single-order Duplicate workflow for supported WooCommerce orders.
 * Safety: Added server-reviewed Duplicate confirmation, nonce/capability enforcement, source-state verification, operation leases, durable journals, and idempotent retry under the approved production gate.

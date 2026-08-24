@@ -122,6 +122,11 @@ jobs:
             'inc/backend/class-wcos-split-strategy-review-store.php' \
             'inc/backend/class-wcos-split-strategy-confirmation-store.php' \
             'inc/backend/class-wcos-split-strategy-admin-controller.php' \
+            'inc/backend/class-wcos-merge-review-store.php' \
+            'inc/backend/class-wcos-merge-confirmation-store.php' \
+            'inc/backend/class-wcos-merge-admin-controller.php' \
+            'css/p2-merge-admin.css' \
+            'js/p2-merge-admin.js' \
             'inc/domain/class-wcos-split-strategy-gates.php' \
             'inc/domain/class-wcos-category-split-planner.php' \
             'inc/domain/class-wcos-stock-status-split-planner.php' \
@@ -137,6 +142,8 @@ jobs:
             'inc/domain/class-wcos-merge-compensator.php' \
             'inc/domain/class-wcos-merge-preflight.php' \
             'inc/domain/class-wcos-merge-retirement-policy.php' \
+            'inc/domain/class-wcos-merge-order-service.php' \
+            'inc/domain/class-wcos-merge-woocommerce-adapter.php' \
             'css/p2-split-strategy-admin.css' \
             'js/p2-split-strategy-admin.js'; do
             if test ! -e "$package_root/$required_path"; then
@@ -172,6 +179,28 @@ jobs:
           archive_stable_tag=$(unzip -p wc-order-splitter.zip wc-order-splitter/readme.txt | sed -n 's/^Stable tag: //p' | head -n 1)
           test -n "$archive_version"
           test "$archive_version" = "$archive_stable_tag"
+          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::SPLIT => true'
+          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::DUPLICATE => true'
+          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::MERGE => true'
+          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::RETURN_ORDER => false'
+          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::BULK_RETURN => false'
+          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::MANUAL_QUANTITY => true'
+          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::CATEGORY => false'
+          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::STOCK_STATUS => false'
+
+          for forbidden_archive_path in \
+            'wc-order-splitter/inc/backend/order-merge-option.php' \
+            'wc-order-splitter/js/merge-action.js'; do
+            if unzip -Z1 wc-order-splitter.zip | grep -Fxq "$forbidden_archive_path"; then
+              echo "Legacy Merge path entered the ZIP: $forbidden_archive_path" >&2
+              exit 1
+            fi
+          done
+
+          if unzip -p wc-order-splitter.zip wc-order-splitter/wc-order-splitter.php 'wc-order-splitter/inc/*/*.php' | grep --fixed-strings 'wc-merged'; then
+            echo 'A custom production merged order status entered the ZIP.' >&2
+            exit 1
+          fi
 
           if unzip -Z1 wc-order-splitter.zip | grep -E '(^|/)(tests|docs|node_modules|inc/mutation-v2)(/|$)|(^|/)AGENTS\.md$'; then
             echo 'Development-only content entered the ZIP.' >&2
@@ -182,6 +211,11 @@ jobs:
             'wc-order-splitter/inc/backend/class-wcos-split-strategy-review-store.php' \
             'wc-order-splitter/inc/backend/class-wcos-split-strategy-confirmation-store.php' \
             'wc-order-splitter/inc/backend/class-wcos-split-strategy-admin-controller.php' \
+            'wc-order-splitter/inc/backend/class-wcos-merge-review-store.php' \
+            'wc-order-splitter/inc/backend/class-wcos-merge-confirmation-store.php' \
+            'wc-order-splitter/inc/backend/class-wcos-merge-admin-controller.php' \
+            'wc-order-splitter/css/p2-merge-admin.css' \
+            'wc-order-splitter/js/p2-merge-admin.js' \
             'wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php' \
             'wc-order-splitter/inc/domain/class-wcos-category-split-planner.php' \
             'wc-order-splitter/inc/domain/class-wcos-stock-status-split-planner.php' \
@@ -197,6 +231,8 @@ jobs:
             'wc-order-splitter/inc/domain/class-wcos-merge-compensator.php' \
             'wc-order-splitter/inc/domain/class-wcos-merge-preflight.php' \
             'wc-order-splitter/inc/domain/class-wcos-merge-retirement-policy.php' \
+            'wc-order-splitter/inc/domain/class-wcos-merge-order-service.php' \
+            'wc-order-splitter/inc/domain/class-wcos-merge-woocommerce-adapter.php' \
             'wc-order-splitter/css/p2-split-strategy-admin.css' \
             'wc-order-splitter/js/p2-split-strategy-admin.js'; do
             if ! unzip -Z1 wc-order-splitter.zip | grep -Fxq "$required_archive_path"; then
