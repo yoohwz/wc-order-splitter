@@ -158,6 +158,9 @@ jobs:
           grep -Fq 'inc/domain/' AGENTS.md
           grep -Fq 'inc/domain/' docs/order-mutation-v2-contract.md
 
+      - name: Run strategy modal feedback lifecycle regression
+        run: node tests/js/p2-strategy-modal-feedback-lifecycle.js
+
   package-check:
     name: Package safety contract
     runs-on: ubuntu-latest
