@@ -12,6 +12,7 @@ final class WCOS_Merge_Production_Enabled_Matrix {
 	private static $results = array();
 	private static $admin_id = 0;
 	private static $old_shop_permission = 'no';
+	private static $old_allowed_statuses = array();
 
 	public static function run() {
 		$admins = get_users(array('role' => 'administrator', 'number' => 1, 'fields' => 'ID'));
@@ -19,6 +20,8 @@ final class WCOS_Merge_Production_Enabled_Matrix {
 		self::$admin_id = (int) $admins[0];
 		wp_set_current_user(self::$admin_id);
 		self::$old_shop_permission = get_option('order_splitter_shop_manager_permission', 'no');
+		self::$old_allowed_statuses = get_option('order_splitter_status_allowed', array('wc-processing'));
+		update_option('order_splitter_status_allowed', array('wc-on-hold', 'wc-processing'));
 		self::create_product();
 		try {
 			self::search_and_permissions();
@@ -30,6 +33,7 @@ final class WCOS_Merge_Production_Enabled_Matrix {
 		} finally {
 			wp_set_current_user(self::$admin_id);
 			update_option('order_splitter_shop_manager_permission', self::$old_shop_permission);
+			update_option('order_splitter_status_allowed', self::$old_allowed_statuses);
 			if (!function_exists('wp_delete_user')) {
 				require_once ABSPATH . 'wp-admin/includes/user.php';
 			}
