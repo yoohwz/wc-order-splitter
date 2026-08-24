@@ -150,6 +150,9 @@ final class WCOS_Merge_Production_Enabled_Matrix {
 		list($source, $target) = self::pair('search');
 		$target->set_date_created('2020-01-01 00:00:00');
 		$target->save();
+		for ($index = 0; $index < WCOS_Merge_Admin_Controller::SEARCH_LIMIT; $index++) {
+			self::order('search-newer-' . $index);
+		}
 		$controller = WCOS_Merge_Admin_Controller::bootstrap();
 		$base = array('source_order_id' => $source->get_id(), 'nonce' => wp_create_nonce('wcos_merge_order_' . $source->get_id()), 'page' => 1);
 		$browse = $controller->search_request(array_merge($base, array('term' => '')));
