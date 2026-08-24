@@ -30,10 +30,9 @@ $admins = get_users(array('role' => 'administrator', 'number' => 1, 'fields' => 
 wcos_merge_ui_assert(!empty($admins), 'Merge UI smoke requires an administrator fixture.');
 wp_set_current_user(absint($admins[0]));
 
-wcos_merge_ui_assert(false === WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE), 'Merge gate unexpectedly enabled.');
-wcos_merge_ui_assert(null === WCOS_Merge_Admin_Controller::bootstrap(), 'Hard-off Merge UI controller bootstrapped.');
+wcos_merge_ui_assert(true === WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE), 'Production Merge gate is not enabled.');
 $controller = new WCOS_Merge_Admin_Controller();
-wcos_merge_ui_assert(false === $controller->register_hooks(), 'Hard-off Merge UI controller registered hooks.');
+wcos_merge_ui_assert(true === $controller->register_hooks(), 'Enabled Merge UI controller did not register hooks.');
 
 $hook_contracts = array(
 	'wp_ajax_' . WCOS_Merge_Admin_Controller::SEARCH_ACTION => 'ajax_search',
@@ -45,14 +44,14 @@ $hook_contracts = array(
 	'admin_enqueue_scripts' => 'enqueue_assets',
 );
 foreach ($hook_contracts as $hook => $method) {
-	wcos_merge_ui_assert(false === has_action($hook, array($controller, $method)), 'A hard-off Merge hook is production-visible: ' . $hook);
+	wcos_merge_ui_assert(false !== has_action($hook, array($controller, $method)), 'Enabled Merge hook is missing: ' . $hook);
 }
 
 wp_dequeue_script('wcos-merge-admin');
 wp_dequeue_style('wcos-merge-admin');
 $controller->enqueue_assets();
-wcos_merge_ui_assert(!wp_script_is('wcos-merge-admin', 'enqueued'), 'Hard-off Merge script was enqueued.');
-wcos_merge_ui_assert(!wp_style_is('wcos-merge-admin', 'enqueued'), 'Hard-off Merge stylesheet was enqueued.');
+wcos_merge_ui_assert(!wp_script_is('wcos-merge-admin', 'enqueued'), 'Merge script was enqueued outside an order edit screen.');
+wcos_merge_ui_assert(!wp_style_is('wcos-merge-admin', 'enqueued'), 'Merge stylesheet was enqueued outside an order edit screen.');
 
 $old_statuses = get_option('order_splitter_status_allowed', array('wc-processing'));
 update_option('order_splitter_status_allowed', array('wc-processing'));
@@ -72,8 +71,16 @@ try {
 
 	ob_start();
 	$controller->render_launcher($source);
-	$hard_off_launcher = (string) ob_get_clean();
-	wcos_merge_ui_assert('' === $hard_off_launcher, 'Hard-off Merge launcher rendered.');
+	$enabled_launcher = (string) ob_get_clean();
+	wcos_merge_ui_assert(false !== strpos($enabled_launcher, 'Merge into another order'), 'Enabled Merge launcher did not render.');
+	wcos_merge_ui_assert(false === strpos($enabled_launcher, $email) && false === strpos($enabled_launcher, $address), 'Enabled Merge launcher exposed customer PII.');
+
+	$order_screen_id = function_exists('wc_get_page_screen_id') ? wc_get_page_screen_id('shop-order') : 'woocommerce_page_wc-orders';
+	set_current_screen($order_screen_id);
+	$_GET['id'] = (string) $source->get_id();
+	$controller->enqueue_assets();
+	wcos_merge_ui_assert(wp_script_is('wcos-merge-admin', 'enqueued'), 'Enabled Merge script was not enqueued on the order edit screen.');
+	wcos_merge_ui_assert(wp_style_is('wcos-merge-admin', 'enqueued'), 'Enabled Merge stylesheet was not enqueued on the order edit screen.');
 
 	$template = $controller->dialog_html($source);
 	wcos_merge_ui_assert(false !== strpos($template, 'wcos-merge-target-select'), 'Merge target selector template is missing.');

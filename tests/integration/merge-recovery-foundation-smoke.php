@@ -320,7 +320,7 @@ function wcos_merge_recovery_run_immutable_drift_case($label, WC_Product $produc
 	return array('label' => $label, 'manual_before_recovery_write' => true, 'stock_neutral' => true);
 }
 
-wcos_merge_recovery_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE), 'MERGE gate changed during recovery work.');
+wcos_merge_recovery_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE), 'Production MERGE gate is not enabled during recovery evidence.');
 $managed = wcos_merge_recovery_product(true, false);
 $backorder = wcos_merge_recovery_product(true, true);
 $unmanaged = wcos_merge_recovery_product(false, false);
@@ -847,6 +847,6 @@ echo 'merge-recovery-evidence=' . wp_json_encode(array(
 	'immutable_drift_matrix' => $immutable_drift_matrix,
 	'retirement_candidates' => $retirement,
 	'failure_windows' => $failure_windows,
-	'merge_gate' => false,
+	'merge_gate' => WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE),
 )) . "\n";
 echo "merge-recovery-foundation-ok\n";
