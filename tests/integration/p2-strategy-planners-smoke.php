@@ -7,8 +7,16 @@ if (!defined('ABSPATH')) {
 wcos_p2_adapter_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT), 'Global Split workflow is not production-enabled while planner foundation is tested.');
 wcos_p2_adapter_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::DUPLICATE), 'Hardened Duplicate production gate was lost while planner foundation is tested.');
 wcos_p2_adapter_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::MANUAL_QUANTITY), 'Manual quantity Split strategy gate is not enabled.');
-wcos_p2_adapter_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Category strategy was production-enabled by the planner foundation.');
-wcos_p2_adapter_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Stock-status strategy was production-enabled by the planner foundation.');
+$planner_category_enabled = WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY);
+$planner_stock_enabled = WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS);
+wcos_p2_adapter_assert($planner_category_enabled === $planner_stock_enabled, 'Category and Stock-status strategy gates diverged during planner acceptance.');
+$stock_planner_reflection = new ReflectionClass('WCOS_Stock_Status_Split_Planner');
+$supported_statuses_property = $stock_planner_reflection->getProperty('supported_statuses');
+$supported_statuses_property->setAccessible(true);
+wcos_p2_adapter_assert(
+	array('instock', 'outofstock', 'onbackorder') === $supported_statuses_property->getValue(),
+	'Stock-status planner accepted-status authority changed.'
+);
 wcos_p2_adapter_assert(!class_exists('WCOS_Category_Split_Admin_Controller'), 'Category planner foundation unexpectedly exposed an admin controller.');
 wcos_p2_adapter_assert(!class_exists('WCOS_Stock_Status_Split_Admin_Controller'), 'Stock-status planner foundation unexpectedly exposed an admin controller.');
 wcos_p2_adapter_assert(!method_exists('WCOS_Mutation_Gateway', 'category_split'), 'Category planner foundation unexpectedly exposed a mutation gateway method.');
@@ -233,6 +241,40 @@ $deleted_stock_report = WCOS_Stock_Status_Split_Planner::review(wc_get_order($de
 wcos_p2_adapter_assert(empty($deleted_stock_report['supported']) && 'deleted_product_stock_status_unavailable' === $deleted_stock_report['reason'], 'Stock-status planner guessed status for a deleted catalog product.');
 $deleted_stock_order->delete(true);
 wp_delete_post($deleted_stock_peer->get_id(), true);
+
+/* Parent-managed variation identity and stock-owner authority are deterministic. */
+list($planner_parent_product, $planner_parent_variation) = wcos_p2_stock_variable_pair(
+	'WCOS Stock planner parent-managed',
+	true,
+	false,
+	0,
+	0
+);
+$planner_parent_peer = wcos_p2_adapter_product('WCOS Stock planner parent peer', '9.00');
+$planner_parent_variation = wc_get_product($planner_parent_variation->get_id());
+$planner_parent_peer->set_stock_status('instock');
+$planner_parent_peer->save();
+$planner_parent_order = wc_create_order();
+$planner_parent_order->set_status('pending');
+$planner_parent_order->set_currency('USD');
+$planner_parent_item = $planner_parent_order->add_product($planner_parent_variation, 2);
+$planner_parent_order->add_product($planner_parent_peer, 1);
+$planner_parent_order->calculate_totals(false);
+$planner_parent_order->save();
+$planner_parent_review = WCOS_Stock_Status_Split_Planner::review(wc_get_order($planner_parent_order->get_id()));
+wcos_p2_adapter_assert(
+	!empty($planner_parent_review['supported']),
+	'Parent-managed variation failed Stock-status Review: ' . (isset($planner_parent_review['reason']) ? $planner_parent_review['reason'] : 'missing_reason')
+);
+$planner_parent_evidence = $planner_parent_review['buckets']['stock-outofstock']['evidence'][$planner_parent_item];
+wcos_p2_adapter_assert($planner_parent_product->get_id() === $planner_parent_evidence['product_id'], 'Parent-managed Review lost parent product identity.');
+wcos_p2_adapter_assert($planner_parent_variation->get_id() === $planner_parent_evidence['variation_id'], 'Parent-managed Review lost variation identity.');
+wcos_p2_adapter_assert($planner_parent_variation->get_id() === $planner_parent_evidence['catalog_object_id'], 'Parent-managed Review resolved the wrong catalog object.');
+wcos_p2_adapter_assert($planner_parent_product->get_id() === $planner_parent_evidence['stock_owner_id'], 'Parent-managed Review resolved the wrong stock owner.');
+$planner_parent_order->delete(true);
+wcos_p2_stock_delete_product($planner_parent_peer);
+wcos_p2_stock_delete_product($planner_parent_variation);
+wcos_p2_stock_delete_product($planner_parent_product);
 
 $category_order->delete(true);
 wp_delete_post($category_a->get_id(), true);

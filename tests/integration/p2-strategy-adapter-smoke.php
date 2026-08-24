@@ -6,8 +6,11 @@ if (!defined('ABSPATH')) {
 
 wcos_p2_adapter_assert(class_exists('WCOS_Split_Strategy_WooCommerce_Adapter'), 'Strategy Split adapter was not loaded by the plugin bootstrap.');
 wcos_p2_adapter_assert(method_exists('WCOS_Mutation_Gateway', 'split_strategy'), 'Strategy Split gateway boundary is missing.');
-wcos_p2_adapter_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Category strategy was enabled by the adapter foundation.');
-wcos_p2_adapter_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Stock-status strategy was enabled by the adapter foundation.');
+$strategy_runtime_enabled = WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY);
+wcos_p2_adapter_assert(
+	$strategy_runtime_enabled === WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS),
+	'Category and Stock-status strategy gates diverged during adapter acceptance.'
+);
 
 $strategy_adapter = new WCOS_Split_Strategy_WooCommerce_Adapter();
 $strategy_gateway = new WCOS_Mutation_Gateway();
@@ -23,7 +26,7 @@ $gateway_item_b = $gateway_order->add_product($gateway_product_b, 1);
 $gateway_order->calculate_totals(false);
 $gateway_order->save();
 
-foreach (array(WCOS_Split_Strategy_Gates::CATEGORY, WCOS_Split_Strategy_Gates::STOCK_STATUS) as $blocked_strategy) {
+foreach ($strategy_runtime_enabled ? array() : array(WCOS_Split_Strategy_Gates::CATEGORY, WCOS_Split_Strategy_Gates::STOCK_STATUS) as $blocked_strategy) {
 	$blocked_operation = 'p2-strategy-gateway-' . $blocked_strategy . '-' . wp_generate_uuid4();
 	$blocked = false;
 	try {

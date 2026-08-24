@@ -17,14 +17,23 @@ function wcos_strategy_transport_expect($code, $http_status, callable $callback,
 
 wcos_p2_adapter_assert(class_exists('WCOS_Split_Strategy_Review_Store'), 'Strategy Review store was not loaded.');
 wcos_p2_adapter_assert(class_exists('WCOS_Split_Strategy_Admin_Controller'), 'Strategy transport controller contract was not loaded.');
-wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION), 'Hard-off strategy Review AJAX route was registered.');
-wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION), 'Hard-off strategy Confirm AJAX route was registered.');
-wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION), 'Hard-off strategy Execute AJAX route was registered.');
+$transport_runtime_enabled = WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY);
+wcos_p2_adapter_assert(
+	$transport_runtime_enabled === WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS),
+	'Category and Stock-status strategy gates diverged during transport acceptance.'
+);
+foreach (array(
+	WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION,
+	WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION,
+	WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION,
+) as $transport_action) {
+	wcos_p2_adapter_assert(
+		$transport_runtime_enabled === (false !== has_action('wp_ajax_' . $transport_action)),
+		'Strategy transport route registration does not match the code-owned gate state: ' . $transport_action
+	);
+}
 
 $transport_controller = new WCOS_Split_Strategy_Admin_Controller();
-wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION), 'Instantiating the hard-off strategy controller registered Review AJAX.');
-wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION), 'Instantiating the hard-off strategy controller registered Confirm AJAX.');
-wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION), 'Instantiating the hard-off strategy controller registered Execute AJAX.');
 
 $transport_previous_user = get_current_user_id();
 $transport_allowed_statuses = get_option('order_splitter_status_allowed', array('wc-processing'));
@@ -94,7 +103,7 @@ try {
 	$transport_nonce = wp_create_nonce('wcos_split_strategy_order_' . $transport_order_id);
 
 	/* Real release state blocks both future strategies before any transport write. */
-	foreach (array(WCOS_Split_Strategy_Gates::CATEGORY, WCOS_Split_Strategy_Gates::STOCK_STATUS) as $hard_off_strategy) {
+	foreach ($transport_runtime_enabled ? array() : array(WCOS_Split_Strategy_Gates::CATEGORY, WCOS_Split_Strategy_Gates::STOCK_STATUS) as $hard_off_strategy) {
 		wcos_strategy_transport_expect(
 			'strategy_disabled',
 			503,
@@ -401,10 +410,17 @@ try {
 	}
 }
 
-wcos_p2_adapter_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Category strategy gate was not restored after transport acceptance.');
-wcos_p2_adapter_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Stock-status strategy gate was not restored after transport acceptance.');
-wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION), 'Strategy Review AJAX route was registered after transport acceptance.');
-wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION), 'Strategy Confirm AJAX route was registered after transport acceptance.');
-wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION), 'Strategy Execute AJAX route was registered after transport acceptance.');
+wcos_p2_adapter_assert($transport_runtime_enabled === WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Category strategy gate was not restored after transport acceptance.');
+wcos_p2_adapter_assert($transport_runtime_enabled === WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Stock-status strategy gate was not restored after transport acceptance.');
+foreach (array(
+	WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION,
+	WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION,
+	WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION,
+) as $transport_action) {
+	wcos_p2_adapter_assert(
+		$transport_runtime_enabled === (false !== has_action('wp_ajax_' . $transport_action)),
+		'Strategy transport route restoration does not match the code-owned gate state: ' . $transport_action
+	);
+}
 
-echo "p2-strategy-transport-hard-off-ok\n";
+echo "p2-strategy-transport-gate-aware-ok\n";

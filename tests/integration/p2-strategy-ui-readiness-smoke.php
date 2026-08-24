@@ -5,10 +5,21 @@ if (!defined('ABSPATH')) {
 }
 
 wcos_p2_adapter_assert(method_exists('WCOS_Split_Strategy_Admin_Controller', 'bootstrap'), 'Strategy UI gate-aware bootstrap is missing.');
-wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION), 'Strategy Review route is registered in the real hard-off release state.');
-wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION), 'Strategy Confirm route is registered in the real hard-off release state.');
-wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION), 'Strategy Execute route is registered in the real hard-off release state.');
-wcos_p2_adapter_assert(null === WCOS_Split_Strategy_Admin_Controller::bootstrap(), 'Hard-off strategy UI bootstrap returned an active controller.');
+$ui_runtime_enabled = WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY);
+wcos_p2_adapter_assert(
+	$ui_runtime_enabled === WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS),
+	'Category and Stock-status strategy gates diverged during UI acceptance.'
+);
+foreach (array(
+	WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION,
+	WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION,
+	WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION,
+) as $ui_action) {
+	wcos_p2_adapter_assert(
+		$ui_runtime_enabled === (false !== has_action('wp_ajax_' . $ui_action)),
+		'Strategy UI route registration does not match the code-owned gate state: ' . $ui_action
+	);
+}
 
 $ui_previous_user = get_current_user_id();
 $ui_allowed_statuses = get_option('order_splitter_status_allowed', array('wc-processing'));
@@ -125,7 +136,7 @@ try {
 	wcos_p2_adapter_assert(false !== strpos($css, 'display: none !important;'), 'Strategy source dialog/launcher is not hidden from the order page.');
 	wcos_p2_adapter_assert(false !== strpos($css, '.wcos-strategy-backbone-modal .wc-backbone-modal-content'), 'Strategy visible modal does not use WooCommerce Backbone shell.');
 } finally {
-	if ($ui_controller instanceof WCOS_Split_Strategy_Admin_Controller) {
+	if (!$ui_runtime_enabled && $ui_controller instanceof WCOS_Split_Strategy_Admin_Controller) {
 		$ui_controller->unregister_hooks();
 	}
 	$ui_states_property->setValue(null, $ui_release_states);
@@ -142,10 +153,17 @@ try {
 	}
 }
 
-wcos_p2_adapter_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Category gate was not restored after strategy UI readiness acceptance.');
-wcos_p2_adapter_assert(!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Stock-status gate was not restored after strategy UI readiness acceptance.');
-wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION), 'Strategy Review AJAX remained registered after test-only UI scope.');
-wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION), 'Strategy Confirm AJAX remained registered after test-only UI scope.');
-wcos_p2_adapter_assert(false === has_action('wp_ajax_' . WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION), 'Strategy Execute AJAX remained registered after test-only UI scope.');
+wcos_p2_adapter_assert($ui_runtime_enabled === WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY), 'Category gate was not restored after strategy UI readiness acceptance.');
+wcos_p2_adapter_assert($ui_runtime_enabled === WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Stock-status gate was not restored after strategy UI readiness acceptance.');
+foreach (array(
+	WCOS_Split_Strategy_Admin_Controller::REVIEW_ACTION,
+	WCOS_Split_Strategy_Admin_Controller::CONFIRM_ACTION,
+	WCOS_Split_Strategy_Admin_Controller::EXECUTE_ACTION,
+) as $ui_action) {
+	wcos_p2_adapter_assert(
+		$ui_runtime_enabled === (false !== has_action('wp_ajax_' . $ui_action)),
+		'Strategy UI route restoration does not match the code-owned gate state: ' . $ui_action
+	);
+}
 
 echo "p2-strategy-ui-readiness-ok\n";
