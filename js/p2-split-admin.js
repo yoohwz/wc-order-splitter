@@ -629,6 +629,14 @@
 
     function openMethodChooser() {
         var handle = null;
+
+        function openFromVisibleLauncher(openStage) {
+            handle.close(false, function () {
+                launcher.focus();
+                openStage();
+            });
+        }
+
         handle = window.WCOSBackboneModal.open({
             trigger: launcher,
             title: 'Split order',
@@ -641,8 +649,7 @@
                     'By quantity',
                     'Move exact quantities from one or more product lines into child orders.',
                     function () {
-                        handle.close(false);
-                        window.setTimeout(function () { openQuantityDialog(launcher); }, 0);
+                        openFromVisibleLauncher(function () { openQuantityDialog(launcher); });
                     }
                 ));
                 strategyLaunchers.forEach(function (strategyLauncher) {
@@ -650,8 +657,7 @@
                         methodLabel(strategyLauncher.textContent),
                         strategyLauncher._wcosDescription || 'Build child orders from the reviewed product classification.',
                         function () {
-                            handle.close(false);
-                            window.setTimeout(function () { strategyLauncher.click(); }, 0);
+                            openFromVisibleLauncher(function () { strategyLauncher.click(); });
                         }
                     ));
                 });

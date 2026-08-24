@@ -161,6 +161,9 @@ jobs:
       - name: Run strategy modal feedback lifecycle regression
         run: node tests/js/p2-strategy-modal-feedback-lifecycle.js
 
+      - name: Run Split method focus lifecycle regression
+        run: node tests/js/p2-split-method-focus-lifecycle.js
+
   package-check:
     name: Package safety contract
     runs-on: ubuntu-latest
