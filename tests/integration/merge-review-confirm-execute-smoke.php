@@ -46,7 +46,7 @@ function wcos_merge_authority_request(WC_Order $source, WC_Order $target) {
 	return array(
 		'source_order_id' => $source->get_id(),
 		'target_order_id' => $target->get_id(),
-		'nonce' => wp_create_nonce('wcos_merge_orders_' . $source->get_id() . '_' . $target->get_id()),
+		'nonce' => wp_create_nonce('wcos_merge_order_' . $source->get_id()),
 	);
 }
 
@@ -74,12 +74,14 @@ $admins = get_users(array('role' => 'administrator', 'number' => 1, 'fields' => 
 wcos_merge_authority_assert(!empty($admins), 'Merge authority smoke requires an administrator fixture.');
 $operator_id = absint($admins[0]);
 wp_set_current_user($operator_id);
+$original_allowed_statuses = get_option('order_splitter_status_allowed', array('wc-processing'));
+update_option('order_splitter_status_allowed', array('wc-pending'));
 
 wcos_merge_authority_assert(false === WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE), 'Merge gate unexpectedly enabled.');
 wcos_merge_authority_assert(null === WCOS_Merge_Admin_Controller::bootstrap(), 'Hard-off Merge controller bootstrapped.');
 $controller = new WCOS_Merge_Admin_Controller();
 wcos_merge_authority_assert(false === $controller->register_hooks(), 'Hard-off Merge controller registered hooks.');
-foreach (array(WCOS_Merge_Admin_Controller::REVIEW_ACTION, WCOS_Merge_Admin_Controller::CONFIRM_ACTION, WCOS_Merge_Admin_Controller::EXECUTE_ACTION) as $action) {
+foreach (array(WCOS_Merge_Admin_Controller::SEARCH_ACTION, WCOS_Merge_Admin_Controller::REVIEW_ACTION, WCOS_Merge_Admin_Controller::CONFIRM_ACTION, WCOS_Merge_Admin_Controller::EXECUTE_ACTION) as $action) {
 	wcos_merge_authority_assert(false === has_action('wp_ajax_' . $action), 'A hard-off Merge AJAX hook is production-visible.');
 }
 
@@ -398,6 +400,7 @@ try {
 		wcos_merge_authority_cleanup($pair[0], $pair[1], $pair[2]);
 	}
 	$product->delete(true);
+	update_option('order_splitter_status_allowed', $original_allowed_statuses);
 }
 
 echo "merge-review-confirm-execute-authority-ok\n";

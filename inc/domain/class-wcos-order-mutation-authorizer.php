@@ -71,12 +71,17 @@ final class WCOS_Order_Mutation_Authorizer {
 	}
 
 	public static function assert_merge(WC_Order $source, WC_Order $target) {
-		self::assert_shop_manager_policy();
+		self::assert_merge_source($source);
 		if ($source->get_id() === $target->get_id()) {
 			throw new RuntimeException(__('An order cannot be merged into itself.', 'wc-order-splitter'));
 		}
-		self::assert_can_edit($source);
 		self::assert_can_edit($target);
+	}
+
+	/** Authorize the current edited order before a Merge target is selected. */
+	public static function assert_merge_source(WC_Order $source) {
+		self::assert_shop_manager_policy();
+		self::assert_can_edit($source);
 		self::assert_can_delete($source);
 	}
 
