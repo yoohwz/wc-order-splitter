@@ -90,6 +90,7 @@ Before doing substantive work for any short command:
 8. If a PR exists, read the PR body, exact base/head SHA, state, review threads/comments, and current CI/check state relevant to the task.
 9. Resolve the latest explicit governance checkpoint/signals, including where applicable:
    - `PLAN_APPROVED`
+   - `RELEASE_FREEZE_APPROVED`
    - `TECHNICAL_REVIEW_REQUIRED`
    - `TECHNICAL_ACCEPTED`
    - `TECHNICAL_CHANGES_REQUIRED`
@@ -170,6 +171,21 @@ If the accepted/head SHA has drifted, stop with:
 
 Before release/tag/publication, Codex must find the separate explicit release Human Gate required by the task contract. A prior implementation or merge Human Gate never implicitly authorizes release.
 
+### Release authority and freeze
+
+A standing release Issue is planning authority, not permission to create a release branch or candidate. If its contract requires a release freeze, `Run/Chạy` must find the exact freeze signal and verify its bound source SHA and production gate map before performing release bookkeeping. If the freeze is absent, stop with the task's deterministic freeze signal.
+
+For `WOS-REL-001`, Issue #55 is the canonical consolidated public-release authority:
+
+- the published WordPress.org baseline remains `1.4.11`;
+- `1.4.12`, `1.4.13`, `1.4.14`, and `1.4.15` are internal development/bookkeeping checkpoints and must not be tagged or published individually;
+- the next authorized public candidate is exactly `1.5.0`;
+- `Run/Chạy WOS-REL-001` may prepare that candidate only after `RELEASE_FREEZE_APPROVED: WOS-REL-001 / 1.5.0` binds the exact accepted `main` SHA and final production gate map;
+- before that freeze, stop with `RELEASE_FREEZE_REQUIRED: WOS-REL-001`;
+- `Release WOS-REL-001` still requires the separate publication Human Gate bound to the exact verified SHA/artifact authority.
+
+Neither release metadata already present in Git nor a successful package workflow may be treated as proof that an internal checkpoint was publicly released or that publication authority exists.
+
 ## Examples
 
 Operator:
@@ -201,6 +217,12 @@ Operator:
 `Status WOS-MERGE-009`
 
 Codex reports the exact issue/PR/branch/head/CI/checkpoint and next authorized action without changing anything.
+
+Operator:
+
+`Chạy WOS-REL-001`
+
+Codex resolves Issue #55 and checks for its exact release-freeze signal. Before freeze it stops with `RELEASE_FREEZE_REQUIRED: WOS-REL-001`; after freeze it may prepare only the consolidated `1.5.0` candidate, while publication remains separately gated.
 
 ## Design rule for future ChatGPT task creation
 
