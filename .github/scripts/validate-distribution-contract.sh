@@ -139,6 +139,8 @@ for required_path in \
   'inc/domain/class-wcos-return-recovery-state-graph.php' \
   'inc/domain/class-wcos-return-commit-guard.php' \
   'inc/domain/class-wcos-return-compensator.php' \
+  'inc/domain/class-wcos-return-order-service.php' \
+  'inc/domain/class-wcos-return-woocommerce-adapter.php' \
   'css/p2-split-strategy-admin.css' \
   'js/p2-split-strategy-admin.js'; do
   if test ! -e "$distribution_root/$required_path"; then

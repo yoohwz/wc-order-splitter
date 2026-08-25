@@ -82,12 +82,14 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-return-recovery-state-graph.php';
 		include_once $root . 'domain/class-wcos-return-commit-guard.php';
 		include_once $root . 'domain/class-wcos-return-compensator.php';
+		include_once $root . 'domain/class-wcos-return-order-service.php';
 		include_once $root . 'domain/class-wcos-mutation-recovery-coordinator.php';
 		WCOS_Mutation_Recovery_Coordinator::bootstrap();
 		include_once $root . 'domain/class-wcos-duplicate-preflight.php';
 		include_once $root . 'domain/class-wcos-merge-preflight.php';
 		include_once $root . 'domain/class-wcos-duplicate-woocommerce-adapter.php';
 		include_once $root . 'domain/class-wcos-merge-woocommerce-adapter.php';
+		include_once $root . 'domain/class-wcos-return-woocommerce-adapter.php';
 		include_once $root . 'domain/class-wcos-mutation-gateway.php';
 
 		include_once $root . 'backend/class-wcos-admin-backbone-modal-assets.php';

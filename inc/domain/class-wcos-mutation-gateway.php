@@ -59,9 +59,14 @@ final class WCOS_Mutation_Gateway {
 		return (new WCOS_Merge_WooCommerce_Adapter())->preflight($source, $target, $operation_id, $confirmed_precision);
 	}
 
-	public function return_order(WC_Order $child, WC_Order $parent, $operation_id) {
+	public function return_order(WC_Order $child, $operation_id, $confirmed_precision = null) {
 		WCOS_Feature_Gates::assert_enabled(WCOS_Feature_Gates::RETURN_ORDER);
-		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::RETURN_ORDER, $child, $parent);
-		throw new RuntimeException(__('The hardened return service has not been implemented.', 'wc-order-splitter'));
+		$report = WCOS_Return_Preflight::assert_supported($child, false);
+		$original = wc_get_order(absint($report['source_order_id']));
+		if (!$original instanceof WC_Order) {
+			throw new RuntimeException(__('The server-resolved Return original is unavailable.', 'wc-order-splitter'));
+		}
+		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::RETURN_ORDER, $child, $original);
+		return (new WCOS_Return_WooCommerce_Adapter())->return_order($child, $operation_id, $confirmed_precision);
 	}
 }
