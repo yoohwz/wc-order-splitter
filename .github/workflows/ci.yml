@@ -187,8 +187,9 @@ jobs:
           grep -Fq "'return' === \$type" inc/domain/class-wcos-mutation-recovery-coordinator.php
           grep -Fq 'const APPROVED = self::NON_FORCE_TRASH_ARCHIVE;' inc/domain/class-wcos-return-retirement-policy.php
           test ! -e inc/backend/class-wcos-return-admin-controller.php
-          test ! -e inc/domain/class-wcos-return-order-service.php
-          test ! -e inc/domain/class-wcos-return-woocommerce-adapter.php
+          grep -Fq 'class-wcos-return-order-service.php' inc/cores/script.php
+          grep -Fq 'class-wcos-return-woocommerce-adapter.php' inc/cores/script.php
+          grep -Fq 'new WCOS_Return_WooCommerce_Adapter' inc/domain/class-wcos-mutation-gateway.php
           test ! -e js/p2-return-admin.js
           test ! -e css/p2-return-admin.css
           grep -Fq "const SEARCH_ACTION = 'wcos_merge_target_search';" inc/backend/class-wcos-merge-admin-controller.php
@@ -396,6 +397,9 @@ jobs:
 
       - name: Verify hard-off Return recovery retirement stock and sibling-evolution foundation
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/return-recovery-foundation-smoke.php
+
+      - name: Verify hard-off Return service and WooCommerce adapter contracts
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/return-service-adapter-smoke.php
 
       - name: Verify Merge domain foundation contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-domain-foundation-smoke.php

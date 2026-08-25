@@ -165,6 +165,12 @@ final class WCOS_Return_Journal_Context {
 			throw new RuntimeException(__('Completed Return authority is unavailable.', 'wc-order-splitter'));
 		}
 		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
+		$snapshot = isset($context['return_recovery_snapshot']) && is_array($context['return_recovery_snapshot'])
+			? $context['return_recovery_snapshot'] : array();
+		if (empty($snapshot)) {
+			throw new RuntimeException(__('Completed Return recovery snapshot is unavailable.', 'wc-order-splitter'));
+		}
+		WCOS_Return_Recovery_Snapshot::assert_valid($snapshot, $record);
 		$result = isset($context['return_terminal_result']) && is_array($context['return_terminal_result'])
 			? $context['return_terminal_result'] : array();
 		$fingerprint = self::fingerprint(isset($result['result_fingerprint']) ? $result['result_fingerprint'] : '');

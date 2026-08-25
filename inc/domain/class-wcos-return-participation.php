@@ -68,6 +68,8 @@ final class WCOS_Return_Participation {
 				'return_forward_repair_allowed' => true,
 				'return_child_state_after' => WCOS_Return_Recovery_Snapshot::participant_checkpoint($snapshot, 'child', wc_get_order($child_id)),
 				'return_original_state_after' => WCOS_Return_Recovery_Snapshot::participant_checkpoint($snapshot, 'original', wc_get_order($original_id), $added_ids),
+				'return_child_signature_after' => WCOS_Return_Recovery_Snapshot::participant_signature($snapshot, 'child', wc_get_order($child_id)),
+				'return_original_signature_after' => WCOS_Return_Recovery_Snapshot::participant_signature($snapshot, 'original', wc_get_order($original_id), $added_ids),
 			))) {
 				throw new RuntimeException(__('Partial Return child participation could not be checkpointed.', 'wc-order-splitter'));
 			}
