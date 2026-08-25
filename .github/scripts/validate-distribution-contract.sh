@@ -139,7 +139,8 @@ for required_path in \
   fi
 done
 
-if find "$distribution_root" -type l -print | grep -q .; then
+distribution_symlink=$(find "$distribution_root" -type l -print -quit)
+if test -n "$distribution_symlink"; then
   fail "symbolic links entered the distribution tree"
 fi
 

@@ -29,7 +29,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           echo "main_commit_sha=$(git rev-parse HEAD)"
           echo "main_tree_sha=$(git rev-parse HEAD^{tree})"
-          echo "main_parent_sha=$(git rev-parse HEAD^1)"
+          echo "main_parent_shas=$(git show -s --format=%P HEAD)"
 
       - name: Setup representative PHP
         uses: shivammathur/setup-php@v2
