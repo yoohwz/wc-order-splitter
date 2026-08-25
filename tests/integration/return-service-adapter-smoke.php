@@ -234,6 +234,212 @@ function wcos_return_service_legacy_rejection_case() {
 	return array('case' => 'legacy_only_lineage', 'status' => 'rejected');
 }
 
+function wcos_return_service_multiline_fixture($label) {
+	$product = new WC_Product_Simple(); $product->set_name('WCOS Return service multiline ' . $label);
+	$product->set_regular_price('6.00'); $product->set_price('6.00');
+	$product->set_manage_stock(true); $product->set_stock_quantity(60); $product->set_backorders('yes');
+	wcos_return_service_assert($product->save() > 0, 'Return multiline product fixture could not be saved.');
+	$original = wc_create_order(); $original->set_status('pending'); $original->set_currency('USD');
+	$source_item_ids = array();
+	foreach (array('alpha', 'beta') as $identity) {
+		$item = new WC_Order_Item_Product();
+		$item->set_name('Return multiline ' . $identity); $item->set_product_id($product->get_id());
+		$item->set_quantity(2); $item->set_subtotal('12.00'); $item->set_total('12.00');
+		$item->add_meta_data('Configured choice', $identity, true); $item->add_meta_data('_reduced_stock', '2.000000', true);
+		$original->add_item($item); $source_item_ids[] = $item;
+	}
+	WCOS_Order_Totals_Rebuilder::rebuild($original, 2); $original->save();
+	$source_item_ids = array_map(static function($item) { return absint($item->get_id()); }, $source_item_ids);
+	$original->get_data_store()->set_stock_reduced($original->get_id(), true);
+	$stock_before = WCOS_Decimal::normalize(wc_get_product($product->get_id())->get_stock_quantity(), 6);
+	$split_operation = 'return-service-multiline-split-' . wp_generate_uuid4();
+	$children = (new WCOS_Mutation_Gateway())->split(wc_get_order($original->get_id()), array(
+		'multiline-child' => array($source_item_ids[0] => '1.000000', $source_item_ids[1] => '1.000000'),
+	), $split_operation, 2);
+	wcos_return_service_assert(1 === count($children), 'Return multiline fixture Split did not create one child.');
+	$fixture = array(
+		'product_id' => $product->get_id(), 'original_id' => $original->get_id(), 'child_id' => $children[0]->get_id(),
+		'source_item_id' => $source_item_ids[0], 'source_item_ids' => $source_item_ids, 'unrelated_item_id' => 0,
+		'split_operation' => $split_operation, 'stock_before' => $stock_before,
+	);
+	$GLOBALS['wcos_return_service_fixtures'][] = $fixture;
+	return $fixture;
+}
+
+function wcos_return_service_pair_contract(array $fixture) {
+	$orders = array();
+	foreach (array('child_id', 'original_id') as $key) {
+		$order = isset($fixture[$key]) ? wc_get_order(absint($fixture[$key])) : false;
+		if ($order instanceof WC_Order) { $orders[] = $order; }
+	}
+	return WCOS_Order_Contract_Snapshot::aggregate($orders, 2);
+}
+
+function wcos_return_service_journal_key($child_id, $operation_id) {
+	return 'wcos_mutation_op_' . hash('sha256', absint($child_id) . '|' . sanitize_key($operation_id));
+}
+
+function wcos_return_service_freeze_checkpoint(array $fixture, $operation_id, $stage, $expected_state, $occurrence = 1) {
+	$hits = 0; $thrown = false;
+	$fault = static function($actual) use ($stage, $occurrence, &$hits) {
+		if ($stage === $actual && ++$hits >= $occurrence) {
+			throw new WCOS_Return_Recovery_Interruption_Exception('Injected production handoff at ' . $stage);
+		}
+	};
+	$block_dispatch = static function() { throw new WCOS_Return_Recovery_Interruption_Exception('Injected service-to-coordinator handoff boundary.'); };
+	add_action('wcos_return_mutation_checkpoint', $fault, 10, 1);
+	add_action('wcos_return_recovery_checkpoint', $fault, 10, 1);
+	add_action('wcos_mutation_recovery_required', $block_dispatch, 1, 2);
+	try { (new WCOS_Return_WooCommerce_Adapter())->return_order(wc_get_order($fixture['child_id']), $operation_id, 2); }
+	catch (Throwable $throwable) { $thrown = true; }
+	finally {
+		remove_action('wcos_return_mutation_checkpoint', $fault, 10);
+		remove_action('wcos_return_recovery_checkpoint', $fault, 10);
+		remove_action('wcos_mutation_recovery_required', $block_dispatch, 1);
+	}
+	$record = WCOS_Operation_Journal::get(wc_get_order($fixture['child_id']), $operation_id);
+	wcos_return_service_assert($thrown && $hits >= $occurrence && is_array($record), 'Production Return handoff did not persist a journal at ' . $stage . '.');
+	$actual_state = WCOS_Return_Recovery_State_Graph::assert_record($record);
+	wcos_return_service_assert('recovery_required' === $record['status'] && $expected_state === $actual_state, 'Production Return handoff persisted the wrong durable state at ' . $stage . ': ' . $record['status'] . '/' . $actual_state . '.');
+	$context = $record['context'];
+	foreach (array('return_original_added_item_ids', 'return_destination_item_ids', 'return_child_state_after', 'return_original_state_after', 'return_child_signature_after', 'return_original_signature_after', 'return_forward_repair_allowed') as $field) {
+		wcos_return_service_assert(array_key_exists($field, $context), 'Production Return handoff omitted checkpoint field ' . $field . ' at ' . $stage . '.');
+	}
+	if (in_array($expected_state, array(
+		WCOS_Return_Recovery_State_Graph::CHILD_RETIRED, WCOS_Return_Recovery_State_Graph::CHILD_RELATION_PARTIAL,
+		WCOS_Return_Recovery_State_Graph::ACTIVE_SPLIT_CLEANED, WCOS_Return_Recovery_State_Graph::VERIFIED,
+		WCOS_Return_Recovery_State_Graph::COMMITTED,
+	), true)) {
+		wcos_return_service_assert(!empty($context['return_forward_repair_allowed']) && !empty($context['return_destination_item_ids']), 'Forward Return handoff lacks repair/destination authority at ' . $stage . '.');
+	}
+	return $record;
+}
+
+function wcos_return_service_replay_outcome(array $fixture, $operation_id, $expected, $label) {
+	$before = wcos_return_service_pair_contract($fixture);
+	$stock_before = WCOS_Decimal::normalize(wc_get_product($fixture['product_id'])->get_stock_quantity(), 6);
+	$result = null; $error_code = ''; $recovery_errors = array(); $recovery_stages = array();
+	$observe_error = static function($throwable) use (&$recovery_errors) { $recovery_errors[] = get_class($throwable) . ': ' . $throwable->getMessage(); };
+	$observe_stage = static function($stage) use (&$recovery_stages) { $recovery_stages[] = $stage; };
+	add_action('wcos_mutation_compensation_error', $observe_error, PHP_INT_MAX, 1);
+	add_action('wcos_return_recovery_checkpoint', $observe_stage, PHP_INT_MAX - 1, 1);
+	try { $result = (new WCOS_Return_WooCommerce_Adapter())->return_order(wc_get_order($fixture['child_id']), $operation_id, 2); }
+	catch (WCOS_Return_Adapter_Exception $exception) {
+		$error_code = $exception->get_error_code();
+		$payload = wp_json_encode(array($exception->getMessage(), $exception->get_report()));
+		wcos_return_service_assert(false === strpos($payload, '@') && false === strpos($payload, 'billing') && false === strpos($payload, 'address'), 'Return replay error exposed PII: ' . $label);
+	} finally {
+		remove_action('wcos_mutation_compensation_error', $observe_error, PHP_INT_MAX);
+		remove_action('wcos_return_recovery_checkpoint', $observe_stage, PHP_INT_MAX - 1);
+	}
+	if ('completed' === $expected) {
+		wcos_return_service_assert(is_array($result) && 'completed' === $result['status'], 'Return service replay did not complete: ' . $label . '/' . $error_code . '/' . implode(' | ', $recovery_errors) . '/stages=' . implode(',', $recovery_stages));
+	} else {
+		wcos_return_service_assert('return_' . $expected === $error_code, 'Return service replay returned the wrong terminal classification: ' . $label . '/' . $error_code . '/' . implode(' | ', $recovery_errors) . '/stages=' . implode(',', $recovery_stages));
+	}
+	if ('compensated' !== $expected) {
+		wcos_return_service_assert($before === wcos_return_service_pair_contract($fixture), 'Return service replay repeated or drifted commercial state: ' . $label);
+	}
+	wcos_return_service_assert($stock_before === WCOS_Decimal::normalize(wc_get_product($fixture['product_id'])->get_stock_quantity(), 6), 'Return service replay changed physical stock: ' . $label);
+	$stable_before = wcos_return_service_pair_contract($fixture); $stable_result = null; $stable_code = '';
+	try { $stable_result = (new WCOS_Return_WooCommerce_Adapter())->return_order(wc_get_order($fixture['child_id']), $operation_id, 2); }
+	catch (WCOS_Return_Adapter_Exception $exception) { $stable_code = $exception->get_error_code(); }
+	if ('completed' === $expected) { wcos_return_service_assert($result === $stable_result, 'Completed Return handoff replay was not deterministic: ' . $label); }
+	else { wcos_return_service_assert($error_code === $stable_code, 'Terminal Return handoff replay classification changed: ' . $label); }
+	wcos_return_service_assert($stable_before === wcos_return_service_pair_contract($fixture), 'Terminal Return handoff replay performed repeated commercial writes: ' . $label);
+	return array('case' => $label, 'status' => $expected);
+}
+
+function wcos_return_service_handoff_matrix() {
+	$evidence = array();
+
+	$fixture = wcos_return_service_multiline_fixture('partial-child-ownership');
+	$operation_id = 'return-service-partial-child-' . wp_generate_uuid4();
+	$child_before = WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fixture['child_id']));
+	$original_before = WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fixture['original_id']));
+	wcos_return_service_freeze_checkpoint($fixture, $operation_id, 'before_child_ownership_write', WCOS_Return_Recovery_State_Graph::CHILD_OWNERSHIP_NEUTRALIZING, 2);
+	$markers = array_map(static function($item) { return (string) $item->get_meta('_reduced_stock', true); }, array_values(wc_get_order($fixture['child_id'])->get_items('line_item')));
+	wcos_return_service_assert(1 === count(array_filter($markers, static function($value) { return '' === $value; })), 'Multiline Return did not freeze after exactly one durable child ownership neutralization.');
+	$evidence[] = wcos_return_service_replay_outcome($fixture, $operation_id, 'compensated', 'partial_multiline_child_ownership');
+	wcos_return_service_assert($child_before === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fixture['child_id'])) && $original_before === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fixture['original_id'])), 'Multiline Return compensation did not restore both exact participants.');
+	wcos_return_service_cleanup($fixture, $operation_id);
+
+	$forward = array(
+		'before_forward_child_relation' => array(WCOS_Return_Recovery_State_Graph::CHILD_RETIRED, 'child_retired_forward_replay'),
+		'after_one_reciprocal_relation' => array(WCOS_Return_Recovery_State_Graph::CHILD_RELATION_PARTIAL, 'partial_reciprocal_participation_replay'),
+		'before_forward_relations_complete' => array(WCOS_Return_Recovery_State_Graph::ACTIVE_SPLIT_CLEANED, 'active_split_cleanup_replay'),
+		'after_pair_verification' => array(WCOS_Return_Recovery_State_Graph::VERIFIED, 'verified_before_complete_replay'),
+		'after_commit_before_complete' => array(WCOS_Return_Recovery_State_Graph::COMMITTED, 'committed_before_complete_replay'),
+	);
+	foreach ($forward as $stage => $authority) {
+		$fixture = wcos_return_service_fixture('handoff-' . $stage);
+		$operation_id = 'return-service-handoff-' . wp_generate_uuid4();
+		wcos_return_service_freeze_checkpoint($fixture, $operation_id, $stage, $authority[0]);
+		$evidence[] = wcos_return_service_replay_outcome($fixture, $operation_id, 'completed', $authority[1]);
+		$child = wc_get_order($fixture['child_id']); $original = wc_get_order($fixture['original_id']);
+		$record = WCOS_Operation_Journal::get($child, $operation_id); $pair = WCOS_Return_Journal_Context::pair_from_record($record);
+		$relation = WCOS_Return_Participation::state_for_pair($child, $original, $operation_id, $pair['pair_fingerprint']);
+		wcos_return_service_assert($relation['child'] && $relation['original'] && $relation['active_split_removed'], 'Forward Return replay did not finish exact relations: ' . $authority[1]);
+		wcos_return_service_cleanup($fixture, $operation_id);
+	}
+
+	$fixture = wcos_return_service_fixture('post-journal-lease-loss');
+	$operation_id = 'return-service-lease-loss-' . wp_generate_uuid4(); $lease_lost = false;
+	$child_before = WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fixture['child_id']));
+	$original_before = WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fixture['original_id']));
+	$loss = static function($stage, $child, $original, $actual_operation) use (&$lease_lost) {
+		if (!$lease_lost && 'after_durable_preparation' === $stage) {
+			$token = WCOS_Operation_Lock::current_token_for($child->get_id(), $actual_operation);
+			$lease_lost = false !== $token && WCOS_Operation_Lock::release($child->get_id(), $token);
+		}
+	};
+	add_action('wcos_return_mutation_checkpoint', $loss, 10, 4);
+	try { (new WCOS_Return_WooCommerce_Adapter())->return_order(wc_get_order($fixture['child_id']), $operation_id, 2); }
+	catch (WCOS_Return_Adapter_Exception $exception) { /* Expected retryable incomplete same-operation lease set. */ }
+	finally { remove_action('wcos_return_mutation_checkpoint', $loss, 10); }
+	$record = WCOS_Operation_Journal::get(wc_get_order($fixture['child_id']), $operation_id);
+	wcos_return_service_assert($lease_lost && 'recovery_required' === $record['status'] && WCOS_Return_Recovery_State_Graph::ORIGINAL_STAGING === WCOS_Return_Recovery_State_Graph::assert_record($record), 'Post-journal Return lease loss did not remain retryable.');
+	$evidence[] = wcos_return_service_replay_outcome($fixture, $operation_id, 'compensated', 'post_journal_lease_loss');
+	wcos_return_service_assert($child_before === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fixture['child_id'])) && $original_before === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fixture['original_id'])), 'Post-journal lease-loss compensation did not restore exact participants.');
+	wcos_return_service_cleanup($fixture, $operation_id);
+
+	foreach (array('child', 'original') as $role) {
+		$fixture = wcos_return_service_fixture('checkpoint-drift-' . $role); $operation_id = 'return-service-drift-' . wp_generate_uuid4();
+		wcos_return_service_freeze_checkpoint($fixture, $operation_id, 'after_durable_preparation', WCOS_Return_Recovery_State_Graph::ORIGINAL_STAGING);
+		$drifted = wc_get_order($fixture[$role . '_id']); $drifted->set_status('on-hold'); $drifted->save();
+		$evidence[] = wcos_return_service_replay_outcome($fixture, $operation_id, 'manual_reconciliation', $role . '_drift_after_service_checkpoint');
+		wcos_return_service_assert(WCOS_Manual_Reconciliation_Blocker::has_active(wc_get_order($fixture['child_id'])) && WCOS_Manual_Reconciliation_Blocker::has_active(wc_get_order($fixture['original_id'])), 'Return service drift did not block both participants: ' . $role);
+		wcos_return_service_cleanup($fixture, $operation_id);
+	}
+
+	$fixture = wcos_return_service_fixture('missing-peer'); $operation_id = 'return-service-missing-peer-' . wp_generate_uuid4();
+	wcos_return_service_freeze_checkpoint($fixture, $operation_id, 'after_durable_preparation', WCOS_Return_Recovery_State_Graph::ORIGINAL_STAGING);
+	wc_get_order($fixture['original_id'])->delete(true);
+	$evidence[] = wcos_return_service_replay_outcome($fixture, $operation_id, 'manual_reconciliation', 'missing_peer_after_service_checkpoint');
+	wcos_return_service_assert(WCOS_Manual_Reconciliation_Blocker::has_active(wc_get_order($fixture['child_id'])), 'Missing Return peer did not block the surviving child.');
+	wcos_return_service_cleanup($fixture, $operation_id);
+
+	foreach (array('snapshot', 'checkpoint', 'pair') as $corruption) {
+		$fixture = wcos_return_service_fixture('corrupt-' . $corruption); $operation_id = 'return-service-corrupt-' . wp_generate_uuid4();
+		wcos_return_service_freeze_checkpoint($fixture, $operation_id, 'after_durable_preparation', WCOS_Return_Recovery_State_Graph::ORIGINAL_STAGING);
+		$key = wcos_return_service_journal_key($fixture['child_id'], $operation_id); $record = get_option($key);
+		if ('snapshot' === $corruption) { $record['context']['return_recovery_snapshot']['recovery_fingerprint'] = str_repeat('a', 64); }
+		elseif ('checkpoint' === $corruption) {
+			for ($index = count($record['checkpoints']) - 1; $index >= 0; $index--) {
+				if (isset($record['checkpoints'][$index]['context']['return_recovery_state'])) {
+					$record['checkpoints'][$index]['context']['return_recovery_checkpoint_fingerprint'] = str_repeat('b', 64); break;
+				}
+			}
+		}
+		else { $record['context']['return_pair']['pair_fingerprint'] = str_repeat('c', 64); }
+		update_option($key, $record, false);
+		$evidence[] = wcos_return_service_replay_outcome($fixture, $operation_id, 'manual_reconciliation', 'corrupt_' . $corruption . '_authority_replay');
+		wcos_return_service_assert(WCOS_Manual_Reconciliation_Blocker::has_active(wc_get_order($fixture['child_id'])), 'Corrupt Return authority did not block the surviving child: ' . $corruption);
+		wcos_return_service_cleanup($fixture, $operation_id);
+	}
+	return $evidence;
+}
+
 function wcos_return_service_interruption_case($stage, $expected_status) {
 	$fixture = wcos_return_service_fixture('interruption-' . $stage);
 	$operation_id = 'return-service-window-' . wp_generate_uuid4(); $hit = false;
@@ -348,6 +554,7 @@ try {
 	) as $window => $outcome) {
 		$evidence[] = wcos_return_service_interruption_case($window, $outcome);
 	}
+	$evidence = array_merge($evidence, wcos_return_service_handoff_matrix());
 
 	/* Before-journal interruption and foreign pair contention perform no writes and remain retryable. */
 	$fixture = wcos_return_service_fixture('before-journal-contention');

@@ -45,6 +45,8 @@ final class WCOS_Return_Compensator {
 					WCOS_Return_Recovery_Snapshot::assert_exact_checkpoint($child_after, $child);
 					WCOS_Return_Recovery_Snapshot::assert_exact_checkpoint($original_after, $original, $added_ids);
 					return self::forward($child, $original, $record, $lease, $snapshot, $plan, $added_ids);
+				} catch (WCOS_Return_Recovery_Interruption_Exception $exception) {
+					throw $exception;
 				} catch (Throwable $throwable) {
 					/* Only exact forward checkpoints may continue; otherwise compensate. */
 				}
@@ -151,7 +153,7 @@ final class WCOS_Return_Compensator {
 			$child = wc_get_order($child->get_id()); $original = wc_get_order($original->get_id());
 			if (!WCOS_Operation_Journal::checkpoint($child, $operation_id, 'return_child_relation_persisted', array(
 				'return_recovery_state' => WCOS_Return_Recovery_State_Graph::CHILD_RELATION,
-			))) { throw new RuntimeException(__('Forward Return child relation could not be checkpointed.', 'wc-order-splitter')); }
+			) + self::participant_authority($snapshot, $child, $original, $added_ids))) { throw new RuntimeException(__('Forward Return child relation could not be checkpointed.', 'wc-order-splitter')); }
 			$state = WCOS_Return_Recovery_State_Graph::CHILD_RELATION;
 		}
 		if (WCOS_Return_Recovery_State_Graph::CHILD_RELATION === $state) {
@@ -161,14 +163,14 @@ final class WCOS_Return_Compensator {
 			$child = wc_get_order($child->get_id()); $original = wc_get_order($original->get_id());
 			if (!WCOS_Operation_Journal::checkpoint($child, $operation_id, 'return_active_split_relation_cleaned', array(
 				'return_recovery_state' => WCOS_Return_Recovery_State_Graph::ACTIVE_SPLIT_CLEANED,
-			))) { throw new RuntimeException(__('Forward Return active Split cleanup could not be checkpointed.', 'wc-order-splitter')); }
+			) + self::participant_authority($snapshot, $child, $original, $added_ids))) { throw new RuntimeException(__('Forward Return active Split cleanup could not be checkpointed.', 'wc-order-splitter')); }
 			$state = WCOS_Return_Recovery_State_Graph::ACTIVE_SPLIT_CLEANED;
 		}
 		if (WCOS_Return_Recovery_State_Graph::ACTIVE_SPLIT_CLEANED === $state) {
 			self::boundary($lease, $child, $original, $record, $snapshot, $added_ids, 'complete', 'before_forward_relations_complete');
 			if (!WCOS_Operation_Journal::checkpoint($child, $operation_id, 'return_relations_completed', array(
 				'return_recovery_state' => WCOS_Return_Recovery_State_Graph::RELATIONS_COMPLETE,
-			))) { throw new RuntimeException(__('Forward Return relations could not be checkpointed.', 'wc-order-splitter')); }
+			) + self::participant_authority($snapshot, $child, $original, $added_ids))) { throw new RuntimeException(__('Forward Return relations could not be checkpointed.', 'wc-order-splitter')); }
 			$state = WCOS_Return_Recovery_State_Graph::RELATIONS_COMPLETE;
 		}
 		self::boundary($lease, $child, $original, $record, $snapshot, $added_ids, 'complete', 'after_forward_relations');
@@ -181,6 +183,7 @@ final class WCOS_Return_Compensator {
 				'return_recovery_state' => WCOS_Return_Recovery_State_Graph::VERIFIED,
 			))) { throw new RuntimeException(__('Forward Return pair verification could not be checkpointed.', 'wc-order-splitter')); }
 			$state = WCOS_Return_Recovery_State_Graph::VERIFIED;
+			self::event('after_pair_verification', $child, $original, $operation_id);
 		}
 		$child_signature = WCOS_Return_Recovery_Snapshot::participant_signature($snapshot, 'child', $child);
 		$original_signature = WCOS_Return_Recovery_Snapshot::participant_signature($snapshot, 'original', $original, $added_ids);
@@ -193,6 +196,7 @@ final class WCOS_Return_Compensator {
 				'return_child_state_after' => WCOS_Return_Recovery_Snapshot::participant_checkpoint($snapshot, 'child', $child),
 				'return_original_state_after' => WCOS_Return_Recovery_Snapshot::participant_checkpoint($snapshot, 'original', $original, $added_ids),
 			))) { throw new RuntimeException(__('Forward Return state could not be committed.', 'wc-order-splitter')); }
+			self::event('after_commit_before_complete', $child, $original, $operation_id);
 		}
 		$committed = WCOS_Operation_Journal::get(wc_get_order($child->get_id()), $operation_id);
 		if (!WCOS_Operation_Journal::complete($child, $operation_id, array(
@@ -234,6 +238,15 @@ final class WCOS_Return_Compensator {
 	private static function lease_guard(WCOS_Multi_Order_Lease $lease) {
 		if (!$lease->refresh()) { throw new RuntimeException(__('A participant lease expired before a Return recovery write.', 'wc-order-splitter')); }
 		WCOS_Stock_Side_Effect_Guard::assert_current_clean();
+	}
+
+	private static function participant_authority(array $snapshot, WC_Order $child, WC_Order $original, array $added_ids) {
+		return array(
+			'return_child_state_after' => WCOS_Return_Recovery_Snapshot::participant_checkpoint($snapshot, 'child', $child),
+			'return_original_state_after' => WCOS_Return_Recovery_Snapshot::participant_checkpoint($snapshot, 'original', $original, $added_ids),
+			'return_child_signature_after' => WCOS_Return_Recovery_Snapshot::participant_signature($snapshot, 'child', $child),
+			'return_original_signature_after' => WCOS_Return_Recovery_Snapshot::participant_signature($snapshot, 'original', $original, $added_ids),
+		);
 	}
 
 	public static function event($stage, WC_Order $child, WC_Order $original, $operation_id) {

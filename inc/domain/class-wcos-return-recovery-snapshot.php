@@ -128,7 +128,18 @@ final class WCOS_Return_Recovery_Snapshot {
 		self::assert_participant_state($before, $order->get_id());
 		self::assert_participant_state($after, $order->get_id());
 		$current = self::participant_state($order, array_keys($after['line_items']), $before['all_line_item_ids']);
-		foreach (array('line_items', 'tax_items', 'order_props', 'order_stock_reduced', 'relation_meta', 'lifecycle') as $component) {
+		foreach (array('line_items', 'tax_items') as $component) {
+			$component_ids = array_unique(array_merge(array_keys($before[$component]), array_keys($after[$component]), array_keys($current[$component])));
+			foreach ($component_ids as $component_id) {
+				$current_value = array_key_exists($component_id, $current[$component]) ? $current[$component][$component_id] : null;
+				$before_value = array_key_exists($component_id, $before[$component]) ? $before[$component][$component_id] : null;
+				$after_value = array_key_exists($component_id, $after[$component]) ? $after[$component][$component_id] : null;
+				if ($current_value !== $before_value && $current_value !== $after_value) {
+					throw new RuntimeException(__('A Return participant item diverged from its approved component checkpoints.', 'wc-order-splitter'));
+				}
+			}
+		}
+		foreach (array('order_props', 'order_stock_reduced', 'relation_meta', 'lifecycle') as $component) {
 			if ($current[$component] !== $before[$component] && $current[$component] !== $after[$component]) {
 				throw new RuntimeException(__('A Return participant diverged from its approved component checkpoints.', 'wc-order-splitter'));
 			}

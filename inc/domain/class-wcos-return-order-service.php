@@ -194,7 +194,7 @@ final class WCOS_Return_Order_Service {
 	private function replay_existing($child_id, $operation_id, $precision, array $record) {
 		$pair = WCOS_Return_Journal_Context::pair_from_record($record);
 		if (!is_array($pair) || (int) $pair['child_order_id'] !== (int) $child_id || (int) $pair['price_precision'] !== (int) $precision) {
-			throw new RuntimeException(__('This Return operation ID is bound to different participant or precision authority.', 'wc-order-splitter'));
+			$this->recover_invalid_replay_authority($child_id, $operation_id, $record);
 		}
 		$status = sanitize_key(isset($record['status']) ? (string) $record['status'] : '');
 		if ('completed' !== $status) {
@@ -211,6 +211,19 @@ final class WCOS_Return_Order_Service {
 				: __('The previous Return attempt did not complete and cannot be restarted as a new saga.', 'wc-order-splitter'));
 		}
 		return $this->completed_result($child_id, $pair['original_order_id'], $operation_id);
+	}
+
+	private function recover_invalid_replay_authority($child_id, $operation_id, array $record) {
+		$child = $this->load_order($child_id, 'child');
+		$status = sanitize_key(isset($record['status']) ? (string) $record['status'] : '');
+		if (!in_array($status, array('completed', 'compensated', 'manual_reconciliation', 'manual_reconciled'), true)) {
+			WCOS_Operation_Journal::require_recovery($child, $operation_id, array('reason' => 'invalid_return_replay_authority'));
+			$record = WCOS_Operation_Journal::get($this->load_order($child_id, 'child'), $operation_id);
+			$status = is_array($record) && isset($record['status']) ? sanitize_key((string) $record['status']) : '';
+		}
+		throw new RuntimeException('manual_reconciliation' === $status
+			? __('The Return pair requires manual reconciliation.', 'wc-order-splitter')
+			: __('This Return operation carries invalid participant or precision authority.', 'wc-order-splitter'));
 	}
 
 	private function completed_result($child_id, $original_id, $operation_id) {
