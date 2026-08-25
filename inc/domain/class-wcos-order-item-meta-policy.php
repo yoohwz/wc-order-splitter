@@ -16,6 +16,7 @@ final class WCOS_Order_Item_Meta_Policy {
 	const CONTEXT_DUPLICATE = 'duplicate';
 	const CONTEXT_SPLIT = 'split';
 	const CONTEXT_MERGE = 'merge';
+	const CONTEXT_RETURN = 'return';
 	const CONTEXT_IDENTITY = 'identity';
 
 	const CLASS_BUSINESS = 'business';
