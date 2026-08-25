@@ -90,7 +90,24 @@ final class WCOS_Return_Recovery_Snapshot {
 		}
 		if (!empty($record)) {
 			$pair = WCOS_Return_Journal_Context::pair_from_record($record);
-			if (!is_array($pair) || $pair['child_order_id'] !== absint($snapshot['child_order_id'])
+			$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
+			$record_snapshot = isset($context['return_recovery_snapshot']) && is_array($context['return_recovery_snapshot'])
+				? $context['return_recovery_snapshot'] : array();
+			$context_fingerprint = self::normalized_fingerprint(isset($context['return_recovery_snapshot_fingerprint']) ? $context['return_recovery_snapshot_fingerprint'] : '');
+			$checkpoint_fingerprint = '';
+			foreach (isset($record['checkpoints']) && is_array($record['checkpoints']) ? $record['checkpoints'] : array() as $checkpoint) {
+				$checkpoint_context = isset($checkpoint['context']) && is_array($checkpoint['context']) ? $checkpoint['context'] : array();
+				if (!array_key_exists('return_recovery_snapshot_fingerprint', $checkpoint_context)) { continue; }
+				$candidate = self::normalized_fingerprint($checkpoint_context['return_recovery_snapshot_fingerprint']);
+				if ('' === $candidate || ('' !== $checkpoint_fingerprint && !hash_equals($checkpoint_fingerprint, $candidate))) {
+					throw new RuntimeException(__('Return recovery snapshot checkpoint binding is invalid.', 'wc-order-splitter'));
+				}
+				$checkpoint_fingerprint = $candidate;
+			}
+			if (!is_array($pair) || $record_snapshot !== $snapshot
+				|| '' === $context_fingerprint || '' === $checkpoint_fingerprint
+				|| !hash_equals($stored, $context_fingerprint) || !hash_equals($stored, $checkpoint_fingerprint)
+				|| $pair['child_order_id'] !== absint($snapshot['child_order_id'])
 				|| $pair['original_order_id'] !== absint($snapshot['original_order_id'])
 				|| !hash_equals($pair['pair_fingerprint'], self::normalized_fingerprint($snapshot['pair_fingerprint']))
 				|| !hash_equals($pair['plan_fingerprint'], self::normalized_fingerprint($snapshot['plan_fingerprint']))

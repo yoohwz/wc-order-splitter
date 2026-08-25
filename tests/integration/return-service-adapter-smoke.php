@@ -350,6 +350,81 @@ function wcos_return_service_replay_outcome(array $fixture, $operation_id, $expe
 	return array('case' => $label, 'status' => $expected);
 }
 
+function wcos_return_service_checkpoint_fingerprint(array $record, array $context) {
+	unset($context['return_recovery_checkpoint_fingerprint']);
+	return WCOS_Mutation_Fingerprint::create(
+		'return_recovery_checkpoint_v1',
+		absint(isset($record['source_order_id']) ? $record['source_order_id'] : 0),
+		array(
+			'operation_id' => sanitize_key(isset($record['operation_id']) ? (string) $record['operation_id'] : ''),
+			'pair_fingerprint' => sanitize_key(isset($record['fingerprint']) ? (string) $record['fingerprint'] : ''),
+			'context' => $context,
+		)
+	);
+}
+
+function wcos_return_service_terminal_result_fingerprint(array $result) {
+	unset($result['result_fingerprint']);
+	return WCOS_Mutation_Fingerprint::create(
+		'return_terminal_result_v1',
+		absint(isset($result['child_order_id']) ? $result['child_order_id'] : 0),
+		$result
+	);
+}
+
+function wcos_return_service_completed_corruption_matrix() {
+	$evidence = array();
+	$corruptions = array(
+		'snapshot_fingerprint', 'snapshot_checkpoint_binding', 'checkpoint_fingerprint',
+		'checkpoint_graph', 'pair', 'terminal_result_fingerprint', 'source_evolution',
+	);
+	foreach ($corruptions as $corruption) {
+		$fixture = wcos_return_service_fixture('completed-corrupt-' . $corruption);
+		$operation_id = 'return-service-completed-corrupt-' . wp_generate_uuid4();
+		$result = (new WCOS_Return_WooCommerce_Adapter())->return_order(wc_get_order($fixture['child_id']), $operation_id, 2);
+		wcos_return_service_assert('completed' === $result['status'], 'Completed-corruption fixture did not first complete: ' . $corruption);
+		$key = wcos_return_service_journal_key($fixture['child_id'], $operation_id);
+		$record = get_option($key);
+		wcos_return_service_assert(is_array($record) && 'completed' === $record['status'], 'Completed-corruption fixture lacks terminal journal: ' . $corruption);
+
+		if ('snapshot_fingerprint' === $corruption) {
+			$record['context']['return_recovery_snapshot']['recovery_fingerprint'] = str_repeat('a', 64);
+		} elseif ('snapshot_checkpoint_binding' === $corruption) {
+			$record['context']['return_recovery_snapshot']['child_archive_signature_before'] = str_repeat('b', 64);
+			$fingerprint = WCOS_Return_Recovery_Snapshot::fingerprint($record['context']['return_recovery_snapshot']);
+			$record['context']['return_recovery_snapshot']['recovery_fingerprint'] = $fingerprint;
+			$record['context']['return_recovery_snapshot_fingerprint'] = $fingerprint;
+		} elseif (in_array($corruption, array('checkpoint_fingerprint', 'checkpoint_graph'), true)) {
+			for ($index = count($record['checkpoints']) - 1; $index >= 0; $index--) {
+				if (!isset($record['checkpoints'][$index]['context']['return_recovery_state'])) { continue; }
+				if ('checkpoint_fingerprint' === $corruption) {
+					$record['checkpoints'][$index]['context']['return_recovery_checkpoint_fingerprint'] = str_repeat('c', 64);
+				} else {
+					$record['checkpoints'][$index]['context']['return_recovery_state'] = WCOS_Return_Recovery_State_Graph::PREPARED;
+					$record['checkpoints'][$index]['context']['return_recovery_checkpoint_fingerprint'] = wcos_return_service_checkpoint_fingerprint($record, $record['checkpoints'][$index]['context']);
+				}
+				break;
+			}
+		} elseif ('pair' === $corruption) {
+			$record['context']['return_pair']['pair_fingerprint'] = str_repeat('d', 64);
+		} elseif ('terminal_result_fingerprint' === $corruption) {
+			$record['context']['return_terminal_result']['result_fingerprint'] = str_repeat('e', 64);
+		} else {
+			$record['context']['return_terminal_result']['source_evolution']['evolution_fingerprint'] = str_repeat('f', 64);
+			$record['context']['return_terminal_result']['result_fingerprint'] = wcos_return_service_terminal_result_fingerprint($record['context']['return_terminal_result']);
+		}
+		update_option($key, $record, false);
+
+		$evidence[] = wcos_return_service_replay_outcome($fixture, $operation_id, 'manual_reconciliation', 'completed_corrupt_' . $corruption);
+		$child_blocked = WCOS_Manual_Reconciliation_Blocker::contains_operation($fixture['child_id'], $operation_id, $fixture['child_id']);
+		$original_blocked = WCOS_Manual_Reconciliation_Blocker::contains_operation($fixture['original_id'], $operation_id, $fixture['child_id']);
+		wcos_return_service_assert($child_blocked, 'Completed Return corruption did not block the child: ' . $corruption);
+		wcos_return_service_assert(('pair' !== $corruption) === $original_blocked, 'Completed Return corruption used the wrong blocker scope: ' . $corruption);
+		wcos_return_service_cleanup($fixture, $operation_id);
+	}
+	return $evidence;
+}
+
 function wcos_return_service_handoff_matrix() {
 	$evidence = array();
 
@@ -509,6 +584,7 @@ try {
 	wcos_return_service_assert(false === strpos($terminal_json, '@') && false === strpos($terminal_json, 'billing') && false === strpos($terminal_json, 'address'), 'Return terminal result exposed customer or payment fields.');
 	$evidence[] = array('case' => 'adapter_success_replay_gate', 'status' => 'completed', 'retirement_side_effects' => $retirement_counts);
 	wcos_return_service_cleanup($fixture, $return_operation);
+	$evidence = array_merge($evidence, wcos_return_service_completed_corruption_matrix());
 
 	/* A durable service interruption must compensate both participants exactly. */
 	$fixture = wcos_return_service_fixture('compensation');
