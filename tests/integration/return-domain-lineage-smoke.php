@@ -334,7 +334,7 @@ wcos_return_foundation_assert($authority['authority_fingerprint'] === $catalog_i
 /* Tamper matrix; every rejection is read-only. */
 $child_line = current($child->get_items('line_item'));
 $original_quantity = $child_line->get_quantity();
-$child_line->set_quantity('1.500000');
+$child_line->set_quantity('2.000000');
 $child_line->save();
 $child = wc_get_order($child->get_id());
 WCOS_Order_Totals_Rebuilder::rebuild($child, 2);
