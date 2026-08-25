@@ -49,15 +49,14 @@ final class WCOS_Manual_Reconciliation_Blocker {
         $journal = class_exists('WCOS_Operation_Journal')
             ? WCOS_Operation_Journal::get($journal_source, $operation_id)
             : null;
-        if (!is_array($journal) || !class_exists('WCOS_Merge_Journal_Context')
-            || !WCOS_Merge_Journal_Context::validates_participant(
-                $journal,
-                $participant->get_id(),
-                $role,
-                $peer_order_id,
-                $pair_fingerprint,
-                $operation_id
-            )) {
+        if (!is_array($journal) || !self::validates_pair_participant(
+            $journal,
+            $participant->get_id(),
+            $role,
+            $peer_order_id,
+            $pair_fingerprint,
+            $operation_id
+        )) {
             return false;
         }
 
@@ -136,6 +135,9 @@ final class WCOS_Manual_Reconciliation_Blocker {
         if (class_exists('WCOS_Merge_Participation')) {
             $active = array_merge($active, WCOS_Merge_Participation::unresolved_operation_ids($fresh));
         }
+        if (class_exists('WCOS_Return_Participation')) {
+            $active = array_merge($active, WCOS_Return_Participation::unresolved_operation_ids($fresh));
+        }
 
         $active = array_values(array_unique(array_filter(array_map('sanitize_key', $active))));
         sort($active, SORT_STRING);
@@ -209,15 +211,13 @@ final class WCOS_Manual_Reconciliation_Blocker {
         $journal = class_exists('WCOS_Operation_Journal')
             ? WCOS_Operation_Journal::get($journal_source, $operation_id)
             : null;
-        $pair = is_array($journal) && class_exists('WCOS_Merge_Journal_Context')
-            ? WCOS_Merge_Journal_Context::pair_from_record($journal)
-            : null;
+        $pair = is_array($journal) ? self::pair_participant_ids($journal) : null;
         if (!is_array($pair)) {
             return self::resolve_if_reconciled($journal_source, $operation_id);
         }
 
         $resolved = true;
-        foreach (array(absint($pair['source_order_id']), absint($pair['target_order_id'])) as $participant_id) {
+        foreach ($pair as $participant_id) {
             $participant = wc_get_order($participant_id);
             if (!$participant instanceof WC_Order || !self::resolve_if_reconciled($participant, $operation_id)) {
                 $resolved = false;
@@ -395,9 +395,8 @@ final class WCOS_Manual_Reconciliation_Blocker {
             ? sanitize_key((string) $incident['pair_fingerprint'])
             : '';
         if ('' !== $pair_fingerprint) {
-            if (!class_exists('WCOS_Merge_Journal_Context')
-                || $journal_source_id !== absint(isset($journal['source_order_id']) ? $journal['source_order_id'] : 0)
-                || !WCOS_Merge_Journal_Context::validates_participant(
+            if ($journal_source_id !== absint(isset($journal['source_order_id']) ? $journal['source_order_id'] : 0)
+                || !self::validates_pair_participant(
                     $journal,
                     $participant_id,
                     $role,
@@ -544,6 +543,34 @@ final class WCOS_Manual_Reconciliation_Blocker {
             ? absint($incident['journal_source_order_id'])
             : absint($participant_id);
         return $actual === $expected_source_id;
+    }
+
+    private static function validates_pair_participant(array $journal, $participant_id, $role, $peer_id, $pair_fingerprint, $operation_id) {
+        $type = sanitize_key(isset($journal['type']) ? (string) $journal['type'] : '');
+        if ('merge' === $type && class_exists('WCOS_Merge_Journal_Context')) {
+            return WCOS_Merge_Journal_Context::validates_participant(
+                $journal, $participant_id, $role, $peer_id, $pair_fingerprint, $operation_id
+            );
+        }
+        if ('return' === $type && class_exists('WCOS_Return_Journal_Context')) {
+            return WCOS_Return_Journal_Context::validates_participant(
+                $journal, $participant_id, $role, $peer_id, $pair_fingerprint, $operation_id
+            );
+        }
+        return false;
+    }
+
+    private static function pair_participant_ids(array $journal) {
+        $type = sanitize_key(isset($journal['type']) ? (string) $journal['type'] : '');
+        if ('merge' === $type && class_exists('WCOS_Merge_Journal_Context')) {
+            $pair = WCOS_Merge_Journal_Context::pair_from_record($journal);
+            return is_array($pair) ? array(absint($pair['source_order_id']), absint($pair['target_order_id'])) : null;
+        }
+        if ('return' === $type && class_exists('WCOS_Return_Journal_Context')) {
+            $pair = WCOS_Return_Journal_Context::pair_from_record($journal);
+            return is_array($pair) ? array(absint($pair['child_order_id']), absint($pair['original_order_id'])) : null;
+        }
+        return null;
     }
 
     private static function compare_and_swap($key, array $current, array $replacement) {

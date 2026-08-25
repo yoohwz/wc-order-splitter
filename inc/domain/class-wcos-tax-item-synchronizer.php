@@ -23,7 +23,11 @@ final class WCOS_Tax_Item_Synchronizer {
 	public static function synchronize(WC_Order $order, array $templates, $precision = null, $preserve_existing_ids = false, $context = WCOS_Order_Item_Meta_Policy::CONTEXT_SPLIT) {
 		$precision = null === $precision ? wc_get_price_decimals() : (int) $precision;
 		$context = sanitize_key((string) $context);
-		if (!in_array($context, array(WCOS_Order_Item_Meta_Policy::CONTEXT_SPLIT, WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE), true)) {
+		if (!in_array($context, array(
+			WCOS_Order_Item_Meta_Policy::CONTEXT_SPLIT,
+			WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE,
+			WCOS_Order_Item_Meta_Policy::CONTEXT_RETURN,
+		), true)) {
 			throw new InvalidArgumentException(__('A supported historical tax synchronization context is required.', 'wc-order-splitter'));
 		}
 		$totals = self::collect($order, $precision);

@@ -34,6 +34,8 @@ require_once $root . 'class-wcos-merge-plan.php';
 require_once $root . 'class-wcos-merge-recovery-state-graph.php';
 require_once $root . 'class-wcos-return-participation.php';
 require_once $root . 'class-wcos-return-plan.php';
+require_once $root . 'class-wcos-return-retirement-policy.php';
+require_once $root . 'class-wcos-return-recovery-state-graph.php';
 
 $tests = array();
 
@@ -409,6 +411,53 @@ $tests['merge recovery checkpoints are self-verifying'] = static function() {
 	$record['checkpoints'][0]['context']['merge_source_signature_after'] = str_repeat('c', 64);
 	assert_throws(static function() use ($record) {
 		WCOS_Merge_Recovery_State_Graph::assert_record($record);
+	}, RuntimeException::class);
+};
+
+$tests['return retirement policy binds non-force trash and stock ownership transfer'] = static function() {
+	$candidates = WCOS_Return_Retirement_Policy::candidates();
+	$stock_policy = WCOS_Return_Retirement_Policy::stock_policy();
+	assert_same('non_force_trash_archive', WCOS_Return_Retirement_Policy::approved_identifier());
+	assert_same('child_neutralize_then_original_activate', $stock_policy['ownership_transfer_order']);
+	assert_same('child_false_original_true_when_owned', $stock_policy['order_stock_flag_policy']);
+	assert_same(true, $candidates['non_force_trash_archive']['preserve_commercial_record']);
+	assert_same(false, $candidates['non_force_trash_archive']['hard_delete']);
+	WCOS_Return_Retirement_Policy::assert_approved('non_force_trash_archive');
+	assert_throws(static function() {
+		WCOS_Return_Retirement_Policy::assert_approved('hard_delete');
+	}, RuntimeException::class);
+};
+
+$tests['return recovery graph accepts forward and original-first compensation paths'] = static function() {
+	assert_true(WCOS_Return_Recovery_State_Graph::transition_allowed('prepared_no_write', 'original_commercial_staging'), 'Initial original staging transition was rejected.');
+	assert_true(WCOS_Return_Recovery_State_Graph::transition_allowed('original_commercial_staging', 'original_commercial_staging'), 'Resumable original staging checkpoint was rejected.');
+	assert_true(WCOS_Return_Recovery_State_Graph::transition_allowed('original_commercial_persisted', 'child_stock_ownership_neutralizing'), 'Child ownership neutralization transition was rejected.');
+	assert_true(WCOS_Return_Recovery_State_Graph::transition_allowed('child_stock_ownership_neutralized', 'original_stock_ownership_activated'), 'Original ownership activation transition was rejected.');
+	assert_true(WCOS_Return_Recovery_State_Graph::transition_allowed('return_relations_complete', 'pair_verified'), 'Return verification transition was rejected.');
+	assert_true(WCOS_Return_Recovery_State_Graph::transition_allowed('child_retired', 'child_return_relation_partial'), 'Partial child relation checkpoint was rejected.');
+	assert_true(WCOS_Return_Recovery_State_Graph::transition_allowed('child_return_relation_partial', 'child_return_relation_persisted'), 'Partial reciprocal relation completion was rejected.');
+	assert_true(WCOS_Return_Recovery_State_Graph::transition_allowed('compensating', 'original_restored'), 'Original-first compensation was rejected.');
+	assert_true(WCOS_Return_Recovery_State_Graph::transition_allowed('original_restored', 'child_restored'), 'Child restore after original was rejected.');
+	assert_same(false, WCOS_Return_Recovery_State_Graph::transition_allowed('compensating', 'child_restored'));
+	assert_same(false, WCOS_Return_Recovery_State_Graph::transition_allowed('child_retired', 'completed'));
+};
+
+$tests['return recovery checkpoints are self-verifying'] = static function() {
+	$record = array(
+		'source_order_id' => 42,
+		'operation_id' => 'return-recovery-unit',
+		'fingerprint' => str_repeat('a', 64),
+		'checkpoints' => array(),
+	);
+	$context = WCOS_Return_Recovery_State_Graph::seal_context($record, array(
+		'return_recovery_state' => WCOS_Return_Recovery_State_Graph::PREPARED,
+		'return_recovery_snapshot_fingerprint' => str_repeat('b', 64),
+	));
+	$record['checkpoints'][] = array('context' => $context);
+	assert_same(WCOS_Return_Recovery_State_Graph::PREPARED, WCOS_Return_Recovery_State_Graph::assert_record($record));
+	$record['checkpoints'][0]['context']['return_recovery_snapshot_fingerprint'] = str_repeat('c', 64);
+	assert_throws(static function() use ($record) {
+		WCOS_Return_Recovery_State_Graph::assert_record($record);
 	}, RuntimeException::class);
 };
 

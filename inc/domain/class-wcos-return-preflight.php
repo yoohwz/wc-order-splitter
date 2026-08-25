@@ -130,6 +130,9 @@ final class WCOS_Return_Preflight {
 		if (class_exists('WCOS_Merge_Participation') && !empty(WCOS_Merge_Participation::unresolved_operation_ids($order))) {
 			return true;
 		}
+		if (class_exists('WCOS_Return_Participation') && !empty(WCOS_Return_Participation::unresolved_operation_ids($order))) {
+			return true;
+		}
 		$summary = $order->get_meta(WCOS_Operation_Journal::SUMMARY_META_KEY, true);
 		foreach (is_array($summary) ? $summary : array() as $entry) {
 			$status = sanitize_key(isset($entry['status']) ? (string) $entry['status'] : '');
