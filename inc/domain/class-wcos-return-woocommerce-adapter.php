@@ -30,6 +30,9 @@ final class WCOS_Return_WooCommerce_Adapter {
 		$existing = WCOS_Operation_Journal::get($child, $operation_id);
 		if (is_array($existing)) {
 			$precision = WCOS_Price_Precision_Scope::for_operation($child, $operation_id, $confirmed_precision);
+			if (null !== $confirmed_precision && WCOS_Price_Precision_Scope::validate($confirmed_precision) !== $precision) {
+				throw new WCOS_Return_Adapter_Exception('price_precision_mismatch', __('Confirmed Return precision does not match durable operation authority.', 'wc-order-splitter'));
+			}
 		} else {
 			try {
 				$report = WCOS_Return_Preflight::assert_supported($child, true);
@@ -69,11 +72,27 @@ final class WCOS_Return_WooCommerce_Adapter {
 				throw new WCOS_Return_Adapter_Exception('return_preflight_' . $exception->get_reason(), $exception->getMessage(), WCOS_Return_Preflight::report($child, true), $exception);
 			} catch (Throwable $throwable) {
 				$events = WCOS_Stock_Side_Effect_Guard::events($stock_token);
-				if (!empty($events) && WCOS_Stock_Side_Effect_Guard::events_require_manual_reconciliation($events)
+				$after_write = !empty($events) && WCOS_Stock_Side_Effect_Guard::events_require_manual_reconciliation($events);
+				if ($after_write
 					&& 'return_manual_reconciliation' !== $this->current_error_code($child_id, $operation_id)) {
 					$this->mark_manual_stock_reconciliation($child_id, $operation_id);
 				}
-				if ($throwable instanceof WCOS_Unexpected_Stock_Mutation_Exception) { throw $throwable; }
+				if ($throwable instanceof WCOS_Unexpected_Stock_Mutation_Exception) {
+					/*
+					 * A blocked-before-write event is safe to retry only after this
+					 * request's dirty observer scope has ended. The service has already
+					 * released its pair lease here; dispatch the existing coordinator,
+					 * never an adapter-owned compensation path.
+					 */
+					if (!$after_write) {
+						WCOS_Stock_Side_Effect_Guard::end($stock_token);
+						$stock_token = false;
+						$fresh_child = wc_get_order($child_id);
+						$record = $fresh_child instanceof WC_Order ? WCOS_Operation_Journal::get($fresh_child, $operation_id) : null;
+						if (is_array($record)) { WCOS_Operation_Journal::fail($fresh_child, $operation_id, array('reason' => 'blocked_before_physical_stock_write')); }
+					}
+					throw $throwable;
+				}
 				$current_child = wc_get_order($child_id);
 				$record = $current_child instanceof WC_Order ? WCOS_Operation_Journal::get($current_child, $operation_id) : null;
 				$pair = is_array($record) ? WCOS_Return_Journal_Context::pair_from_record($record) : null;
