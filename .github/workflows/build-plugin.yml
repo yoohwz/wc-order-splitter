@@ -86,12 +86,15 @@ jobs:
             'inc/backend/orders-bulk-return.php' \
             'inc/backend/order-split-button.php' \
             'inc/backend/order-return-option.php' \
+            'inc/backend/class-wcos-return-admin-controller.php' \
             'inc/backend/order-duplicate-option.php' \
             'inc/backend/order-merge-option.php' \
             'js/bulk-return-action.js' \
             'js/merge-action.js' \
             'js/post-action-tip.js' \
             'js/split-table.js' \
+            'js/p2-return-admin.js' \
+            'css/p2-return-admin.css' \
             'inc/mutation-v2' \
             'tests' \
             'docs' \
@@ -144,6 +147,10 @@ jobs:
             'inc/domain/class-wcos-merge-retirement-policy.php' \
             'inc/domain/class-wcos-merge-order-service.php' \
             'inc/domain/class-wcos-merge-woocommerce-adapter.php' \
+            'inc/domain/class-wcos-return-participation.php' \
+            'inc/domain/class-wcos-return-plan.php' \
+            'inc/domain/class-wcos-return-lineage-authority.php' \
+            'inc/domain/class-wcos-return-preflight.php' \
             'css/p2-split-strategy-admin.css' \
             'js/p2-split-strategy-admin.js'; do
             if test ! -e "$package_root/$required_path"; then
@@ -187,10 +194,17 @@ jobs:
           unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::MANUAL_QUANTITY => true'
           unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::CATEGORY => true'
           unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::STOCK_STATUS => true'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-return-participation.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-return-plan.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-return-lineage-authority.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-return-preflight.php'
 
           for forbidden_archive_path in \
             'wc-order-splitter/inc/backend/order-merge-option.php' \
-            'wc-order-splitter/js/merge-action.js'; do
+            'wc-order-splitter/js/merge-action.js' \
+            'wc-order-splitter/inc/backend/class-wcos-return-admin-controller.php' \
+            'wc-order-splitter/js/p2-return-admin.js' \
+            'wc-order-splitter/css/p2-return-admin.css'; do
             if unzip -Z1 wc-order-splitter.zip | grep -Fxq "$forbidden_archive_path"; then
               echo "Legacy Merge path entered the ZIP: $forbidden_archive_path" >&2
               exit 1

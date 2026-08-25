@@ -152,6 +152,13 @@ jobs:
           grep -Fq 'class-wcos-merge-confirmation-store.php' inc/cores/script.php
           grep -Fq 'class-wcos-merge-admin-controller.php' inc/cores/script.php
           grep -Fq 'WCOS_Merge_Admin_Controller::bootstrap();' inc/cores/script.php
+          grep -Fq 'class-wcos-return-participation.php' inc/cores/script.php
+          grep -Fq 'class-wcos-return-plan.php' inc/cores/script.php
+          grep -Fq 'class-wcos-return-lineage-authority.php' inc/cores/script.php
+          grep -Fq 'class-wcos-return-preflight.php' inc/cores/script.php
+          test ! -e inc/backend/class-wcos-return-admin-controller.php
+          test ! -e js/p2-return-admin.js
+          test ! -e css/p2-return-admin.css
           grep -Fq "const SEARCH_ACTION = 'wcos_merge_target_search';" inc/backend/class-wcos-merge-admin-controller.php
           grep -Fq "'wcos-merge-admin'" inc/backend/class-wcos-admin-backbone-modal-assets.php
           grep -Fq 'window.WCOSBackboneModal.open' js/p2-merge-admin.js
@@ -228,12 +235,15 @@ jobs:
             'inc/backend/orders-bulk-return.php' \
             'inc/backend/order-split-button.php' \
             'inc/backend/order-return-option.php' \
+            'inc/backend/class-wcos-return-admin-controller.php' \
             'inc/backend/order-duplicate-option.php' \
             'inc/backend/order-merge-option.php' \
             'js/bulk-return-action.js' \
             'js/merge-action.js' \
             'js/post-action-tip.js' \
             'js/split-table.js' \
+            'js/p2-return-admin.js' \
+            'css/p2-return-admin.css' \
             'inc/mutation-v2' \
             'tests' \
             'docs' \
@@ -286,6 +296,10 @@ jobs:
             'inc/domain/class-wcos-merge-retirement-policy.php' \
             'inc/domain/class-wcos-merge-order-service.php' \
             'inc/domain/class-wcos-merge-woocommerce-adapter.php' \
+            'inc/domain/class-wcos-return-participation.php' \
+            'inc/domain/class-wcos-return-plan.php' \
+            'inc/domain/class-wcos-return-lineage-authority.php' \
+            'inc/domain/class-wcos-return-preflight.php' \
             'css/p2-split-strategy-admin.css' \
             'js/p2-split-strategy-admin.js'; do
             if test ! -e "$package_root/$required_path"; then
@@ -356,6 +370,10 @@ jobs:
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-retirement-policy.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-order-service.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-merge-woocommerce-adapter.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-return-participation.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-return-plan.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-return-lineage-authority.php'
+          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-return-preflight.php'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/js/p2-split-strategy-admin.js'
           unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/css/p2-split-strategy-admin.css'
           if unzip -Z1 wc-order-splitter.zip | grep -E '(^|/)(tests|docs|node_modules|inc/mutation-v2)(/|$)|(^|/)AGENTS\.md$'; then
@@ -530,6 +548,9 @@ jobs:
 
       - name: Verify governance, authorization, and metadata policy
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/governance-smoke.php
+
+      - name: Verify hard-off Return domain and hardened Split lineage authority
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/return-domain-lineage-smoke.php
 
       - name: Verify Merge domain foundation contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-domain-foundation-smoke.php

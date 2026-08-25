@@ -73,6 +73,10 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-category-split-planner.php';
 		include_once $root . 'domain/class-wcos-stock-status-split-planner.php';
 		include_once $root . 'domain/class-wcos-split-strategy-woocommerce-adapter.php';
+		include_once $root . 'domain/class-wcos-return-participation.php';
+		include_once $root . 'domain/class-wcos-return-plan.php';
+		include_once $root . 'domain/class-wcos-return-lineage-authority.php';
+		include_once $root . 'domain/class-wcos-return-preflight.php';
 		include_once $root . 'domain/class-wcos-duplicate-preflight.php';
 		include_once $root . 'domain/class-wcos-merge-preflight.php';
 		include_once $root . 'domain/class-wcos-duplicate-woocommerce-adapter.php';

@@ -26,11 +26,14 @@ require_once $root . 'class-wcos-decimal.php';
 require_once $root . 'class-wcos-amount-allocator.php';
 require_once $root . 'class-wcos-line-identity.php';
 require_once $root . 'class-wcos-mutation-fingerprint.php';
+require_once $root . 'class-wcos-price-precision-scope.php';
 require_once $root . 'class-wcos-mutation-contract.php';
 require_once $root . 'class-wcos-split-plan.php';
 require_once $root . 'class-wcos-merge-retirement-policy.php';
 require_once $root . 'class-wcos-merge-plan.php';
 require_once $root . 'class-wcos-merge-recovery-state-graph.php';
+require_once $root . 'class-wcos-return-participation.php';
+require_once $root . 'class-wcos-return-plan.php';
 
 $tests = array();
 
@@ -249,6 +252,111 @@ $tests['merge plan rejects self merge and normalized item collisions'] = static 
 			'01' => array('source_item_id' => 1, 'line_identity' => str_repeat('a', 64)),
 			1 => array('source_item_id' => 1, 'line_identity' => str_repeat('b', 64)),
 		));
+	}, InvalidArgumentException::class);
+};
+
+$tests['return plan canonicalization ignores incidental line ordering'] = static function() {
+	$line_a = array(
+		'source_item_id' => 11,
+		'child_item_id' => 101,
+		'product_id' => 1001,
+		'variation_id' => 0,
+		'tax_class' => '',
+		'destination' => WCOS_Return_Plan::DESTINATION_RESIDUAL_SOURCE_ITEM,
+		'destination_source_item_id' => 11,
+		'line_identity_authority' => str_repeat('a', 64),
+		'quantity' => '1.000000',
+		'subtotal' => '5.00',
+		'total' => '4.50',
+		'subtotal_tax' => '0.50',
+		'total_tax' => '0.45',
+		'taxes' => array('total' => array(2 => '0.45'), 'subtotal' => array(2 => '0.50')),
+		'reduced_stock' => '1.000000',
+	);
+	$line_b = array(
+		'source_item_id' => 22,
+		'child_item_id' => 202,
+		'product_id' => 1002,
+		'variation_id' => 2002,
+		'tax_class' => 'reduced-rate',
+		'destination' => WCOS_Return_Plan::DESTINATION_FRESH_SOURCE_ITEM,
+		'destination_source_item_id' => 0,
+		'line_identity_authority' => str_repeat('b', 64),
+		'quantity' => '2.000000',
+		'subtotal' => '8.00',
+		'total' => '8.00',
+		'subtotal_tax' => '0.00',
+		'total_tax' => '0.00',
+		'taxes' => array('subtotal' => array(), 'total' => array()),
+		'reduced_stock' => null,
+	);
+	$base = array(
+		'authority_fingerprint' => str_repeat('c', 64),
+		'child_order_id' => 302,
+		'source_order_id' => 301,
+		'split_operation_id' => 'split-operation',
+		'split_child_key' => 'child-a',
+		'price_precision' => 2,
+		'currency' => 'USD',
+		'prices_include_tax' => false,
+		'execution_policy' => 'allow_whole_line_transfer',
+		'strategy' => 'category',
+		'source_commercial_authority' => str_repeat('d', 64),
+		'source_relation_authority' => str_repeat('f', 64),
+		'child_commercial_authority' => str_repeat('e', 64),
+	);
+	$first = $base;
+	$first['lines'] = array(22 => $line_b, 11 => $line_a);
+	$second = $base;
+	$second['lines'] = array(11 => $line_a, 22 => $line_b);
+	$first_plan = WCOS_Return_Plan::build($first);
+	$second_plan = WCOS_Return_Plan::build($second);
+	assert_same(array(11, 22), array_keys($first_plan['lines']));
+	assert_same($first_plan['plan_fingerprint'], $second_plan['plan_fingerprint']);
+};
+
+$tests['return plan binds destination and historical ownership evidence'] = static function() {
+	$authority = array(
+		'authority_fingerprint' => str_repeat('a', 64),
+		'child_order_id' => 42,
+		'source_order_id' => 41,
+		'split_operation_id' => 'split-operation',
+		'split_child_key' => 'child-a',
+		'price_precision' => 2,
+		'currency' => 'USD',
+		'prices_include_tax' => false,
+		'execution_policy' => 'partial_lines_only',
+		'strategy' => 'manual_quantity',
+		'source_commercial_authority' => str_repeat('b', 64),
+		'source_relation_authority' => str_repeat('e', 64),
+		'child_commercial_authority' => str_repeat('c', 64),
+		'lines' => array(9 => array(
+			'source_item_id' => 9,
+			'child_item_id' => 90,
+			'product_id' => 900,
+			'variation_id' => 0,
+			'tax_class' => '',
+			'destination' => WCOS_Return_Plan::DESTINATION_RESIDUAL_SOURCE_ITEM,
+			'destination_source_item_id' => 9,
+			'line_identity_authority' => str_repeat('d', 64),
+			'quantity' => '1.000000',
+			'subtotal' => '10.00',
+			'total' => '9.00',
+			'subtotal_tax' => '1.00',
+			'total_tax' => '0.90',
+			'taxes' => array('subtotal' => array(1 => '1.00'), 'total' => array(1 => '0.90')),
+			'reduced_stock' => '1.000000',
+			'customer_name' => 'must-not-enter-return-plan',
+		)),
+	);
+	$first = WCOS_Return_Plan::build($authority);
+	assert_true(false === strpos(json_encode($first), 'must-not-enter-return-plan'), 'Return plan copied an undeclared line field.');
+	$authority['lines'][9]['total'] = '8.99';
+	$second = WCOS_Return_Plan::build($authority);
+	assert_true($first['plan_fingerprint'] !== $second['plan_fingerprint'], 'Return plan fingerprint ignored historical money drift.');
+	$authority['lines'][9]['destination'] = WCOS_Return_Plan::DESTINATION_FRESH_SOURCE_ITEM;
+	assert_throws(static function() use ($authority) {
+		WCOS_Return_Plan::build($authority);
 	}, InvalidArgumentException::class);
 };
 
