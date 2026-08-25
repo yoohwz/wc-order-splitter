@@ -22,7 +22,11 @@ final class WCOS_Mutation_Recovery_Coordinator {
 			return;
 		}
 		$type = isset($record['type']) ? sanitize_key($record['type']) : '';
-		if (!in_array($type, array('split', 'merge'), true)) {
+		if (!in_array($type, array('split', 'merge', 'return'), true)) {
+			return;
+		}
+		if ('return' === $type) {
+			self::handle_return($source, $operation_id, $record, $key);
 			return;
 		}
 		if ('merge' === $type) {
@@ -74,6 +78,64 @@ final class WCOS_Mutation_Recovery_Coordinator {
 			if ($acquired_here && false !== $lease_token) {
 				WCOS_Operation_Lock::release($source_id, $lease_token);
 			}
+			unset(self::$active[$key]);
+		}
+	}
+
+	private static function handle_return(WC_Order $child, $operation_id, array $record, $key) {
+		self::$active[$key] = true;
+		$lease = false;
+		$original = null;
+		$stock_guard = false;
+		$fresh_child = null;
+		$fresh_record = null;
+		try {
+			$fresh_child = wc_get_order($child->get_id());
+			$fresh_record = $fresh_child instanceof WC_Order
+				? WCOS_Operation_Journal::get($fresh_child, $operation_id)
+				: null;
+			if (!$fresh_child instanceof WC_Order || !is_array($fresh_record)) {
+				throw new RuntimeException(__('The authoritative Return recovery journal is unavailable.', 'wc-order-splitter'));
+			}
+			WCOS_Operation_Journal::assert_fingerprint($fresh_record, isset($record['fingerprint']) ? $record['fingerprint'] : '');
+			$pair = WCOS_Return_Journal_Context::pair_from_record($fresh_record);
+			if (!is_array($pair)) {
+				WCOS_Return_Compensator::manual_reconciliation($fresh_child, null, $fresh_record, 'corrupt_return_pair_authority');
+				return;
+			}
+			$original = wc_get_order($pair['original_order_id']);
+			if (!$original instanceof WC_Order || 'shop_order' !== $original->get_type()) {
+				WCOS_Return_Compensator::manual_reconciliation($fresh_child, null, $fresh_record, 'missing_return_peer');
+				return;
+			}
+			$participant_ids = array($pair['child_order_id'], $pair['original_order_id']);
+			$owned = array_filter($participant_ids, static function($order_id) use ($operation_id) {
+				return WCOS_Operation_Lock::is_current_owned_for($order_id, $operation_id);
+			});
+			if (count($owned) === count($participant_ids)) {
+				$lease = WCOS_Multi_Order_Lease::adopt_current($participant_ids, $operation_id);
+			} elseif (empty($owned)) {
+				$lease = WCOS_Multi_Order_Lease::acquire($participant_ids, $operation_id);
+			} else {
+				throw new RuntimeException(__('Return recovery found an incomplete same-operation lease set.', 'wc-order-splitter'));
+			}
+			if (!$lease instanceof WCOS_Multi_Order_Lease) {
+				throw new RuntimeException(__('Return recovery could not acquire both participant leases.', 'wc-order-splitter'));
+			}
+			$lease->assert_owned();
+			$stock_guard = WCOS_Stock_Side_Effect_Guard::begin($operation_id);
+			WCOS_Return_Compensator::recover($fresh_child, $original, $fresh_record, $lease);
+		} catch (Throwable $throwable) {
+			$before_write_rejection = $throwable instanceof WCOS_Unexpected_Stock_Mutation_Exception
+				&& !WCOS_Stock_Side_Effect_Guard::events_require_manual_reconciliation($throwable->get_events());
+			if (!$throwable instanceof WCOS_Return_Recovery_Interruption_Exception && !$before_write_rejection
+				&& $lease instanceof WCOS_Multi_Order_Lease && $fresh_child instanceof WC_Order && is_array($fresh_record)) {
+				WCOS_Return_Compensator::manual_reconciliation($fresh_child, $original, $fresh_record, 'return_recovery_validation_failed');
+			}
+			do_action('wcos_mutation_compensation_error', $throwable, $child, $operation_id, $record);
+		} finally {
+			if (false !== $stock_guard) { WCOS_Stock_Side_Effect_Guard::end($stock_guard); }
+			if ($lease instanceof WCOS_Multi_Order_Lease) { $lease->release(); }
 			unset(self::$active[$key]);
 		}
 	}

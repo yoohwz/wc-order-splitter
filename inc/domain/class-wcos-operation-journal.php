@@ -58,6 +58,27 @@ final class WCOS_Operation_Journal {
             $context['merge_recovery_snapshot'] = $snapshot;
             $context['merge_recovery_snapshot_fingerprint'] = $snapshot['recovery_fingerprint'];
         }
+        if ('return' === $type && class_exists('WCOS_Return_Recovery_Snapshot')) {
+            $provisional_record = array(
+                'source_order_id' => $order->get_id(),
+                'operation_id' => $operation_id,
+                'type' => $type,
+                'fingerprint' => $fingerprint,
+                'context' => $context,
+            );
+            $pair = WCOS_Return_Journal_Context::pair_from_record($provisional_record);
+            $original = is_array($pair) ? wc_get_order($pair['original_order_id']) : null;
+            if (!is_array($pair) || !$original instanceof WC_Order || 'shop_order' !== $original->get_type()) {
+                return false;
+            }
+            try {
+                $snapshot = WCOS_Return_Recovery_Snapshot::capture($order, $original, $provisional_record);
+            } catch (Throwable $throwable) {
+                return false;
+            }
+            $context['return_recovery_snapshot'] = $snapshot;
+            $context['return_recovery_snapshot_fingerprint'] = $snapshot['recovery_fingerprint'];
+        }
 
         $now = gmdate('c');
         $record = array(
@@ -82,6 +103,20 @@ final class WCOS_Operation_Journal {
                 ),
             ),
         );
+
+        if ('return' === $type && class_exists('WCOS_Return_Recovery_State_Graph')) {
+            $prepared = WCOS_Return_Recovery_State_Graph::seal_context(
+                $record,
+                array(
+                    'return_recovery_state' => WCOS_Return_Recovery_State_Graph::PREPARED,
+                    'return_recovery_snapshot_fingerprint' => isset($context['return_recovery_snapshot_fingerprint'])
+                        ? $context['return_recovery_snapshot_fingerprint']
+                        : '',
+                )
+            );
+            $record['context'] = array_merge($record['context'], $prepared);
+            $record['checkpoints'][0]['context'] = $prepared;
+        }
 
         if (!add_option(self::key($order->get_id(), $operation_id), $record, '', false)) {
             return false;
@@ -395,6 +430,10 @@ final class WCOS_Operation_Journal {
             && class_exists('WCOS_Merge_Recovery_State_Graph')) {
             $context = WCOS_Merge_Recovery_State_Graph::seal_context($record, $context);
         }
+        if ('return' === sanitize_key(isset($record['type']) ? (string) $record['type'] : '')
+            && class_exists('WCOS_Return_Recovery_State_Graph')) {
+            $context = WCOS_Return_Recovery_State_Graph::seal_context($record, $context);
+        }
         $now = gmdate('c');
         $record['stage'] = sanitize_key($stage);
         $record['updated_at'] = $now;
@@ -467,7 +506,8 @@ final class WCOS_Operation_Journal {
 
         foreach (array(
             'execution_policy', 'fully_moved_item_ids', 'strategy_authority', 'merge_pair',
-            'merge_recovery_snapshot', 'merge_recovery_snapshot_fingerprint',
+            'merge_recovery_snapshot', 'merge_recovery_snapshot_fingerprint', 'return_pair',
+            'return_plan', 'return_recovery_snapshot', 'return_recovery_snapshot_fingerprint',
         ) as $field) {
             if (array_key_exists($field, $current_context)) {
                 if (!array_key_exists($field, $replacement_context)
