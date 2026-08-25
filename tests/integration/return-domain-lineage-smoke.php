@@ -589,6 +589,40 @@ $child->delete_meta_data(WCOS_Return_Participation::CHILD_OPERATION_META);
 $child->delete_meta_data(WCOS_Return_Participation::CHILD_PAIR_FINGERPRINT_META);
 $child->save_meta_data();
 
+$child = wc_get_order($child->get_id());
+$child->update_meta_data(WCOS_Split_Order_Service::RELATION_CHILDREN_META, array(999999995));
+$child->save_meta_data();
+$nested_report = WCOS_Return_Preflight::report(wc_get_order($child->get_id()), true);
+wcos_return_foundation_assert(empty($nested_report['supported']) && 'nested_or_parent_child' === $nested_report['reason'], 'Nested/descendant Return participation was not rejected.');
+$child->delete_meta_data(WCOS_Split_Order_Service::RELATION_CHILDREN_META);
+$child->save_meta_data();
+
+$child = wc_get_order($child->get_id());
+$child->add_meta_data(WCOS_Merge_Participation::TARGET_OPERATION_META, 'conflicting-merge-operation', false);
+$child->save_meta_data();
+$merge_participation_report = WCOS_Return_Preflight::report(wc_get_order($child->get_id()), true);
+wcos_return_foundation_assert(empty($merge_participation_report['supported']) && 'unresolved_mutation_authority' === $merge_participation_report['reason'], 'Conflicting Merge participation was not rejected.');
+$child->delete_meta_data(WCOS_Merge_Participation::TARGET_OPERATION_META);
+$child->save_meta_data();
+
+$child = wc_get_order($child->get_id());
+$child->set_transaction_id('return-child-transaction');
+$child->save();
+$transaction_report = WCOS_Return_Preflight::report(wc_get_order($child->get_id()), true);
+wcos_return_foundation_assert(empty($transaction_report['supported']) && 'child_payment_ownership' === $transaction_report['reason'], 'Transaction-bearing Return child was not rejected.');
+$child->set_transaction_id('');
+$child->save();
+
+$child = wc_get_order($child->get_id());
+$child_fee = new WC_Order_Item_Fee();
+$child_fee->set_props(array('name' => 'Unsupported child fee', 'amount' => '0.00', 'total' => '0.00', 'total_tax' => '0.00', 'taxes' => array('total' => array())));
+$child->add_item($child_fee);
+$child->save();
+$charge_report = WCOS_Return_Preflight::report(wc_get_order($child->get_id()), true);
+wcos_return_foundation_assert(empty($charge_report['supported']) && 'child_charge_ownership' === $charge_report['reason'], 'Charge-owning Return child was not rejected.');
+$child->remove_item($child_fee->get_id());
+$child->save();
+
 /* Legacy-only metadata remains explicitly non-executable. */
 $legacy = wc_create_order();
 wcos_return_foundation_record('orders', $legacy->get_id());
