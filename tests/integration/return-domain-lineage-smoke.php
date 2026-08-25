@@ -63,6 +63,9 @@ function wcos_return_foundation_journal_key($source_id, $operation_id) {
 }
 
 function wcos_return_foundation_reason(WC_Order $child) {
+	$child_id = $child->get_id();
+	WC_Cache_Helper::invalidate_cache_group('orders');
+	$child = wc_get_order($child_id);
 	try {
 		WCOS_Return_Lineage_Authority::resolve($child);
 	} catch (WCOS_Return_Lineage_Exception $exception) {
