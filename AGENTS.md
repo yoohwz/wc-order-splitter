@@ -42,33 +42,21 @@ Every meaningful Codex task-state response and every deterministic stop signal m
 
 The footer is navigation only. It must not widen task authority, bypass CI or review, imply Human Gate or release/publication approval, or let Codex treat its executor-side `Review` as independent ChatGPT Technical Review. When no authorized action is available, the footer must name the actual blocking authority without inventing a command. Completed tasks must use the deterministic `None` footer only when no further authorized next action exists. If the canonical task contract explicitly identifies an authorized next milestone, the footer may point the operator to it, but Codex must not automatically start unrelated or merely inferred work.
 
-## Approved production baseline
+## Production gate authority
 
-The repository no longer has an all-mutations-hard-off production baseline. The current approved runtime gate state is:
+Mutable production gate state is owned by `inc/domain/class-wcos-feature-gates.php` and `inc/domain/class-wcos-split-strategy-gates.php` at the exact source SHA under review. Each canonical task must bind its expected workflow and strategy gate map; this governance document defines gate-change policy and must not duplicate a mutable snapshot.
 
-- `WCOS_Feature_Gates::SPLIT = true`;
-- `WCOS_Feature_Gates::DUPLICATE = true`;
-- `WCOS_Feature_Gates::MERGE = true`;
-- `WCOS_Feature_Gates::RETURN_ORDER = false`;
-- `WCOS_Feature_Gates::BULK_RETURN = false`.
-
-The current approved Split strategy gate state is:
-
-- `WCOS_Split_Strategy_Gates::MANUAL_QUANTITY = true`;
-- `WCOS_Split_Strategy_Gates::CATEGORY = false`;
-- `WCOS_Split_Strategy_Gates::STOCK_STATUS = false`.
-
-`WC_Order_Splitter_Safety_Guard::mutations_enabled()` must reflect the canonical approved `WCOS_Feature_Gates` state rather than acting as a contradictory second gate.
+`WC_Order_Splitter_Safety_Guard::mutations_enabled()` must reflect the code-owned `WCOS_Feature_Gates` state rather than acting as a contradictory second gate.
 
 Changing any production workflow or strategy gate from `false` to `true` is a separate enablement milestone. It requires its own exact-state CI acceptance, independent technical review, and explicit Human Gate. Foundation/planner code may be packaged and loaded while its corresponding production strategy gate remains hard-off, provided it registers no production write surface.
 
 ## Non-negotiable gates
 
-- Preserve the approved production gate map above unless the change is the dedicated, explicitly accepted gate-changing milestone for that workflow/strategy.
+- Preserve the exact code-owned production gate map bound by the canonical task unless the change is the dedicated, explicitly accepted gate-changing milestone for that workflow/strategy.
 - No constant, option, filter, mu-plugin, or external plugin may enable an unfinished mutation workflow or Split strategy.
 - Never re-enable or bootstrap a legacy mutation handler to make a UI or integration test pass.
 - Production mutation controllers must enter through `WCOS_Mutation_Gateway`; controller code must not instantiate mutation services directly.
-- Read-only strategy planners must not become an implicit mutation route. Category and Stock-status remain planner-only while their strategy gates are hard-off.
+- Read-only strategy planners must not become an implicit mutation route. A strategy may register a production write surface only when its code-owned gate is enabled by an explicitly accepted milestone.
 - Never copy an existing persisted `WC_Order_Item` object to another order.
 - Never identify a commercial line by `product_id` alone.
 - Never recalculate historical tax as an implicit side effect of Split, Duplicate, Merge, or Return.
@@ -86,7 +74,7 @@ Use one of these labels in plans and pull requests:
 - `P2_WOOCOMMERCE_ADAPTER`: runtime mutation controllers, production workflow enablement, side-effect policy, HPOS/legacy adapter validation, and endpoint reintroduction.
 - `P3_PRODUCT_QUALITY`: accessible UI, relation views, documentation, packaging, and release governance.
 
-P1 may contain internal adapter/service/planner scaffolding used to prove domain contracts, but it must not create a new production write surface or alter an approved production gate unless the change is explicitly classified and reviewed as the corresponding P2 enablement milestone. Existing approved production workflows remain enabled while unrelated unfinished workflows/strategies stay hard-off.
+P1 may contain internal adapter/service/planner scaffolding used to prove domain contracts, but it must not create a new production write surface or alter a code-owned production gate unless the change is explicitly classified and reviewed as the corresponding P2 enablement milestone. Existing accepted production workflows remain enabled while unrelated unfinished workflows/strategies stay hard-off.
 
 ## Required evidence
 
@@ -130,6 +118,8 @@ php tests/unit/run.php
 
 WooCommerce/WordPress integration contracts run through `.github/workflows/ci.yml` across legacy, HPOS, and HPOS-sync storage. The GitHub Actions workflows are the merge authority. Local success is necessary but not sufficient.
 
+Normal Local implementation evidence is scope-focused: use the exact active plugin worktree and pushed task HEAD, run relevant PHP/unit checks, add focused WooCommerce integration evidence when it establishes task-specific behavior, and use hands-on browser/UI evidence only for behavior CI cannot establish. The full legacy/HPOS/HPOS-sync regression matrix belongs to canonical PR CI unless a task explicitly requires Local reproduction of a storage defect or broader Local evidence. Normal development does not create an installable ZIP; package artifacts require explicit task or release authority.
+
 ## Local-runtime worktree contract
 
 When a task brief designates Local-runtime mode:
@@ -147,6 +137,6 @@ When a task brief designates Local-runtime mode:
 - Treat money, tax, stock, refunds, and relation metadata as one transaction boundary.
 - Reject hidden fallback behavior. Unsupported input must return a stable error and leave orders unchanged.
 - Keep pull requests draft while required checks are absent, queued, or failing.
-- Keep every unfinished workflow/strategy gate hard-off; do not revert already-approved production gates as a side effect of unrelated P1 work.
+- Preserve the task-bound code-owned gate map; do not revert already accepted production gates or enable unfinished workflows/strategies as a side effect of unrelated work.
 - Do not merge a new production mutation controller, strategy transport, or gate-changing diff without independent technical review and explicit Human Gate.
 - Do not publish a WordPress.org ZIP unless the package/release workflow is green for the exact `main` state being released.

@@ -344,22 +344,22 @@ Codex resolves Issue #55 and checks for its exact release-freeze signal. Before 
 
 ## Design rule for future ChatGPT task creation
 
-When ChatGPT creates a new implementation/release task, the GitHub Issue must be sufficiently self-contained that Codex can execute it from only:
+When ChatGPT creates a new implementation/release task, the GitHub Issue must be sufficiently authoritative that Codex can execute it from only:
 
 `Run <TASK_ID>`
 
-The Issue should therefore contain, as applicable:
+The Issue should reference stable repository architecture, CI, package, and governance contracts instead of copying their global invariants. Its compact task-specific authority block should contain, as applicable:
 
 - classification;
 - mission;
-- dependencies/source authority;
+- exact source SHA and dependencies/source authority;
+- the exact expected gate map or the authoritative code-owned gate files plus task-bound expectations;
 - branch/worktree requirements;
-- in-scope and out-of-scope boundaries;
-- invariants;
-- acceptance criteria;
-- required tests/evidence;
+- scope delta and out-of-scope boundaries;
+- task-specific invariants and acceptance criteria;
+- required verification profile;
 - PR/merge/release rules;
 - stop conditions;
-- exact completion signal.
+- independent-review/Human-Gate boundary and exact completion signal.
 
 ChatGPT should avoid requiring the operator to carry hidden task instructions from chat into Codex. If a critical instruction exists only in chat, update the canonical GitHub task contract before relying on a short command.
