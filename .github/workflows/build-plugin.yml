@@ -1,17 +1,15 @@
-name: Release package
+name: Manual package artifact
 
 on:
-  workflow_run:
-    workflows:
-      - CI
-    types:
-      - completed
-    branches:
-      - main
   workflow_dispatch:
+    inputs:
+      authority:
+        description: Canonical task or release authority authorizing this artifact
+        required: true
+        type: string
 
 concurrency:
-  group: release-package-main
+  group: manual-package-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -19,249 +17,87 @@ permissions:
 
 jobs:
   build:
-    name: Build reproducible ZIP
-    if: (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    name: Build reproducible ZIP explicitly
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout validated main revision
+      - name: Checkout explicitly selected revision
         uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-      - name: Validate release metadata and approved runtime
+      - name: Record source and declared authority
         shell: bash
+        env:
+          ARTIFACT_AUTHORITY: ${{ inputs.authority }}
         run: |
           set -euo pipefail
-          plugin_version=$(sed -n 's/^ \* Version: //p' wc-order-splitter.php | head -n 1)
-          stable_tag=$(sed -n 's/^Stable tag: //p' readme.txt | head -n 1)
+          test -n "$ARTIFACT_AUTHORITY"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          echo "artifact_source_sha=$(git rev-parse HEAD)"
+          echo "artifact_source_tree=$(git rev-parse HEAD^{tree})"
+          echo "artifact_authority=$ARTIFACT_AUTHORITY"
+          echo 'A successful artifact build does not grant release or publication authority.'
 
-          test -n "$plugin_version"
-          test -n "$stable_tag"
-          test "$plugin_version" = "$stable_tag"
-          grep -Fq 'return WCOS_Feature_Gates::any_enabled();' inc/cores/safety.php
-          grep -Fq 'self::SPLIT => true' inc/domain/class-wcos-feature-gates.php
-          grep -Fq 'self::DUPLICATE => true' inc/domain/class-wcos-feature-gates.php
-          grep -Fq 'self::MERGE => true' inc/domain/class-wcos-feature-gates.php
-          grep -Fq 'self::RETURN_ORDER => false' inc/domain/class-wcos-feature-gates.php
-          grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php
-          grep -Fq 'self::MANUAL_QUANTITY => true' inc/domain/class-wcos-split-strategy-gates.php
-          grep -Fq 'self::CATEGORY => true' inc/domain/class-wcos-split-strategy-gates.php
-          grep -Fq 'self::STOCK_STATUS => true' inc/domain/class-wcos-split-strategy-gates.php
-          test ! -d inc/mutation-v2
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
 
-          telemetry_host='yoexpress''.''top'
-          if grep -R --line-number --fixed-strings "$telemetry_host" \
-            wc-order-splitter.php readme.txt changelog.txt inc js \
-            --include='*.php' --include='*.js' --include='*.txt'; then
-            echo 'Removed telemetry endpoint must not be present in distributable source.' >&2
-            exit 1
-          fi
+      - name: Build and validate canonical distribution tree
+        shell: bash
+        run: .github/scripts/validate-distribution-contract.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/package/wc-order-splitter"
 
-          if grep -R --line-number -E 'WC_ORDER_SPLITTER_(MUTATIONS|SPLIT|DUPLICATE|MERGE|RETURN|BULK_RETURN)_ENABLED' \
-            wc-order-splitter.php inc/cores inc/domain; then
-            echo 'Externally overrideable mutation gates must not return.' >&2
-            exit 1
-          fi
-          if grep -R --line-number --fixed-strings 'wc-merged' wc-order-splitter.php inc; then
-            echo 'A custom production merged order status was introduced.' >&2
-            exit 1
-          fi
-
-      - name: Build package tree
+      - name: Build reproducible archives
         shell: bash
         run: |
           set -euo pipefail
           package_root="$RUNNER_TEMP/package/wc-order-splitter"
-          mkdir -p "$package_root"
-
-          rsync -a ./ "$package_root/" --exclude-from='.distignore'
-
-          find "$package_root" -type f -name '*.php' -print0 | while IFS= read -r -d '' file; do
-            php -l "$file" >/dev/null
-          done
-
-          for forbidden_path in \
-            'inc/backend/actions' \
-            'inc/backend/orders-bulk-return.php' \
-            'inc/backend/order-split-button.php' \
-            'inc/backend/order-return-option.php' \
-            'inc/backend/class-wcos-return-admin-controller.php' \
-            'inc/backend/order-duplicate-option.php' \
-            'inc/backend/order-merge-option.php' \
-            'js/bulk-return-action.js' \
-            'js/merge-action.js' \
-            'js/post-action-tip.js' \
-            'js/split-table.js' \
-            'js/p2-return-admin.js' \
-            'css/p2-return-admin.css' \
-            'inc/mutation-v2' \
-            'tests' \
-            'docs' \
-            'AGENTS.md'; do
-            if test -e "$package_root/$forbidden_path"; then
-              echo "Unsafe or development-only path entered package: $forbidden_path" >&2
-              exit 1
-            fi
-          done
-
-          for required_path in \
-            'inc/backend/class-wcos-split-admin-controller.php' \
-            'inc/backend/class-wcos-split-confirmation-store.php' \
-            'inc/backend/class-wcos-split-request-parser.php' \
-            'inc/domain/class-wcos-feature-gates.php' \
-            'inc/domain/class-wcos-mutation-gateway.php' \
-            'inc/domain/class-wcos-split-woocommerce-adapter.php' \
-            'inc/domain/class-wcos-split-order-service.php' \
-            'css/p2-split-admin.css' \
-            'js/p2-split-admin.js' \
-            'inc/backend/class-wcos-duplicate-admin-controller.php' \
-            'inc/backend/class-wcos-duplicate-confirmation-store.php' \
-            'inc/domain/class-wcos-duplicate-preflight.php' \
-            'inc/domain/class-wcos-duplicate-woocommerce-adapter.php' \
-            'inc/domain/class-wcos-duplicate-order-service.php' \
-            'css/p2-duplicate-admin.css' \
-            'js/p2-duplicate-admin.js' \
-            'inc/backend/class-wcos-split-strategy-review-store.php' \
-            'inc/backend/class-wcos-split-strategy-confirmation-store.php' \
-            'inc/backend/class-wcos-split-strategy-admin-controller.php' \
-            'inc/backend/class-wcos-merge-review-store.php' \
-            'inc/backend/class-wcos-merge-confirmation-store.php' \
-            'inc/backend/class-wcos-merge-admin-controller.php' \
-            'css/p2-merge-admin.css' \
-            'js/p2-merge-admin.js' \
-            'inc/domain/class-wcos-split-strategy-gates.php' \
-            'inc/domain/class-wcos-category-split-planner.php' \
-            'inc/domain/class-wcos-stock-status-split-planner.php' \
-            'inc/domain/class-wcos-split-strategy-woocommerce-adapter.php' \
-            'inc/domain/class-wcos-multi-order-lease.php' \
-            'inc/domain/class-wcos-merge-plan.php' \
-            'inc/domain/class-wcos-merge-context-signature.php' \
-            'inc/domain/class-wcos-merge-journal-context.php' \
-            'inc/domain/class-wcos-merge-participation.php' \
-            'inc/domain/class-wcos-merge-recovery-snapshot.php' \
-            'inc/domain/class-wcos-merge-recovery-state-graph.php' \
-            'inc/domain/class-wcos-merge-commit-guard.php' \
-            'inc/domain/class-wcos-merge-compensator.php' \
-            'inc/domain/class-wcos-merge-preflight.php' \
-            'inc/domain/class-wcos-merge-retirement-policy.php' \
-            'inc/domain/class-wcos-merge-order-service.php' \
-            'inc/domain/class-wcos-merge-woocommerce-adapter.php' \
-            'inc/domain/class-wcos-return-participation.php' \
-            'inc/domain/class-wcos-return-plan.php' \
-            'inc/domain/class-wcos-return-lineage-authority.php' \
-            'inc/domain/class-wcos-return-preflight.php' \
-            'css/p2-split-strategy-admin.css' \
-            'js/p2-split-strategy-admin.js'; do
-            if test ! -e "$package_root/$required_path"; then
-              echo "Required hardened mutation path is missing from package: $required_path" >&2
-              exit 1
-            fi
-          done
-
-          if find "$package_root" -type l | grep -q .; then
-            echo 'Release package must not contain symbolic links.' >&2
-            exit 1
-          fi
-
-          if grep -R --line-number -E 'yoexpress\.top|WC_Order_Splitter_Push_Subscription' "$package_root"; then
-            echo 'Removed telemetry code entered the package.' >&2
-            exit 1
-          fi
+          package_parent="$RUNNER_TEMP/package"
 
           touch -t 200001010000 "$package_root"
           find "$package_root" -exec touch -t 200001010000 {} +
 
-          cd "$RUNNER_TEMP/package"
-          find wc-order-splitter -type f -print | LC_ALL=C sort | zip -X -q "$GITHUB_WORKSPACE/wc-order-splitter.zip" -@
+          build_archive() {
+            local output=$1
+            (
+              cd "$package_parent"
+              find wc-order-splitter -type f -print | LC_ALL=C sort | zip -X -q "$output" -@
+            )
+          }
 
-      - name: Inspect package
+          build_archive "$GITHUB_WORKSPACE/wc-order-splitter.first.zip"
+          build_archive "$GITHUB_WORKSPACE/wc-order-splitter.second.zip"
+          cmp "$GITHUB_WORKSPACE/wc-order-splitter.first.zip" "$GITHUB_WORKSPACE/wc-order-splitter.second.zip"
+          mv "$GITHUB_WORKSPACE/wc-order-splitter.first.zip" "$GITHUB_WORKSPACE/wc-order-splitter.zip"
+          rm "$GITHUB_WORKSPACE/wc-order-splitter.second.zip"
+
+      - name: Inspect archive integrity and exact contents
         shell: bash
         run: |
           set -euo pipefail
+          package_parent="$RUNNER_TEMP/package"
+
           unzip -t wc-order-splitter.zip
-          unzip -l wc-order-splitter.zip
           unzip -p wc-order-splitter.zip wc-order-splitter/wc-order-splitter.php | grep -Fq 'Plugin Name: Order Splitter for WooCommerce'
+
+          (
+            cd "$package_parent"
+            find wc-order-splitter -type f -print | LC_ALL=C sort
+          ) > "$RUNNER_TEMP/distribution-files.txt"
+          unzip -Z1 wc-order-splitter.zip | grep -v '/$' | LC_ALL=C sort > "$RUNNER_TEMP/archive-files.txt"
+          cmp "$RUNNER_TEMP/distribution-files.txt" "$RUNNER_TEMP/archive-files.txt"
+
           archive_version=$(unzip -p wc-order-splitter.zip wc-order-splitter/wc-order-splitter.php | sed -n 's/^ \* Version: //p' | head -n 1)
           archive_stable_tag=$(unzip -p wc-order-splitter.zip wc-order-splitter/readme.txt | sed -n 's/^Stable tag: //p' | head -n 1)
           test -n "$archive_version"
           test "$archive_version" = "$archive_stable_tag"
-          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::SPLIT => true'
-          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::DUPLICATE => true'
-          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::MERGE => true'
-          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::RETURN_ORDER => false'
-          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-feature-gates.php | grep -Fq 'self::BULK_RETURN => false'
-          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::MANUAL_QUANTITY => true'
-          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::CATEGORY => true'
-          unzip -p wc-order-splitter.zip wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php | grep -Fq 'self::STOCK_STATUS => true'
-          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-return-participation.php'
-          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-return-plan.php'
-          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-return-lineage-authority.php'
-          unzip -Z1 wc-order-splitter.zip | grep -Fq 'wc-order-splitter/inc/domain/class-wcos-return-preflight.php'
-
-          for forbidden_archive_path in \
-            'wc-order-splitter/inc/backend/order-merge-option.php' \
-            'wc-order-splitter/js/merge-action.js' \
-            'wc-order-splitter/inc/backend/class-wcos-return-admin-controller.php' \
-            'wc-order-splitter/js/p2-return-admin.js' \
-            'wc-order-splitter/css/p2-return-admin.css'; do
-            if unzip -Z1 wc-order-splitter.zip | grep -Fxq "$forbidden_archive_path"; then
-              echo "Legacy Merge path entered the ZIP: $forbidden_archive_path" >&2
-              exit 1
-            fi
-          done
-
-          if unzip -p wc-order-splitter.zip wc-order-splitter/wc-order-splitter.php 'wc-order-splitter/inc/*/*.php' | grep --fixed-strings 'wc-merged'; then
-            echo 'A custom production merged order status entered the ZIP.' >&2
-            exit 1
-          fi
-
-          if unzip -Z1 wc-order-splitter.zip | grep -E '(^|/)(tests|docs|node_modules|inc/mutation-v2)(/|$)|(^|/)AGENTS\.md$'; then
-            echo 'Development-only content entered the ZIP.' >&2
-            exit 1
-          fi
-
-          for required_archive_path in \
-            'wc-order-splitter/inc/backend/class-wcos-split-strategy-review-store.php' \
-            'wc-order-splitter/inc/backend/class-wcos-split-strategy-confirmation-store.php' \
-            'wc-order-splitter/inc/backend/class-wcos-split-strategy-admin-controller.php' \
-            'wc-order-splitter/inc/backend/class-wcos-merge-review-store.php' \
-            'wc-order-splitter/inc/backend/class-wcos-merge-confirmation-store.php' \
-            'wc-order-splitter/inc/backend/class-wcos-merge-admin-controller.php' \
-            'wc-order-splitter/css/p2-merge-admin.css' \
-            'wc-order-splitter/js/p2-merge-admin.js' \
-            'wc-order-splitter/inc/domain/class-wcos-split-strategy-gates.php' \
-            'wc-order-splitter/inc/domain/class-wcos-category-split-planner.php' \
-            'wc-order-splitter/inc/domain/class-wcos-stock-status-split-planner.php' \
-            'wc-order-splitter/inc/domain/class-wcos-split-strategy-woocommerce-adapter.php' \
-            'wc-order-splitter/inc/domain/class-wcos-multi-order-lease.php' \
-            'wc-order-splitter/inc/domain/class-wcos-merge-plan.php' \
-            'wc-order-splitter/inc/domain/class-wcos-merge-context-signature.php' \
-            'wc-order-splitter/inc/domain/class-wcos-merge-journal-context.php' \
-            'wc-order-splitter/inc/domain/class-wcos-merge-participation.php' \
-            'wc-order-splitter/inc/domain/class-wcos-merge-recovery-snapshot.php' \
-            'wc-order-splitter/inc/domain/class-wcos-merge-recovery-state-graph.php' \
-            'wc-order-splitter/inc/domain/class-wcos-merge-commit-guard.php' \
-            'wc-order-splitter/inc/domain/class-wcos-merge-compensator.php' \
-            'wc-order-splitter/inc/domain/class-wcos-merge-preflight.php' \
-            'wc-order-splitter/inc/domain/class-wcos-merge-retirement-policy.php' \
-            'wc-order-splitter/inc/domain/class-wcos-merge-order-service.php' \
-            'wc-order-splitter/inc/domain/class-wcos-merge-woocommerce-adapter.php' \
-            'wc-order-splitter/css/p2-split-strategy-admin.css' \
-            'wc-order-splitter/js/p2-split-strategy-admin.js'; do
-            if ! unzip -Z1 wc-order-splitter.zip | grep -Fxq "$required_archive_path"; then
-              echo "Required strategy runtime asset is missing from ZIP: $required_archive_path" >&2
-              exit 1
-            fi
-          done
 
           sha256sum wc-order-splitter.zip > wc-order-splitter.zip.sha256
           cat wc-order-splitter.zip.sha256
 
-      - name: Upload package artifact
+      - name: Upload explicitly requested package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wc-order-splitter-${{ github.event.workflow_run.head_sha || github.sha }}
+          name: wc-order-splitter-${{ github.sha }}
           path: |
             wc-order-splitter.zip
             wc-order-splitter.zip.sha256

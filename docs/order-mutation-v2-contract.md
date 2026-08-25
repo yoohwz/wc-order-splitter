@@ -2,7 +2,7 @@
 
 ## Status
 
-The legacy Split, Duplicate, Merge, Return, and Bulk Return handlers remain fail-closed in version 1.4.12. `inc/domain/` is the single replacement mutation-engine foundation. Foundation services and integration scaffolding do not register production mutation endpoints, and `WCOS_Feature_Gates` remains hard-off for every workflow.
+The legacy Split, Duplicate, Merge, Return, and Bulk Return handlers remain fail-closed. `inc/domain/` is the single replacement mutation-engine source of truth, and accepted production entrypoints must route through its gateway and adapters. Mutable workflow and strategy gate state is read from `inc/domain/class-wcos-feature-gates.php` and `inc/domain/class-wcos-split-strategy-gates.php` at the exact source SHA; this document does not maintain a duplicate gate snapshot.
 
 Any duplicate implementation under `inc/mutation-v2/` is superseded and must not be introduced as a second runtime source of truth.
 
@@ -27,9 +27,9 @@ Every mutation adapter must prove the following before its UI or endpoint can be
 15. Email, webhook, stock, analytics, and third-party side effects are scoped to the committed operation rather than global request filters.
 16. Persisted invariants are checked after database re-read, not only against in-memory objects.
 
-## Current charge policy for the first replacement workflow
+## Charge policy established for manual quantity Split
 
-The first workflow eligible for later reintroduction is manual quantity split. The foundation may model one or more child allocations, but a production release must explicitly define the supported product surface and its tests.
+The initial replacement workflow established the following manual quantity Split policy. Any production release must explicitly define the supported product surface and its tests.
 
 Current narrow policy:
 

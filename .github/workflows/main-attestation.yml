@@ -1,0 +1,72 @@
+name: Main attestation
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: main-attestation-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  attest:
+    name: Exact main tree attestation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact main revision
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Record exact commit and tree identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          echo "main_commit_sha=$(git rev-parse HEAD)"
+          echo "main_tree_sha=$(git rev-parse HEAD^{tree})"
+          echo "main_parent_shas=$(git show -s --format=%P HEAD)"
+
+      - name: Setup representative PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      - name: Verify code-owned gates and gateway smoke contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'return WCOS_Feature_Gates::any_enabled();' inc/cores/safety.php
+          grep -Fq 'self::SPLIT => true' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::DUPLICATE => true' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::MERGE => true' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::RETURN_ORDER => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::MANUAL_QUANTITY => true' inc/domain/class-wcos-split-strategy-gates.php
+          grep -Fq 'self::CATEGORY => true' inc/domain/class-wcos-split-strategy-gates.php
+          grep -Fq 'self::STOCK_STATUS => true' inc/domain/class-wcos-split-strategy-gates.php
+          grep -Fq 'WCOS_Feature_Gates::assert_enabled' inc/domain/class-wcos-mutation-gateway.php
+          grep -Fq 'WCOS_Order_Mutation_Authorizer::assert_workflow' inc/domain/class-wcos-mutation-gateway.php
+          test ! -d inc/mutation-v2
+
+      - name: Run representative static and unit contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            php -l "$file" >/dev/null
+          done < <(find . -type f -name '*.php' -print0)
+          php tests/unit/run.php
+
+      - name: Validate distributable tree without archive creation
+        shell: bash
+        run: .github/scripts/validate-distribution-contract.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/distribution/wc-order-splitter"
+
+      - name: Verify workflow topology contract
+        shell: bash
+        run: tests/ci/workflow-contract.sh
