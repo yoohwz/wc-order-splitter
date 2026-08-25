@@ -128,7 +128,7 @@ function wcos_return_service_stock_matrix_case($case) {
 		$parent->set_manage_stock(true); $parent->set_stock_quantity('31.5'); $parent->set_backorders('yes'); $parent->save();
 		$product = new WC_Product_Variation(); $product->set_parent_id($parent->get_id());
 		$product->set_regular_price('7.25'); $product->set_price('7.25'); $product->set_manage_stock(false); $product->save();
-		$extra_product_ids[] = $parent->get_id(); $quantity = '1.500000'; $split_quantity = '0.500000'; $reduced = '1.500000';
+		$extra_product_ids[] = $parent->get_id(); $quantity = '2.000000'; $split_quantity = '1.000000'; $reduced = '1.500000';
 	} else {
 		$product = new WC_Product_Simple(); $product->set_name('WCOS Return service ' . $case);
 		$product->set_regular_price('8.00'); $product->set_price('8.00');
