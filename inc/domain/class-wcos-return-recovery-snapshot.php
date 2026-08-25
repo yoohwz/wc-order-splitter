@@ -217,10 +217,11 @@ final class WCOS_Return_Recovery_Snapshot {
 	}
 
 	public static function assert_single_operational_owner(array $snapshot, WC_Order $child, WC_Order $original, array $destination_item_ids) {
-		$original_owns_stock = false;
+		$added_original_item_ids = array();
 		foreach ($snapshot['destinations'] as $source_item_id => $destination) {
 			$child_item = $child->get_item($destination['child_item_id']);
 			$destination_id = isset($destination_item_ids[$source_item_id]) ? absint($destination_item_ids[$source_item_id]) : absint($destination['before_item_id']);
+			if (!absint($destination['before_item_id']) && $destination_id) { $added_original_item_ids[] = $destination_id; }
 			$original_item = $original->get_item($destination_id);
 			if (!$child_item instanceof WC_Order_Item_Product || !$original_item instanceof WC_Order_Item_Product
 				|| null !== self::nullable_reduced($child_item->get_meta('_reduced_stock', true))) {
@@ -239,17 +240,28 @@ final class WCOS_Return_Recovery_Snapshot {
 				}
 			} elseif (null === $actual || $expected_units !== WCOS_Decimal::to_units($actual, 6)) {
 				throw new RuntimeException(__('Return did not conserve exact line-level stock ownership.', 'wc-order-splitter'));
-			} else {
-				$original_owns_stock = true;
 			}
 		}
-		if ((bool) $child->get_data_store()->get_stock_reduced($child->get_id())) {
+		self::assert_unaffected($snapshot['original'], $original, self::ids($added_original_item_ids));
+		if (self::has_active_operational_stock_ownership($child)
+			|| (bool) $child->get_data_store()->get_stock_reduced($child->get_id())) {
 			throw new RuntimeException(__('The retired Return child still owns order-level reduced-stock state.', 'wc-order-splitter'));
 		}
+		$original_owns_stock = self::has_active_operational_stock_ownership($original);
 		if ($original_owns_stock !== (bool) $original->get_data_store()->get_stock_reduced($original->get_id())) {
 			throw new RuntimeException(__('Return order-level stock ownership does not match its line-level ownership.', 'wc-order-splitter'));
 		}
 		return true;
+	}
+
+	/** Complete active order ownership, including lines unrelated to this Return plan. */
+	public static function has_active_operational_stock_ownership(WC_Order $order) {
+		foreach ($order->get_items('line_item') as $item) {
+			if (!$item instanceof WC_Order_Item_Product) { continue; }
+			$reduced = self::nullable_reduced($item->get_meta('_reduced_stock', true));
+			if (null !== $reduced && 0 !== WCOS_Decimal::to_units($reduced, 6)) { return true; }
+		}
+		return false;
 	}
 
 	public static function assert_success_contract(array $snapshot, WC_Order $child, WC_Order $original) {

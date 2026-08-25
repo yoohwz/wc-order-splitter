@@ -138,7 +138,6 @@ function wcos_return_recovery_execute(WC_Order $child, $operation_id, $stop_afte
 		wcos_return_recovery_event('after_child_ownership_neutralized', $child_neutralized, $original, $operation_id);
 
 		$original = wc_get_order($original->get_id());
-		$owns_stock = false;
 		wcos_return_recovery_event('before_original_ownership_activation', $child_neutralized, $original, $operation_id);
 		foreach ($plan['lines'] as $source_item_id => $line) {
 			$destination = $original->get_item($destination_ids[$source_item_id]);
@@ -147,11 +146,14 @@ function wcos_return_recovery_execute(WC_Order $child, $operation_id, $stop_afte
 			$child_reduced = null === $line['reduced_stock'] ? '0.000000' : $line['reduced_stock'];
 			$combined = wcos_return_recovery_add($before, $child_reduced, 6);
 			$destination->delete_meta_data('_reduced_stock');
-			if (0 !== WCOS_Decimal::to_units($combined, 6)) { $destination->add_meta_data('_reduced_stock', $combined, true); $owns_stock = true; }
+			if (0 !== WCOS_Decimal::to_units($combined, 6)) { $destination->add_meta_data('_reduced_stock', $combined, true); }
 			$destination->save();
 			wcos_return_recovery_event('after_original_ownership_line_before_flag', $child_neutralized, wc_get_order($original->get_id()), $operation_id);
 		}
-		$original->get_data_store()->set_stock_reduced($original->get_id(), $owns_stock);
+		$original->get_data_store()->set_stock_reduced(
+			$original->get_id(),
+			WCOS_Return_Recovery_Snapshot::has_active_operational_stock_ownership(wc_get_order($original->get_id()))
+		);
 		$original_activated = wc_get_order($original->get_id());
 		wcos_return_recovery_assert(WCOS_Operation_Journal::checkpoint($child, $operation_id, 'return_original_stock_activated', array(
 			'return_recovery_state' => WCOS_Return_Recovery_State_Graph::ORIGINAL_OWNERSHIP_ACTIVATED,
@@ -525,6 +527,96 @@ function wcos_return_recovery_stock_case($label, WC_Product $product, $reduced_s
 	return array('case' => $label, 'physical_stock_unchanged' => true, 'operational_owner_conserved' => true);
 }
 
+function wcos_return_recovery_mixed_stock_ownership_case($user_id) {
+	$retained = new WC_Product_Simple();
+	$retained->set_name('WCOS Return retained stock owner'); $retained->set_regular_price('7.00');
+	$retained->set_manage_stock(true); $retained->set_stock_quantity(20); $retained->save();
+	$returned = new WC_Product_Simple();
+	$returned->set_name('WCOS Return zero-marker line'); $returned->set_regular_price('5.00');
+	$returned->set_manage_stock(false); $returned->set_stock_status('outofstock'); $returned->save();
+	$source = wc_create_order(); $source->set_status('pending'); $source->set_currency('USD');
+	$retained_item_id = $source->add_product($retained, 2);
+	$returned_item_id = $source->add_product($returned, 1);
+	$source->calculate_totals(false); $source->save();
+	$retained_item = $source->get_item($retained_item_id);
+	$retained_item->add_meta_data('_reduced_stock', '2.000000', true); $retained_item->save();
+	$source->get_data_store()->set_stock_reduced($source->get_id(), true);
+
+	$adapter = new WCOS_Split_Strategy_WooCommerce_Adapter();
+	$review = $adapter->review(wc_get_order($source->get_id()), WCOS_Split_Strategy_Gates::STOCK_STATUS);
+	wcos_return_recovery_assert(!empty($review['supported']), 'Mixed-ownership Stock-status review failed.');
+	$confirmation = WCOS_Split_Strategy_Confirmation_Store::create(
+		wc_get_order($source->get_id()), WCOS_Split_Strategy_Gates::STOCK_STATUS, $review, 'stock-instock', $user_id
+	);
+	$verified = WCOS_Split_Strategy_Confirmation_Store::verify(
+		wc_get_order($source->get_id()), $confirmation['operation_id'], $confirmation['confirmation_token'], $user_id
+	);
+	$children = $adapter->split_confirmed(
+		wc_get_order($source->get_id()), WCOS_Split_Strategy_Gates::STOCK_STATUS,
+		$verified['plan'], $verified['operation_id'], $verified['price_precision'], $verified
+	);
+	$split_operation = $verified['operation_id'];
+	wcos_return_recovery_assert(1 === count($children), 'Mixed-ownership Return Split did not create one child.');
+	$child = wc_get_order($children[0]->get_id()); $original = wc_get_order($source->get_id());
+	$retained_before = WCOS_Decimal::normalize($original->get_item($retained_item_id)->get_meta('_reduced_stock', true), 6);
+	wcos_return_recovery_assert('2.000000' === $retained_before, 'Mixed-ownership Split changed the unrelated original marker.');
+	wcos_return_recovery_assert((bool) $original->get_data_store()->get_stock_reduced($original->get_id()), 'Mixed-ownership original lost its active stock flag before Return.');
+
+	/* Exercise safe compensation before any Return write, then replay a fresh Return to completion. */
+	$report = WCOS_Return_Preflight::assert_supported($child, true);
+	$context = WCOS_Return_Journal_Context::create(
+		$child, $original, $report['return_plan'], $report['lineage_authority'],
+		$report['lineage_authority']['source_evolution_authority']
+	);
+	$compensation_operation = 'return-mixed-compensation-' . wp_generate_uuid4();
+	wcos_return_recovery_assert(WCOS_Operation_Journal::start(
+		$child, $compensation_operation, 'return', $context, $context['return_pair']['pair_fingerprint']
+	), 'Mixed-ownership Return compensation journal could not start.');
+	$record = WCOS_Operation_Journal::get($child, $compensation_operation);
+	$snapshot = $record['context']['return_recovery_snapshot'];
+	wcos_return_recovery_assert(WCOS_Operation_Journal::checkpoint($child, $compensation_operation, 'return_original_staging', array(
+		'return_recovery_state' => WCOS_Return_Recovery_State_Graph::ORIGINAL_STAGING,
+		'return_original_added_item_ids' => array(),
+		'return_child_state_after' => WCOS_Return_Recovery_Snapshot::participant_checkpoint($snapshot, 'child', $child),
+		'return_original_state_after' => WCOS_Return_Recovery_Snapshot::participant_checkpoint($snapshot, 'original', $original),
+	)), 'Mixed-ownership Return compensation checkpoint failed.');
+	wcos_return_recovery_assert(WCOS_Operation_Journal::require_recovery($child, $compensation_operation), 'Mixed-ownership Return compensation did not dispatch.');
+	$child = wc_get_order($child->get_id()); $original = wc_get_order($original->get_id());
+	$compensated = WCOS_Operation_Journal::get($child, $compensation_operation);
+	wcos_return_recovery_assert('compensated' === $compensated['status'], 'Mixed-ownership Return did not compensate.');
+	wcos_return_recovery_assert(
+		$retained_before === WCOS_Decimal::normalize($original->get_item($retained_item_id)->get_meta('_reduced_stock', true), 6)
+		&& (bool) $original->get_data_store()->get_stock_reduced($original->get_id()),
+		'Mixed-ownership compensation changed unrelated original stock ownership.'
+	);
+	WCOS_Operation_Journal::delete($child, $compensation_operation);
+
+	$result = wcos_return_recovery_execute($child, 'return-mixed-' . wp_generate_uuid4());
+	$original = wc_get_order($original->get_id()); $child = wc_get_order($child->get_id());
+	wcos_return_recovery_assert(
+		$retained_before === WCOS_Decimal::normalize($original->get_item($retained_item_id)->get_meta('_reduced_stock', true), 6),
+		'Mixed-ownership Return changed the unrelated original marker.'
+	);
+	wcos_return_recovery_assert((bool) $original->get_data_store()->get_stock_reduced($original->get_id()), 'Mixed-ownership Return cleared the original flag while an unrelated marker remained.');
+	foreach ($result['record']['context']['return_destination_item_ids'] as $destination_item_id) {
+		$destination = $original->get_item($destination_item_id);
+		wcos_return_recovery_assert($destination instanceof WC_Order_Item_Product && '' === $destination->get_meta('_reduced_stock', true), 'Zero-marker Return destination acquired stock ownership.');
+	}
+	$terminal_once = WCOS_Return_Journal_Context::terminal_result_from_record($result['record']);
+	wcos_return_recovery_assert($terminal_once === WCOS_Return_Journal_Context::terminal_result_from_record($result['record']), 'Mixed-ownership Return terminal replay changed.');
+
+	WCOS_Operation_Journal::delete($child, $result['record']['operation_id']);
+	WCOS_Operation_Journal::delete($original, $split_operation);
+	WCOS_Split_Strategy_Confirmation_Store::delete($split_operation);
+	$child->delete(true); $original->delete(true);
+	wp_delete_post($retained->get_id(), true); wp_delete_post($returned->get_id(), true);
+	return array(
+		'case' => 'mixed_unrelated_original_owner_returned_zero_marker',
+		'unrelated_marker_preserved' => true, 'original_flag_preserved' => true,
+		'compensation_restored' => true, 'terminal_replay_stable' => true,
+	);
+}
+
 function wcos_return_recovery_strategy_case($strategy, $user_id) {
 	$keep = new WC_Product_Simple(); $keep->set_name('WCOS Return recovery keep ' . $strategy); $keep->set_regular_price('8.00'); $keep->set_manage_stock(true); $keep->set_stock_quantity(30); $keep->save();
 	$move = new WC_Product_Simple(); $move->set_name('WCOS Return recovery move ' . $strategy); $move->set_regular_price('6.00'); $move->set_manage_stock(true); $move->set_stock_quantity(20); $move->save();
@@ -595,6 +687,7 @@ $variation = new WC_Product_Variation(); $variation->set_parent_id($variation_pa
 $stock_matrix = array(
 	wcos_return_recovery_stock_case('parent_managed_variation', $variation, '2.000000'),
 	wcos_return_recovery_stock_case('unmanaged', $unmanaged, null),
+	wcos_return_recovery_mixed_stock_ownership_case($user_id),
 );
 $variation->delete(true); $variation_parent->delete(true); $unmanaged->delete(true);
 $product = new WC_Product_Simple();

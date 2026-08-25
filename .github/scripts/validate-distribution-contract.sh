@@ -132,6 +132,13 @@ for required_path in \
   'inc/domain/class-wcos-return-plan.php' \
   'inc/domain/class-wcos-return-lineage-authority.php' \
   'inc/domain/class-wcos-return-preflight.php' \
+  'inc/domain/class-wcos-return-retirement-policy.php' \
+  'inc/domain/class-wcos-return-source-evolution-authority.php' \
+  'inc/domain/class-wcos-return-journal-context.php' \
+  'inc/domain/class-wcos-return-recovery-snapshot.php' \
+  'inc/domain/class-wcos-return-recovery-state-graph.php' \
+  'inc/domain/class-wcos-return-commit-guard.php' \
+  'inc/domain/class-wcos-return-compensator.php' \
   'css/p2-split-strategy-admin.css' \
   'js/p2-split-strategy-admin.js'; do
   if test ! -e "$distribution_root/$required_path"; then
