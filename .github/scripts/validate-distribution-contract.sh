@@ -69,7 +69,6 @@ for forbidden_path in \
   'inc/backend/orders-bulk-return.php' \
   'inc/backend/order-split-button.php' \
   'inc/backend/order-return-option.php' \
-  'inc/backend/class-wcos-return-admin-controller.php' \
   'inc/backend/order-duplicate-option.php' \
   'inc/backend/order-merge-option.php' \
   'js/bulk-return-action.js' \
@@ -141,6 +140,9 @@ for required_path in \
   'inc/domain/class-wcos-return-compensator.php' \
   'inc/domain/class-wcos-return-order-service.php' \
   'inc/domain/class-wcos-return-woocommerce-adapter.php' \
+  'inc/backend/class-wcos-return-review-store.php' \
+  'inc/backend/class-wcos-return-confirmation-store.php' \
+  'inc/backend/class-wcos-return-admin-controller.php' \
   'css/p2-split-strategy-admin.css' \
   'js/p2-split-strategy-admin.js'; do
   if test ! -e "$distribution_root/$required_path"; then

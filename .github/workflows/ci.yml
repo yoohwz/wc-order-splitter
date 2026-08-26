@@ -138,7 +138,7 @@ jobs:
             fi
           done
 
-          if grep -R --line-number -E 'new[[:space:]]+WCOS_((Split|Duplicate)_Order_Service|Merge_(Order_Service|WooCommerce_Adapter))' inc/backend inc/cores; then
+          if grep -R --line-number -E 'new[[:space:]]+WCOS_((Split|Duplicate|Return)_Order_Service|Merge_(Order_Service|WooCommerce_Adapter))' inc/backend inc/cores; then
             echo 'A production controller bypasses WCOS_Mutation_Gateway.' >&2
             exit 1
           fi
@@ -186,10 +186,13 @@ jobs:
           grep -Fq 'class-wcos-return-source-evolution-authority.php' inc/cores/script.php
           grep -Fq "'return' === \$type" inc/domain/class-wcos-mutation-recovery-coordinator.php
           grep -Fq 'const APPROVED = self::NON_FORCE_TRASH_ARCHIVE;' inc/domain/class-wcos-return-retirement-policy.php
-          test ! -e inc/backend/class-wcos-return-admin-controller.php
           grep -Fq 'class-wcos-return-order-service.php' inc/cores/script.php
           grep -Fq 'class-wcos-return-woocommerce-adapter.php' inc/cores/script.php
           grep -Fq 'new WCOS_Return_WooCommerce_Adapter' inc/domain/class-wcos-mutation-gateway.php
+          grep -Fq 'class-wcos-return-review-store.php' inc/cores/script.php
+          grep -Fq 'class-wcos-return-confirmation-store.php' inc/cores/script.php
+          grep -Fq 'class-wcos-return-admin-controller.php' inc/cores/script.php
+          grep -Fq 'WCOS_Return_Admin_Controller::bootstrap();' inc/cores/script.php
           test ! -e js/p2-return-admin.js
           test ! -e css/p2-return-admin.css
           grep -Fq "const SEARCH_ACTION = 'wcos_merge_target_search';" inc/backend/class-wcos-merge-admin-controller.php
@@ -315,6 +318,14 @@ jobs:
             ) as $disabled_workflow) {
               if (WCOS_Feature_Gates::enabled($disabled_workflow)) { exit(1); }
             }
+            if (null !== WCOS_Return_Admin_Controller::bootstrap()) { exit(1); }
+            foreach (array(
+              WCOS_Return_Admin_Controller::REVIEW_ACTION,
+              WCOS_Return_Admin_Controller::CONFIRM_ACTION,
+              WCOS_Return_Admin_Controller::EXECUTE_ACTION
+            ) as $return_action) {
+              if (false !== has_action("wp_ajax_" . $return_action)) { exit(1); }
+            }
             if (!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::MANUAL_QUANTITY)) { exit(1); }
             if (!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY)) { exit(1); }
             if (!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS)) { exit(1); }
@@ -400,6 +411,9 @@ jobs:
 
       - name: Verify hard-off Return service and WooCommerce adapter contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/return-service-adapter-smoke.php
+
+      - name: Verify hard-off Return Review Confirm Execute authority
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/return-review-confirm-authority-smoke.php
 
       - name: Verify Merge domain foundation contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-domain-foundation-smoke.php
@@ -559,6 +573,55 @@ jobs:
             if (WCOS_Split_Strategy_Gates::CATEGORY !== $record["strategy"]) { exit(1); }
             WCOS_Split_Strategy_Confirmation_Store::delete("'"$operation_id"'");
             echo "strategy-confirm-race-authority-ok\n";
+          '
+
+          cleanup_race
+          trap - EXIT
+
+      - name: Verify real concurrent Return Confirm single-consumption authority
+        if: matrix.storage == 'hpos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture='wp-content/plugins/wc-order-splitter/tests/integration/return-confirm-race-fixture.php'
+          worker='wp-content/plugins/wc-order-splitter/tests/integration/return-confirm-race-worker.php'
+          cleanup='wp-content/plugins/wc-order-splitter/tests/integration/return-confirm-race-cleanup.php'
+
+          cleanup_race() {
+            npx wp-env run cli wp eval-file "$cleanup" || true
+          }
+          trap cleanup_race EXIT
+
+          npx wp-env run cli wp eval-file "$fixture"
+          npx wp-env run cli wp eval-file "$worker" worker-a > /tmp/wcos-return-confirm-worker-a.log 2>&1 &
+          worker_a_pid=$!
+          npx wp-env run cli wp eval-file "$worker" worker-b > /tmp/wcos-return-confirm-worker-b.log 2>&1 &
+          worker_b_pid=$!
+          wait "$worker_a_pid"
+          wait "$worker_b_pid"
+
+          cat /tmp/wcos-return-confirm-worker-a.log
+          cat /tmp/wcos-return-confirm-worker-b.log
+          success_count="$(awk '/^CONFIRMED / { count++ } END { print count + 0 }' /tmp/wcos-return-confirm-worker-a.log /tmp/wcos-return-confirm-worker-b.log)"
+          rejected_count="$(awk '/^REJECTED / { count++ } END { print count + 0 }' /tmp/wcos-return-confirm-worker-a.log /tmp/wcos-return-confirm-worker-b.log)"
+          test "$success_count" -eq 1
+          test "$rejected_count" -eq 1
+
+          confirmed_line="$(awk '/^CONFIRMED / { print; exit }' /tmp/wcos-return-confirm-worker-a.log /tmp/wcos-return-confirm-worker-b.log)"
+          operation_id="$(printf '%s\n' "$confirmed_line" | awk '{ print $3 }')"
+          confirmation_token="$(printf '%s\n' "$confirmed_line" | awk '{ print $4 }')"
+          test -n "$operation_id"
+          test -n "$confirmation_token"
+
+          npx wp-env run cli wp eval '
+            $fixture = get_option("wcos_return_confirm_race_fixture", array());
+            $child = isset($fixture["child_id"]) ? wc_get_order(absint($fixture["child_id"])) : false;
+            if (!$child instanceof WC_Order) { exit(1); }
+            if (WCOS_Operation_Journal::get($child, "'"$operation_id"'")) { exit(1); }
+            $record = WCOS_Return_Confirmation_Store::verify($child, "'"$operation_id"'", "'"$confirmation_token"'", absint($fixture["user_id"]));
+            if (!is_array($record) || "confirmation" !== $record["replay_authority"]) { exit(1); }
+            WCOS_Return_Confirmation_Store::delete("'"$operation_id"'");
+            echo "return-confirm-race-authority-ok\n";
           '
 
           cleanup_race
