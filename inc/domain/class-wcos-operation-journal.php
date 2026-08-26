@@ -507,7 +507,8 @@ final class WCOS_Operation_Journal {
         foreach (array(
             'execution_policy', 'fully_moved_item_ids', 'strategy_authority', 'merge_pair',
             'merge_recovery_snapshot', 'merge_recovery_snapshot_fingerprint', 'return_pair',
-            'return_plan', 'return_recovery_snapshot', 'return_recovery_snapshot_fingerprint',
+            'return_plan', 'return_confirmation_required', 'return_confirmation',
+            'return_recovery_snapshot', 'return_recovery_snapshot_fingerprint',
         ) as $field) {
             if (array_key_exists($field, $current_context)) {
                 if (!array_key_exists($field, $replacement_context)

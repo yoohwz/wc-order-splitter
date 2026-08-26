@@ -69,6 +69,7 @@ final class WCOS_Return_Journal_Context {
 			'return_plan' => $plan,
 		);
 		if (!empty($confirmation_authority)) {
+			$context['return_confirmation_required'] = true;
 			$context['return_confirmation'] = self::create_confirmation_handoff($context, $operation_id, $confirmation_authority);
 		}
 		return $context;
@@ -105,6 +106,20 @@ final class WCOS_Return_Journal_Context {
 		}
 		$authority['authority_fingerprint'] = $fingerprint;
 		return $authority;
+	}
+
+	/** Preserve pre-Confirmation journals while failing closed for every journal that declares or carries a handoff. */
+	public static function confirmation_handoff_if_required(array $record) {
+		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
+		$declared = array_key_exists('return_confirmation_required', $context);
+		$stored = array_key_exists('return_confirmation', $context);
+		if (!$declared && !$stored) {
+			return null;
+		}
+		if (($declared && true !== $context['return_confirmation_required']) || !$stored || !is_array($context['return_confirmation'])) {
+			throw new RuntimeException(__('The durable Return journal is missing its required Confirmation handoff.', 'wc-order-splitter'));
+		}
+		return self::confirmation_handoff_from_record($record);
 	}
 
 	public static function assert_confirmation_matches_record(array $record, array $confirmation_authority) {

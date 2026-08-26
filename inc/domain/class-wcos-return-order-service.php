@@ -202,10 +202,11 @@ final class WCOS_Return_Order_Service {
 			throw new RuntimeException(__('This Return operation carries conflicting precision authority.', 'wc-order-splitter'));
 		}
 		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
-		if (!empty($context['return_confirmation']) || !empty($confirmation_authority)) {
+		if (array_key_exists('return_confirmation_required', $context)
+			|| array_key_exists('return_confirmation', $context) || !empty($confirmation_authority)) {
 			try {
 				if (empty($confirmation_authority)) {
-					WCOS_Return_Journal_Context::confirmation_handoff_from_record($record);
+					WCOS_Return_Journal_Context::confirmation_handoff_if_required($record);
 				} else {
 					WCOS_Return_Journal_Context::assert_confirmation_matches_record($record, $confirmation_authority);
 				}

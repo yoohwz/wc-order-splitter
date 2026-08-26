@@ -108,6 +108,12 @@ final class WCOS_Mutation_Recovery_Coordinator {
 				WCOS_Return_Compensator::manual_reconciliation($fresh_child, null, $fresh_record, 'missing_return_peer');
 				return;
 			}
+			try {
+				WCOS_Return_Journal_Context::confirmation_handoff_if_required($fresh_record);
+			} catch (Throwable $throwable) {
+				WCOS_Return_Compensator::manual_reconciliation($fresh_child, $original, $fresh_record, 'corrupt_return_confirmation_authority');
+				return;
+			}
 			$participant_ids = array($pair['child_order_id'], $pair['original_order_id']);
 			$owned = array_filter($participant_ids, static function($order_id) use ($operation_id) {
 				return WCOS_Operation_Lock::is_current_owned_for($order_id, $operation_id);

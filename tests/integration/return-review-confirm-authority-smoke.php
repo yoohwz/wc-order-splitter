@@ -100,6 +100,50 @@ function wcos_return_authority_transient($prefix, $id) {
 	return $prefix . hash('sha256', sanitize_key((string) $id));
 }
 
+function wcos_return_authority_write_journal(WC_Order $child, $operation_id, array $record) {
+	$key = 'wcos_mutation_op_' . hash('sha256', absint($child->get_id()) . '|' . sanitize_key((string) $operation_id));
+	update_option($key, $record, false);
+	wp_cache_delete($key, 'options');
+}
+
+function wcos_return_authority_freeze_recovery(WCOS_Return_Admin_Controller $controller, array $fixture, $operator_id) {
+	$request = wcos_return_authority_request($fixture);
+	$review = $controller->review_request($request);
+	$confirm = $controller->confirm_request(array_merge($request, array(
+		'review_id' => $review['review_id'],
+		'review_token' => $review['review_token'],
+	)));
+	$confirmation = WCOS_Return_Confirmation_Store::verify(
+		wc_get_order($fixture['child_id']),
+		$confirm['operation_id'],
+		$confirm['confirmation_token'],
+		$operator_id
+	);
+	$interrupt = static function($stage) {
+		if ('after_durable_preparation' === $stage) {
+			throw new RuntimeException('deterministic-confirmed-return-recovery');
+		}
+	};
+	remove_action('wcos_mutation_recovery_required', array('WCOS_Mutation_Recovery_Coordinator', 'handle'), 10);
+	add_action('wcos_return_mutation_checkpoint', $interrupt, PHP_INT_MAX, 1);
+	try {
+		(new WCOS_Return_WooCommerce_Adapter())->return_order(
+			wc_get_order($fixture['child_id']),
+			$confirm['operation_id'],
+			$confirmation['price_precision'],
+			WCOS_Return_Confirmation_Store::operation_authority($confirmation)
+		);
+	} catch (Throwable $throwable) {
+		// Expected after the confirmed journal and recovery snapshot are durable, before commercial writes.
+	} finally {
+		remove_action('wcos_return_mutation_checkpoint', $interrupt, PHP_INT_MAX);
+		add_action('wcos_mutation_recovery_required', array('WCOS_Mutation_Recovery_Coordinator', 'handle'), 10, 3);
+	}
+	$journal = WCOS_Operation_Journal::get(wc_get_order($fixture['child_id']), $confirm['operation_id']);
+	wcos_return_authority_assert(is_array($journal) && 'recovery_required' === $journal['status'], 'Confirmed Return fixture did not freeze at recovery_required.');
+	return array($confirm, $confirmation, $journal);
+}
+
 $admins = get_users(array('role' => 'administrator', 'number' => 1, 'fields' => 'ID'));
 wcos_return_authority_assert(!empty($admins), 'Return authority smoke requires an administrator.');
 $operator_id = absint($admins[0]);
@@ -196,9 +240,24 @@ try {
 	wcos_return_authority_assert('completed' === $result['status'], 'Confirmed lower-level Return did not complete.');
 	$journal = WCOS_Operation_Journal::get(wc_get_order($primary['child_id']), $confirm['operation_id']);
 	$handoff = WCOS_Return_Journal_Context::confirmation_handoff_from_record($journal);
+	wcos_return_authority_assert(true === $journal['context']['return_confirmation_required'], 'Confirmed Return journal did not declare mandatory handoff authority.');
 	wcos_return_authority_assert($confirm['operation_id'] === $handoff['operation_id'] && $operator_id === $handoff['operator_user_id'], 'Return journal did not bind exact operation/operator Confirmation authority.');
 	wcos_return_authority_assert($confirmed['pair_fingerprint'] === $handoff['pair_fingerprint'] && $confirmed['plan_fingerprint'] === $handoff['plan_fingerprint'], 'Return journal handoff changed frozen pair/plan authority.');
 	wcos_return_authority_assert(false === strpos(wp_json_encode($journal['context']['return_confirmation']), $confirm['confirmation_token']), 'Return journal stored the raw Confirmation token.');
+	$tampered_handoff = $journal['context']['return_confirmation'];
+	$tampered_handoff['authority_fingerprint'] = hash('sha256', 'immutable-overwrite-probe');
+	wcos_return_authority_assert(
+		false === WCOS_Operation_Journal::checkpoint(wc_get_order($primary['child_id']), $confirm['operation_id'], 'confirmation_overwrite_probe', array('return_confirmation' => $tampered_handoff)),
+		'Return journal accepted a Confirmation handoff overwrite.'
+	);
+	$immutable_method = (new ReflectionClass('WCOS_Operation_Journal'))->getMethod('immutable_fields_match');
+	$immutable_method->setAccessible(true);
+	$removed_handoff = $journal;
+	unset($removed_handoff['context']['return_confirmation']);
+	wcos_return_authority_assert(false === $immutable_method->invoke(null, $journal, $removed_handoff), 'Return journal accepted Confirmation handoff removal.');
+	$removed_marker = $journal;
+	unset($removed_marker['context']['return_confirmation_required']);
+	wcos_return_authority_assert(false === $immutable_method->invoke(null, $journal, $removed_marker), 'Return journal accepted Confirmation requirement removal.');
 
 	WCOS_Return_Confirmation_Store::delete($confirm['operation_id']);
 	$durable = WCOS_Return_Confirmation_Store::verify(wc_get_order($primary['child_id']), $confirm['operation_id'], '', $operator_id);
@@ -219,6 +278,75 @@ try {
 	$quarantined_journal = WCOS_Operation_Journal::get(wc_get_order($primary['child_id']), $confirm['operation_id']);
 	wcos_return_authority_assert($handoff_quarantined && 'manual_reconciliation' === $quarantined_journal['status'], 'Corrupt durable Return Confirmation handoff was not quarantined.');
 	wcos_return_authority_assert($child_before_quarantine === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($primary['child_id'])) && $original_before_quarantine === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($primary['original_id'])), 'Confirmation handoff quarantine changed commercial state.');
+
+	$recovery = wcos_return_authority_fixture('confirmed-recovery-states', 'manual_quantity');
+	$fixtures[] = $recovery; $recovery_index = count($fixtures) - 1;
+	list($recovery_confirm, $recovery_confirmation, $recovery_journal) = wcos_return_authority_freeze_recovery($controller, $recovery, $operator_id);
+	$fixtures[$recovery_index]['operation_ids'][] = $recovery_confirm['operation_id'];
+	wcos_return_authority_assert(true === $recovery_journal['context']['return_confirmation_required'], 'Confirmed recovery journal lost mandatory handoff authority.');
+	WCOS_Return_Confirmation_Store::delete($recovery_confirm['operation_id']);
+	$recovery_closed = false;
+	try {
+		WCOS_Return_Confirmation_Store::verify(wc_get_order($recovery['child_id']), $recovery_confirm['operation_id'], '', $operator_id);
+	} catch (WCOS_Return_Confirmation_Exception $exception) {
+		$recovery_closed = 'operation_closed' === $exception->get_reason();
+	}
+	$recovery_after = WCOS_Operation_Journal::get(wc_get_order($recovery['child_id']), $recovery_confirm['operation_id']);
+	wcos_return_authority_assert($recovery_closed && 'compensated' === $recovery_after['status'], 'Transient-loss confirmed recovery did not deterministically compensate and close.');
+	$compensated_closed = false;
+	try {
+		WCOS_Return_Confirmation_Store::verify(wc_get_order($recovery['child_id']), $recovery_confirm['operation_id'], '', $operator_id);
+	} catch (WCOS_Return_Confirmation_Exception $exception) {
+		$compensated_closed = 'operation_closed' === $exception->get_reason();
+	}
+	wcos_return_authority_assert($compensated_closed, 'Compensated confirmed Return journal remained replayable.');
+	$recovery_child = wc_get_order($recovery['child_id']);
+	wcos_return_authority_assert(
+		WCOS_Operation_Journal::mark_manual_reconciliation($recovery_child, $recovery_confirm['operation_id'], array('reason' => 'confirmed_return_manual_fixture')),
+		'Unable to establish confirmed Return manual-reconciliation authority.'
+	);
+	$manual_closed = false;
+	try {
+		WCOS_Return_Confirmation_Store::verify(wc_get_order($recovery['child_id']), $recovery_confirm['operation_id'], '', $operator_id);
+	} catch (WCOS_Return_Confirmation_Exception $exception) {
+		$manual_closed = 'manual_reconciliation' === $exception->get_reason();
+	}
+	wcos_return_authority_assert($manual_closed, 'Manual-reconciliation confirmed Return journal did not fail closed.');
+	wcos_return_authority_assert(
+		WCOS_Operation_Journal::mark_manual_reconciled(wc_get_order($recovery['child_id']), $recovery_confirm['operation_id'], array('reason' => 'confirmed_return_manual_fixture_closed')),
+		'Unable to close confirmed Return manual-reconciliation authority.'
+	);
+	$manual_reconciled_closed = false;
+	try {
+		WCOS_Return_Confirmation_Store::verify(wc_get_order($recovery['child_id']), $recovery_confirm['operation_id'], '', $operator_id);
+	} catch (WCOS_Return_Confirmation_Exception $exception) {
+		$manual_reconciled_closed = 'operation_closed' === $exception->get_reason();
+	}
+	wcos_return_authority_assert($manual_reconciled_closed, 'Manual-reconciled confirmed Return journal remained replayable.');
+
+	foreach (array('corrupt' => false, 'missing' => true) as $confirmation_fault => $remove_handoff) {
+		$fault = wcos_return_authority_fixture('confirmed-recovery-' . $confirmation_fault, 'manual_quantity');
+		$fixtures[] = $fault; $fault_index = count($fixtures) - 1;
+		list($fault_confirm, $fault_confirmation, $fault_journal) = wcos_return_authority_freeze_recovery($controller, $fault, $operator_id);
+		$fixtures[$fault_index]['operation_ids'][] = $fault_confirm['operation_id'];
+		WCOS_Return_Confirmation_Store::delete($fault_confirm['operation_id']);
+		if ($remove_handoff) {
+			unset($fault_journal['context']['return_confirmation']);
+		} else {
+			$fault_journal['context']['return_confirmation']['authority_fingerprint'] = hash('sha256', 'confirmed-recovery-corruption');
+		}
+		wcos_return_authority_write_journal(wc_get_order($fault['child_id']), $fault_confirm['operation_id'], $fault_journal);
+		$fault_child_before = WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fault['child_id']));
+		$fault_original_before = WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fault['original_id']));
+		WCOS_Mutation_Recovery_Coordinator::handle(wc_get_order($fault['child_id']), $fault_confirm['operation_id'], $fault_journal);
+		$fault_after = WCOS_Operation_Journal::get(wc_get_order($fault['child_id']), $fault_confirm['operation_id']);
+		wcos_return_authority_assert('manual_reconciliation' === $fault_after['status'], 'Confirmed recovery did not quarantine ' . $confirmation_fault . ' handoff authority.');
+		wcos_return_authority_assert(
+			$fault_child_before === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fault['child_id']))
+			&& $fault_original_before === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fault['original_id'])),
+			'Confirmed recovery handoff quarantine changed commercial state: ' . $confirmation_fault
+		);
+	}
 
 	$race = wcos_return_authority_fixture('sequential-race', 'manual_quantity');
 	$fixtures[] = $race; $race_index = count($fixtures) - 1;
@@ -333,7 +461,7 @@ try {
 	wcos_return_authority_assert($legacy_rejected, 'Legacy yoos_* metadata minted Return Review authority.');
 	$legacy_child->delete(true); $legacy_original->delete(true); $legacy_product->delete(true);
 
-	echo "return-review-confirm-authority-ok strategies=3 gate_off_attempts=6 durable_handoff=1 cas_single_consume=1\n";
+	echo "return-review-confirm-authority-ok strategies=3 gate_off_attempts=6 durable_handoff=1 immutable_handoff=1 confirmed_states=4 corrupt_recovery=2 cas_single_consume=1\n";
 } finally {
 	foreach (array_reverse($fixtures) as $fixture) {
 		try { wcos_return_authority_cleanup($fixture); } catch (Throwable $throwable) {}

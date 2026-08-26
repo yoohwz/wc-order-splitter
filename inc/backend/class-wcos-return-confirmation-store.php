@@ -157,6 +157,42 @@ final class WCOS_Return_Confirmation_Store {
 		} catch (Throwable $throwable) {
 			throw new WCOS_Return_Confirmation_Exception('owner_mismatch', __('The operator is no longer authorized for this durable Return pair.', 'wc-order-splitter'));
 		}
+		$status = sanitize_key(isset($journal['status']) ? (string) $journal['status'] : '');
+		$recoverable = array('recovery_required', 'recovering', 'started', 'committed', 'failed', 'compensating');
+		if (in_array($status, $recoverable, true)) {
+			WCOS_Operation_Journal::require_recovery($child, $operation_id, array('reason' => 'return_confirmation_replay'));
+			$child = wc_get_order($child->get_id());
+			$journal = $child instanceof WC_Order ? WCOS_Operation_Journal::get($child, $operation_id) : null;
+			if (!is_array($journal)) {
+				throw new WCOS_Return_Confirmation_Exception('journal_mismatch', __('The authoritative Return journal disappeared during recovery dispatch.', 'wc-order-splitter'));
+			}
+			try {
+				$reloaded = WCOS_Return_Journal_Context::confirmation_handoff_from_record($journal);
+			} catch (Throwable $throwable) {
+				throw new WCOS_Return_Confirmation_Exception('journal_mismatch', __('The reloaded durable Return Confirmation authority is invalid.', 'wc-order-splitter'));
+			}
+			if ($confirmed !== $reloaded) {
+				throw new WCOS_Return_Confirmation_Exception('journal_mismatch', __('The durable Return Confirmation authority changed during recovery dispatch.', 'wc-order-splitter'));
+			}
+			$status = sanitize_key(isset($journal['status']) ? (string) $journal['status'] : '');
+		}
+		if ('manual_reconciliation' === $status) {
+			throw new WCOS_Return_Confirmation_Exception('manual_reconciliation', __('This Return operation requires manual reconciliation.', 'wc-order-splitter'));
+		}
+		if (in_array($status, array('compensated', 'manual_reconciled'), true)) {
+			throw new WCOS_Return_Confirmation_Exception('operation_closed', __('This Return operation is closed and cannot be replayed.', 'wc-order-splitter'));
+		}
+		if ('completed' === $status) {
+			try {
+				$terminal_result = WCOS_Return_Journal_Context::terminal_result_from_record($journal);
+			} catch (Throwable $throwable) {
+				throw new WCOS_Return_Confirmation_Exception('journal_mismatch', __('The durable Return terminal result failed authority verification.', 'wc-order-splitter'));
+			}
+		} elseif (in_array($status, $recoverable, true)) {
+			$terminal_result = array();
+		} else {
+			throw new WCOS_Return_Confirmation_Exception('journal_mismatch', __('The durable Return journal has an unsupported state.', 'wc-order-splitter'));
+		}
 		$context = isset($journal['context']) && is_array($journal['context']) ? $journal['context'] : array();
 		$record = array_merge($confirmed, array(
 			'schema_version' => self::SCHEMA_VERSION,
@@ -164,6 +200,10 @@ final class WCOS_Return_Confirmation_Store {
 			'plan' => isset($context['return_plan']) && is_array($context['return_plan']) ? $context['return_plan'] : array(),
 			'pair_authority' => isset($context['return_pair']['authority']) && is_array($context['return_pair']['authority']) ? $context['return_pair']['authority'] : array(),
 			'replay_authority' => 'journal',
+			'journal_status' => $status,
+			'terminal_result' => $terminal_result,
+			'recovery_state' => 'completed' === $status ? 'terminal' : 'recovery_pending',
+			'retryable' => 'completed' !== $status,
 		));
 		self::assert_complete($record);
 		return $record;
