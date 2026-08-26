@@ -8,7 +8,7 @@ final class WCOS_Return_Order_Service {
 	const TYPE = 'return';
 	const POLICY_VERSION = 1;
 
-	public function return_order(WC_Order $child, $operation_id, $precision) {
+	public function return_order(WC_Order $child, $operation_id, $precision, array $confirmation_authority = array()) {
 		$operation_id = sanitize_key((string) $operation_id);
 		$child_id = absint($child->get_id());
 		$precision = WCOS_Price_Precision_Scope::validate($precision);
@@ -18,7 +18,7 @@ final class WCOS_Return_Order_Service {
 
 		$existing = WCOS_Operation_Journal::get($child, $operation_id);
 		if (is_array($existing)) {
-			return $this->replay_existing($child_id, $operation_id, $precision, $existing);
+			return $this->replay_existing($child_id, $operation_id, $precision, $existing, $confirmation_authority);
 		}
 
 		$report = WCOS_Return_Preflight::assert_supported($child, true);
@@ -42,7 +42,7 @@ final class WCOS_Return_Order_Service {
 			$original = $this->load_order($original_id, 'original');
 			$existing = WCOS_Operation_Journal::get($child, $operation_id);
 			if (is_array($existing)) {
-				return $this->replay_existing($child_id, $operation_id, $precision, $existing);
+				return $this->replay_existing($child_id, $operation_id, $precision, $existing, $confirmation_authority);
 			}
 			$lease->assert_owned();
 			$locked_report = WCOS_Return_Preflight::assert_supported($child, true);
@@ -59,7 +59,9 @@ final class WCOS_Return_Order_Service {
 				$original,
 				$plan,
 				$lineage,
-				$lineage['source_evolution_authority']
+				$lineage['source_evolution_authority'],
+				$operation_id,
+				$confirmation_authority
 			);
 			$fingerprint = (string) $context['return_pair']['pair_fingerprint'];
 
@@ -191,13 +193,22 @@ final class WCOS_Return_Order_Service {
 		}
 	}
 
-	private function replay_existing($child_id, $operation_id, $precision, array $record) {
+	private function replay_existing($child_id, $operation_id, $precision, array $record, array $confirmation_authority = array()) {
 		$pair = WCOS_Return_Journal_Context::pair_from_record($record);
 		if (!is_array($pair) || (int) $pair['child_order_id'] !== (int) $child_id) {
 			$this->recover_invalid_replay_authority($child_id, $operation_id, $record);
 		}
 		if ((int) $pair['price_precision'] !== (int) $precision) {
 			throw new RuntimeException(__('This Return operation carries conflicting precision authority.', 'wc-order-splitter'));
+		}
+		try {
+			WCOS_Return_Journal_Context::confirmation_handoff_if_required($record);
+			if (!empty($confirmation_authority)) {
+				WCOS_Return_Journal_Context::assert_confirmation_matches_record($record, $confirmation_authority);
+			}
+		} catch (Throwable $throwable) {
+			$this->quarantine_replay_authority($child_id, $operation_id, 'return_confirmation_replay_integrity_failed');
+			throw new RuntimeException(__('The Return pair requires manual reconciliation.', 'wc-order-splitter'), 0, $throwable);
 		}
 		$status = sanitize_key(isset($record['status']) ? (string) $record['status'] : '');
 		if ('completed' !== $status) {
@@ -220,7 +231,7 @@ final class WCOS_Return_Order_Service {
 		$child = $this->load_order($child_id, 'child');
 		$status = sanitize_key(isset($record['status']) ? (string) $record['status'] : '');
 		if ('completed' === $status) {
-			$this->quarantine_completed_replay($child_id, $operation_id, 'invalid_completed_return_pair_authority');
+			$this->quarantine_replay_authority($child_id, $operation_id, 'invalid_completed_return_pair_authority');
 			$status = 'manual_reconciliation';
 		} elseif (!in_array($status, array('compensated', 'manual_reconciliation', 'manual_reconciled'), true)) {
 			WCOS_Operation_Journal::require_recovery($child, $operation_id, array('reason' => 'invalid_return_replay_authority'));
@@ -245,24 +256,24 @@ final class WCOS_Return_Order_Service {
 			return WCOS_Return_Journal_Context::terminal_result_from_record($record);
 		} catch (Throwable $throwable) {
 			if (is_array($record) && 'completed' === sanitize_key(isset($record['status']) ? (string) $record['status'] : '')) {
-				$this->quarantine_completed_replay($child_id, $operation_id, 'completed_return_replay_integrity_failed');
+				$this->quarantine_replay_authority($child_id, $operation_id, 'completed_return_replay_integrity_failed');
 				throw new RuntimeException(__('The Return pair requires manual reconciliation.', 'wc-order-splitter'), 0, $throwable);
 			}
 			throw $throwable;
 		}
 	}
 
-	private function quarantine_completed_replay($child_id, $operation_id, $reason) {
+	private function quarantine_replay_authority($child_id, $operation_id, $reason) {
 		$child = $this->load_order($child_id, 'child');
 		$record = WCOS_Operation_Journal::get($child, $operation_id);
 		if (!is_array($record)) {
-			throw new RuntimeException(__('Completed Return authority disappeared before reconciliation quarantine.', 'wc-order-splitter'));
+			throw new RuntimeException(__('Return authority disappeared before reconciliation quarantine.', 'wc-order-splitter'));
 		}
 		$pair = WCOS_Return_Journal_Context::pair_from_record($record);
 		$original = is_array($pair) ? wc_get_order($pair['original_order_id']) : null;
 		if (!$original instanceof WC_Order || 'shop_order' !== $original->get_type()) { $original = null; }
 		if ('manual_reconciliation' !== WCOS_Return_Compensator::manual_reconciliation($child, $original, $record, $reason)) {
-			throw new RuntimeException(__('Completed Return authority could not be quarantined.', 'wc-order-splitter'));
+			throw new RuntimeException(__('Return authority could not be quarantined.', 'wc-order-splitter'));
 		}
 	}
 

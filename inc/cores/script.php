@@ -109,8 +109,13 @@ class WC_Order_Splitter_Script {
 
 		include_once $root . 'backend/class-wcos-merge-review-store.php';
 		include_once $root . 'backend/class-wcos-merge-confirmation-store.php';
-		include_once $root . 'backend/class-wcos-merge-admin-controller.php';
-		WCOS_Merge_Admin_Controller::bootstrap();
+			include_once $root . 'backend/class-wcos-merge-admin-controller.php';
+			WCOS_Merge_Admin_Controller::bootstrap();
+
+			include_once $root . 'backend/class-wcos-return-review-store.php';
+			include_once $root . 'backend/class-wcos-return-confirmation-store.php';
+			include_once $root . 'backend/class-wcos-return-admin-controller.php';
+			WCOS_Return_Admin_Controller::bootstrap();
 
 		include_once $root . 'backend/settings.php';
 		include_once $root . 'backend/orders.php';
