@@ -94,9 +94,9 @@ The Split request itself must not change physical stock.
 
 The request-local guard proves stock safety only for integrations that participate in WooCommerce stock APIs/hooks or provide equivalent explicit evidence. An extension that mutates product stock directly in the database or raw metadata, bypassing WooCommerce stock hooks, is unsupported by the first production-enabled quantity Split unless a compatibility adapter provides an equivalent fail-closed contract.
 
-## Fractional quantities
+## Manual quantity steps
 
-WooCommerce uses integer stock amounts by default. Fractional transport quantities are rejected unless the active `woocommerce_stock_amount` integration actually preserves fractional values. Preflight exposes whether fractional quantity support is active and the server parser enforces the same policy.
+Manual quantity authority is derived per product line from WooCommerce's purchase step plus the admin edit-step filter. Every submitted quantity and the residual source quantity must be exact multiples of that frozen step. WooCommerce uses integer stock amounts by default, so a fractional step is rejected unless the active `woocommerce_stock_amount` integration also preserves fractional values. A fractional stock integration alone does not authorize the generic `0.000001` step.
 
 ## Review -> confirmation -> execute transport
 
@@ -144,9 +144,9 @@ The production parser is intentionally narrow:
 - maximum request size 64 KiB;
 - positive integer item IDs belonging to the source order;
 - quantities must be decimal strings, never JSON numeric values;
-- maximum six quantity decimals;
+- maximum six quantity decimals and an exact multiple of the reviewed per-line step;
 - no scientific notation;
-- fractional quantities require active fractional WooCommerce quantity support;
+- fractional steps require both WooCommerce line-step authority and active fractional quantity support;
 - aggregate child allocation for every source line must leave a positive residual on the source;
 - numeric overflow is a validation error, not a server error.
 

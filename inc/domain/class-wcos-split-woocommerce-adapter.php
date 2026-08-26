@@ -39,6 +39,14 @@ final class WCOS_Split_WooCommerce_Adapter {
 
             $this->assert_verified_confirmation_source($source, $operation_id);
             $this->assert_supported($source, $precision);
+			$existing_journal = WCOS_Operation_Journal::get($source, $operation_id);
+			if (!is_array($existing_journal) && isset($operation_context['manual_quantity_authority'])) {
+				$manual_authority = WCOS_Manual_Split_Quantity_Authority::assert_current(
+					$source,
+					$operation_context['manual_quantity_authority']
+				);
+				WCOS_Manual_Split_Quantity_Authority::assert_plan($plan, $manual_authority);
+			}
             $stock_token = WCOS_Stock_Side_Effect_Guard::begin($operation_id);
 
             /*
@@ -115,6 +123,34 @@ final class WCOS_Split_WooCommerce_Adapter {
             WCOS_Price_Precision_Scope::end($precision_token);
         }
     }
+
+	public function manual_preflight(WC_Order $source, $operation_id = '', $confirmed_precision = null) {
+		$source_id = $source->get_id();
+		$precision = WCOS_Price_Precision_Scope::for_operation($source, $operation_id, $confirmed_precision);
+		$precision_token = WCOS_Price_Precision_Scope::begin($precision);
+		try {
+			$source = $source_id ? wc_get_order($source_id) : $source;
+			if (!$source instanceof WC_Order) {
+				throw new RuntimeException(__('The source order is no longer available.', 'wc-order-splitter'));
+			}
+			$report = $this->apply_reconciliation_blocker($source, WCOS_Split_Preflight::report($source, $precision));
+			$report['source_signature'] = WCOS_Order_Contract_Snapshot::source_signature($source);
+			if (empty($report['supported'])) {
+				return $report;
+			}
+			try {
+				$report['manual_quantity_authority'] = WCOS_Manual_Split_Quantity_Authority::create($source);
+			} catch (WCOS_Manual_Split_Quantity_Authority_Exception $exception) {
+				$report['supported'] = false;
+				$report['reason'] = 'manual_quantity_' . $exception->get_reason();
+				$report['message'] = $exception->getMessage();
+				$report['manual_quantity_authority_error'] = $exception->get_report();
+			}
+			return $report;
+		} finally {
+			WCOS_Price_Precision_Scope::end($precision_token);
+		}
+	}
 
     private function assert_verified_confirmation_source(WC_Order $source, $operation_id) {
         $expected = '';

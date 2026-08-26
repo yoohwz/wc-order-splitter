@@ -35,7 +35,7 @@ The first enabled manual quantity Split intentionally remains fail-closed for un
 - unclassified or inconsistently classified private line metadata;
 - direct database/raw-meta stock mutation integrations without an explicit compatibility adapter.
 
-Fractional quantities are accepted only when the active WooCommerce quantity integration preserves fractional stock amounts.
+Manual quantities must align exactly with each line's frozen WooCommerce admin quantity step. Fractional steps are accepted only when the active WooCommerce quantity integration also preserves fractional stock amounts.
 
 ## CI transition
 

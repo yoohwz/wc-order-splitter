@@ -65,25 +65,25 @@ try {
     /* Strict parser rejects ambiguous or unsafe request shapes. */
     wcos_p2_transport_expect_invalid_plan(
         static function() use ($transport_source, $transport_item_id) {
-            WCOS_Split_Request_Parser::parse_json(wp_json_encode(array('new-order' => array($transport_item_id => '1.000000'))), $transport_source);
+            WCOS_Split_Request_Parser::parse_json(wp_json_encode(array('new-order' => array($transport_item_id => '1.000000'))), $transport_source, WCOS_Manual_Split_Quantity_Authority::create($transport_source));
         },
         'Parser accepted a non-canonical child key.'
     );
     wcos_p2_transport_expect_invalid_plan(
         static function() use ($transport_source, $transport_item_id) {
-            WCOS_Split_Request_Parser::parse_json(wp_json_encode(array('child-1' => array($transport_item_id => 1))), $transport_source);
+            WCOS_Split_Request_Parser::parse_json(wp_json_encode(array('child-1' => array($transport_item_id => 1))), $transport_source, WCOS_Manual_Split_Quantity_Authority::create($transport_source));
         },
         'Parser accepted a JSON numeric quantity instead of a decimal string.'
     );
     wcos_p2_transport_expect_invalid_plan(
         static function() use ($transport_source) {
-            WCOS_Split_Request_Parser::parse_json(wp_json_encode(array('child-1' => array('99999999' => '1.000000'))), $transport_source);
+            WCOS_Split_Request_Parser::parse_json(wp_json_encode(array('child-1' => array('99999999' => '1.000000'))), $transport_source, WCOS_Manual_Split_Quantity_Authority::create($transport_source));
         },
         'Parser accepted an order item outside the source.'
     );
     wcos_p2_transport_expect_invalid_plan(
         static function() use ($transport_source, $transport_item_id) {
-            WCOS_Split_Request_Parser::parse_json(wp_json_encode(array('child-1' => array($transport_item_id => '4.000000'))), $transport_source);
+            WCOS_Split_Request_Parser::parse_json(wp_json_encode(array('child-1' => array($transport_item_id => '4.000000'))), $transport_source, WCOS_Manual_Split_Quantity_Authority::create($transport_source));
         },
         'Parser allowed a Split plan to consume the entire source line.'
     );
@@ -92,19 +92,31 @@ try {
             WCOS_Split_Request_Parser::parse_json(wp_json_encode(array(
                 'child-1' => array($transport_item_id => '2.000000'),
                 'child-2' => array($transport_item_id => '2.000000'),
-            )), $transport_source);
+            )), $transport_source, WCOS_Manual_Split_Quantity_Authority::create($transport_source));
         },
         'Parser allowed aggregate multi-child allocation to consume the entire source line.'
     );
     wcos_p2_transport_expect_invalid_plan(
         static function() use ($transport_source, $transport_item_id) {
-            WCOS_Split_Request_Parser::parse_json(wp_json_encode(array('child-1' => array($transport_item_id => '1e0'))), $transport_source);
+            WCOS_Split_Request_Parser::parse_json(wp_json_encode(array('child-1' => array($transport_item_id => '1e0'))), $transport_source, WCOS_Manual_Split_Quantity_Authority::create($transport_source));
         },
         'Parser accepted scientific-notation quantity input.'
     );
+	foreach (array('0', '-1', '0,5', '0.0000001') as $invalid_decimal) {
+		wcos_p2_transport_expect_invalid_plan(
+			static function() use ($transport_source, $transport_item_id, $invalid_decimal) {
+				WCOS_Split_Request_Parser::parse_json(
+					wp_json_encode(array('child-1' => array($transport_item_id => $invalid_decimal))),
+					$transport_source,
+					WCOS_Manual_Split_Quantity_Authority::create($transport_source)
+				);
+			},
+			'Parser accepted invalid canonical decimal input: ' . $invalid_decimal
+		);
+	}
     wcos_p2_transport_expect_invalid_plan(
         static function() use ($transport_source, $transport_item_id) {
-            WCOS_Split_Request_Parser::parse_json(wp_json_encode(array('child-1' => array($transport_item_id => '999999999999999999999999999999999999'))), $transport_source);
+            WCOS_Split_Request_Parser::parse_json(wp_json_encode(array('child-1' => array($transport_item_id => '999999999999999999999999999999999999'))), $transport_source, WCOS_Manual_Split_Quantity_Authority::create($transport_source));
         },
         'Parser allowed numeric overflow to escape validation.'
     );
@@ -113,7 +125,7 @@ try {
     wcos_p2_adapter_assert(!WCOS_Split_Preflight::fractional_quantities_supported(), 'Default WooCommerce fixture unexpectedly supports fractional stock amounts.');
     wcos_p2_transport_expect_invalid_plan(
         static function() use ($transport_source, $transport_item_id) {
-            WCOS_Split_Request_Parser::parse_json(wp_json_encode(array('child-1' => array($transport_item_id => '0.500000'))), $transport_source);
+            WCOS_Split_Request_Parser::parse_json(wp_json_encode(array('child-1' => array($transport_item_id => '0.500000'))), $transport_source, WCOS_Manual_Split_Quantity_Authority::create($transport_source));
         },
         'Parser accepted fractional transport input under integer-only WooCommerce stock amounts.'
     );
@@ -122,12 +134,31 @@ try {
     add_filter('woocommerce_stock_amount', 'floatval');
     try {
         wcos_p2_adapter_assert(WCOS_Split_Preflight::fractional_quantities_supported(), 'Explicit fractional integration was not detected.');
+		wcos_p2_transport_expect_invalid_plan(
+			static function() use ($transport_source, $transport_item_id) {
+				WCOS_Split_Request_Parser::parse_json(
+					wp_json_encode(array('child-1' => array($transport_item_id => '0.500000'))),
+					$transport_source,
+					WCOS_Manual_Split_Quantity_Authority::create($transport_source)
+				);
+			},
+			'Fractional stock support incorrectly authorized a quantity below the default product step.'
+		);
+		$quarter_step = static function($step, $product, $context) use ($transport_product) {
+			return $product instanceof WC_Product && $product->get_id() === $transport_product->get_id() && 'edit' === $context ? '0.25' : $step;
+		};
+		add_filter('woocommerce_quantity_input_step_admin', $quarter_step, 10, 3);
         $fractional_plan = WCOS_Split_Request_Parser::parse_json(
             wp_json_encode(array('child-1' => array($transport_item_id => '0.500000'))),
-            $transport_source
+			$transport_source,
+			WCOS_Manual_Split_Quantity_Authority::create($transport_source)
         );
         wcos_p2_adapter_assert('0.500000' === $fractional_plan['child-1'][$transport_item_id], 'Fractional transport input was not preserved exactly.');
+		remove_filter('woocommerce_quantity_input_step_admin', $quarter_step, 10);
     } finally {
+		if (isset($quarter_step)) {
+			remove_filter('woocommerce_quantity_input_step_admin', $quarter_step, 10);
+		}
         remove_filter('woocommerce_stock_amount', 'floatval');
         add_filter('woocommerce_stock_amount', 'intval');
     }
@@ -267,7 +298,13 @@ try {
         '>Child 10<',
         'scope="row"',
         'change stock directly in the database',
-        'only supports integer Split quantities',
+		'data-step-units="1000000"',
+		'data-maximum-units="3000000"',
+		'max="3"',
+		'step="1"',
+		'inputmode="numeric"',
+		'Step: 1',
+		'Manual allocation steps are enforced per line: 1.',
     ) as $needle) {
         wcos_p2_adapter_assert(false !== strpos($html, $needle), 'Accessible Split dialog is missing required markup: ' . $needle);
     }

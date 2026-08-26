@@ -57,7 +57,7 @@ Manual Quantity Split lets an authorized administrator review and allocate suppo
 
 Category and Stock-status Split move whole product lines according to server-built buckets. One reviewed bucket stays on the source and every other bucket becomes a child order. Category classification rejects catalog state it cannot prove, including deleted products or unrelated leaf-category ambiguity. Stock-status classification uses the reviewed server state. Confirmed plans use frozen server authority for execution.
 
-Historical line taxes are allocated without recalculating current rates. Fractional quantities are accepted only when the active WooCommerce quantity integration actually preserves fractional stock amounts.
+Historical line taxes are allocated without recalculating current rates. Manual allocations must be exact multiples of each line's current WooCommerce admin quantity step. Fractional steps are accepted only when the active WooCommerce quantity integration also preserves fractional stock amounts.
 
 == Duplicate safety policy ==
 

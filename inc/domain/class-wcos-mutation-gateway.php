@@ -17,9 +17,53 @@ final class WCOS_Mutation_Gateway {
 		return (new WCOS_Split_WooCommerce_Adapter())->split($source, $plan, $operation_id, $confirmed_precision);
 	}
 
+	public function split_manual_confirmed(WC_Order $source, array $plan, $operation_id, $confirmed_precision, array $confirmation) {
+		WCOS_Feature_Gates::assert_enabled(WCOS_Feature_Gates::SPLIT);
+		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::SPLIT, $source);
+		$operation_id = sanitize_key((string) $operation_id);
+		$replay_authority = isset($confirmation['replay_authority']) ? sanitize_key((string) $confirmation['replay_authority']) : '';
+		$confirmation_operation_id = isset($confirmation['operation_id']) ? sanitize_key((string) $confirmation['operation_id']) : '';
+		$confirmation_source_id = isset($confirmation['source_order_id']) ? absint($confirmation['source_order_id']) : 0;
+		$confirmation_plan = isset($confirmation['plan']) && is_array($confirmation['plan'])
+			? WCOS_Split_Plan::canonicalize_request($confirmation['plan'])
+			: array();
+		$canonical_plan = WCOS_Split_Plan::canonicalize_request($plan);
+		$precision = WCOS_Price_Precision_Scope::validate($confirmed_precision);
+		$confirmation_precision = WCOS_Price_Precision_Scope::validate(
+			isset($confirmation['price_precision']) ? $confirmation['price_precision'] : null
+		);
+		if (!in_array($replay_authority, array('confirmation', 'journal'), true)
+			|| '' === $operation_id
+			|| $operation_id !== $confirmation_operation_id
+			|| $source->get_id() !== $confirmation_source_id
+			|| $canonical_plan !== $confirmation_plan
+			|| $precision !== $confirmation_precision) {
+			throw new RuntimeException(__('The verified Manual Split confirmation does not match this mutation request.', 'wc-order-splitter'));
+		}
+		$operation_context = array();
+		if (isset($confirmation['manual_quantity_authority']) && is_array($confirmation['manual_quantity_authority'])) {
+			$operation_context['manual_quantity_authority'] = WCOS_Manual_Split_Quantity_Authority::assert_valid($confirmation['manual_quantity_authority']);
+		} else {
+			throw new RuntimeException(__('A verified server Manual Split quantity authority is required.', 'wc-order-splitter'));
+		}
+		return (new WCOS_Split_WooCommerce_Adapter())->split(
+			$source,
+			$canonical_plan,
+			$operation_id,
+			$precision,
+			WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY,
+			$operation_context
+		);
+	}
+
 	public function split_preflight(WC_Order $source, $operation_id = '', $confirmed_precision = null) {
 		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::SPLIT, $source);
 		return (new WCOS_Split_WooCommerce_Adapter())->preflight($source, $operation_id, $confirmed_precision);
+	}
+
+	public function manual_split_preflight(WC_Order $source, $operation_id = '', $confirmed_precision = null) {
+		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::SPLIT, $source);
+		return (new WCOS_Split_WooCommerce_Adapter())->manual_preflight($source, $operation_id, $confirmed_precision);
 	}
 
 	public function split_strategy(WC_Order $source, $strategy, array $plan, $operation_id, $confirmed_precision = null, array $confirmation = array()) {

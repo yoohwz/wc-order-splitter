@@ -518,7 +518,7 @@ final class WCOS_Operation_Journal {
 		}
 
         foreach (array(
-            'execution_policy', 'fully_moved_item_ids', 'strategy_authority', 'merge_pair',
+            'execution_policy', 'fully_moved_item_ids', 'strategy_authority', 'manual_quantity_authority', 'merge_pair',
             'merge_recovery_snapshot', 'merge_recovery_snapshot_fingerprint', 'return_pair',
 			'return_plan',
             'return_recovery_snapshot', 'return_recovery_snapshot_fingerprint',

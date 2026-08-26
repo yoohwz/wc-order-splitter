@@ -58,7 +58,9 @@ try {
             wc_get_order($replay_source_id),
             $replay_plan,
             $replay_operation,
-            $review['preflight']['price_precision']
+			$review['preflight']['price_precision'],
+			WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY,
+			array('manual_quantity_authority' => $review['preflight']['manual_quantity_authority'])
         );
     } catch (RuntimeException $exception) {
         $crashed = false !== strpos($exception->getMessage(), 'Injected durable replay crash.');
@@ -106,7 +108,9 @@ try {
         wc_get_order($replay_source_id),
         $durable['plan'],
         $replay_operation,
-        $durable['price_precision']
+		$durable['price_precision'],
+		WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY,
+		array('manual_quantity_authority' => $durable['manual_quantity_authority'])
     );
     wcos_p2_adapter_assert(1 === count($replayed_children), 'Durable replay did not complete with one child.');
     wcos_p2_adapter_assert($persisted_children[0]->get_id() === $replayed_children[0]->get_id(), 'Durable replay created a duplicate child.');

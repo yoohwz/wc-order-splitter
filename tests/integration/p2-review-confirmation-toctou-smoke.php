@@ -16,7 +16,7 @@ $review_product = wcos_p2_adapter_product('WCOS P2 review confirmation race', '1
 list($review_source, $review_item_id) = wcos_p2_adapter_order($review_product, 5);
 $review_source_id = $review_source->get_id();
 $review_adapter = new WCOS_Split_WooCommerce_Adapter();
-$review_preflight = $review_adapter->preflight($review_source);
+$review_preflight = $review_adapter->manual_preflight($review_source);
 wcos_p2_adapter_assert(!empty($review_preflight['supported']), 'Review-race fixture failed initial preflight.');
 wcos_p2_adapter_assert(
     !empty($review_preflight['source_signature']),
@@ -56,7 +56,7 @@ wcos_p2_adapter_assert(
  * confirmation must still be rejected because the parser source does not equal
  * the source that preflight reviewed.
  */
-$fresh_preflight = $review_adapter->preflight(wc_get_order($review_source_id));
+$fresh_preflight = $review_adapter->manual_preflight(wc_get_order($review_source_id));
 wcos_p2_adapter_assert(!empty($fresh_preflight['supported']), 'Fresh concurrent source was not preflight-compatible for parser-race test.');
 wcos_p2_adapter_assert(
     !hash_equals($review_preflight['source_signature'], $fresh_preflight['source_signature']),

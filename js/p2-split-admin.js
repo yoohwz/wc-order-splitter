@@ -2,6 +2,52 @@
     'use strict';
 
     var strings = window.wcosSplitAdminStrings || {};
+
+	function decimalToUnits(value) {
+		var normalized = String(value == null ? '' : value).trim();
+		var match = /^(?:0|[1-9][0-9]*)(?:\.([0-9]{1,6}))?$/.exec(normalized);
+		if (!match) {
+			throw new Error('invalid_decimal');
+		}
+		var parts = normalized.split('.');
+		var fraction = (parts[1] || '').padEnd(6, '0');
+		return BigInt(parts[0] + fraction);
+	}
+
+	function unitsToDecimal(units) {
+		if (typeof units !== 'bigint' || units < BigInt(0)) {
+			throw new Error('invalid_units');
+		}
+		var digits = units.toString().padStart(7, '0');
+		var whole = digits.slice(0, -6);
+		var fraction = digits.slice(-6).replace(/0+$/, '');
+		return fraction ? whole + '.' + fraction : whole;
+	}
+
+	function rowQuantityAuthority(row) {
+		var sourceRaw = row.getAttribute('data-source-units') || '';
+		var stepRaw = row.getAttribute('data-step-units') || '';
+		var maximumRaw = row.getAttribute('data-maximum-units') || '';
+		if (!/^\d+$/.test(sourceRaw) || !/^\d+$/.test(stepRaw) || !/^\d+$/.test(maximumRaw)) {
+			throw new Error('invalid_row_authority');
+		}
+		var source = BigInt(sourceRaw);
+		var step = BigInt(stepRaw);
+		var maximum = BigInt(maximumRaw);
+		var expectedMaximum = source > step ? source - step : BigInt(0);
+		var splittable = row.getAttribute('data-splittable') === '1';
+		if (source <= BigInt(0) || step <= BigInt(0) || source % step !== BigInt(0) || maximum !== expectedMaximum || splittable !== (maximum >= step)) {
+			throw new Error('invalid_row_authority');
+		}
+		return { source: source, step: step, maximum: maximum, splittable: splittable };
+	}
+
+	if (window.wcosSplitAdminTestHooks && typeof window.wcosSplitAdminTestHooks === 'object') {
+		window.wcosSplitAdminTestHooks.decimalToUnits = decimalToUnits;
+		window.wcosSplitAdminTestHooks.unitsToDecimal = unitsToDecimal;
+		window.wcosSplitAdminTestHooks.rowQuantityAuthority = rowQuantityAuthority;
+	}
+
     var launcher = document.querySelector('.wcos-split-launcher');
     if (!launcher || !window.WCOSBackboneModal) {
         return;
@@ -154,7 +200,6 @@
                 if (!currentCell) {
                     return;
                 }
-                currentCell.textContent = humanDecimal(sourceQuantity);
                 var remaining = document.createElement('span');
                 remaining.className = 'wcos-split-remaining-hint';
                 var label = document.createElement('span');
@@ -276,15 +321,6 @@
             });
         }
 
-        function decimalIsPositiveAndLessThan(value, sourceValue) {
-            if (!/^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,6})?$/.test(value)) {
-                return false;
-            }
-            var valueNumber = Number(value);
-            var sourceNumber = Number(sourceValue);
-            return Number.isFinite(valueNumber) && Number.isFinite(sourceNumber) && valueNumber > 0 && valueNumber < sourceNumber;
-        }
-
         function buildPlan() {
             var plan = {};
             var hasQuantity = false;
@@ -292,8 +328,14 @@
 
             Array.prototype.forEach.call(dialog.querySelectorAll('tbody tr[data-item-id]'), function (row) {
                 var itemId = row.getAttribute('data-item-id');
-                var sourceQuantity = row.getAttribute('data-source-quantity') || '0';
-                var movedForLine = 0;
+				var authority;
+				try {
+					authority = rowQuantityAuthority(row);
+				} catch (error) {
+					invalid = true;
+					return;
+				}
+				var movedForLine = BigInt(0);
 
                 Array.prototype.forEach.call(row.querySelectorAll('.wcos-split-quantity[data-child-key]'), function (quantityInput) {
                     var cell = quantityInput.closest('td');
@@ -301,10 +343,20 @@
                         return;
                     }
                     var quantity = quantityInput.value.trim();
-                    if (quantity === '' || Number(quantity) === 0) {
+					var quantityUnits;
+					if (quantity === '') {
                         return;
                     }
-                    if (!decimalIsPositiveAndLessThan(quantity, sourceQuantity)) {
+					try {
+						quantityUnits = decimalToUnits(quantity);
+					} catch (error) {
+						invalid = true;
+						return;
+					}
+					if (quantityUnits === BigInt(0)) {
+						return;
+					}
+					if (!authority.splittable || quantityUnits % authority.step !== BigInt(0) || quantityUnits > authority.maximum) {
                         invalid = true;
                         return;
                     }
@@ -316,12 +368,12 @@
                     if (!plan[childKey]) {
                         plan[childKey] = {};
                     }
-                    plan[childKey][itemId] = quantity;
-                    movedForLine += Number(quantity);
+					plan[childKey][itemId] = unitsToDecimal(quantityUnits);
+					movedForLine += quantityUnits;
                     hasQuantity = true;
                 });
 
-                if (movedForLine >= Number(sourceQuantity)) {
+				if (movedForLine > authority.maximum) {
                     invalid = true;
                 }
             });
@@ -340,23 +392,38 @@
 
         function updateRemaining() {
             Array.prototype.forEach.call(dialog.querySelectorAll('tbody tr[data-item-id]'), function (row) {
-                var source = Number(row.getAttribute('data-source-quantity') || 0);
-                var moved = 0;
+				var authority;
+				var moved = BigInt(0);
+				var valid = true;
+				try {
+					authority = rowQuantityAuthority(row);
+				} catch (error) {
+					valid = false;
+					authority = { source: BigInt(0), step: BigInt(1) };
+				}
                 Array.prototype.forEach.call(row.querySelectorAll('.wcos-split-quantity[data-child-key]'), function (field) {
                     var cell = field.closest('td');
                     if (cell && cell.hidden) {
                         return;
                     }
-                    var value = Number(field.value || 0);
-                    if (Number.isFinite(value) && value > 0) {
-                        moved += value;
-                    }
+					if (!field.value.trim()) {
+						return;
+					}
+					try {
+						var units = decimalToUnits(field.value);
+						if (units > BigInt(0)) {
+							moved += units;
+							valid = valid && units % authority.step === BigInt(0);
+						}
+					} catch (error) {
+						valid = false;
+					}
                 });
-                var remaining = source - moved;
+				var remaining = authority.source > moved ? authority.source - moved : BigInt(0);
                 var output = row.querySelector('.wcos-split-remaining');
                 if (output) {
-                    output.textContent = humanDecimal(String(Math.max(0, remaining).toFixed(6)));
-                    output.classList.toggle('is-invalid', remaining <= 0);
+					output.textContent = unitsToDecimal(remaining);
+					output.classList.toggle('is-invalid', !valid || remaining <= BigInt(0) || remaining % authority.step !== BigInt(0));
                 }
             });
         }
@@ -414,7 +481,9 @@
             busy = !!nextBusy;
             form.setAttribute('aria-busy', busy ? 'true' : 'false');
             Array.prototype.forEach.call(dialog.querySelectorAll('.wcos-split-quantity'), function (field) {
-                field.disabled = busy || completed || !!state;
+				var row = field.closest('tr[data-item-id]');
+				var permanentlyDisabled = !row || row.getAttribute('data-splittable') !== '1';
+				field.disabled = permanentlyDisabled || busy || completed || !!state;
             });
             reviewButton.disabled = busy || completed || !!state || !canBuildPlan();
             confirmCheckbox.disabled = busy || completed || !state;
