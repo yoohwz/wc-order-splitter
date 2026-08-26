@@ -151,12 +151,10 @@ wp_set_current_user($operator_id);
 $controller = new WCOS_Return_Admin_Controller();
 $fixtures = array();
 
-wcos_return_authority_assert(false === WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER), 'Return production gate drifted on.');
-wcos_return_authority_assert(false === WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Bulk Return production gate drifted on.');
-wcos_return_authority_assert(null === WCOS_Return_Admin_Controller::bootstrap(), 'Hard-off Return bootstrap returned a controller.');
-wcos_return_authority_assert(false === $controller->register_hooks(), 'Hard-off Return controller registered hooks.');
+wcos_return_authority_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER), 'Production Return gate is not enabled.');
+wcos_return_authority_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Bulk Return production gate drifted on.');
 foreach (array(WCOS_Return_Admin_Controller::REVIEW_ACTION, WCOS_Return_Admin_Controller::CONFIRM_ACTION, WCOS_Return_Admin_Controller::EXECUTE_ACTION) as $action) {
-	wcos_return_authority_assert(false === has_action('wp_ajax_' . $action), 'Hard-off Return AJAX hook was registered: ' . $action);
+	wcos_return_authority_assert(false !== has_action('wp_ajax_' . $action), 'Enabled Return AJAX hook is missing: ' . $action);
 }
 
 try {
@@ -165,8 +163,6 @@ try {
 		$fixtures[] = $fixture;
 		$index = count($fixtures) - 1;
 		$request = wcos_return_authority_request($fixture);
-		$child_before = WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fixture['child_id']));
-		$original_before = WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fixture['original_id']));
 		$review = $controller->review_request($request);
 		$fixtures[$index]['review_ids'][] = $review['review_id'];
 		wcos_return_authority_assert($strategy === $review['summary']['strategy'], 'Return Review lost exact Split strategy display authority.');
@@ -189,18 +185,17 @@ try {
 		wcos_return_authority_assert(is_array($confirm_record) && false === strpos(wp_json_encode($confirm_record), $confirm['confirmation_token']), 'Return Confirmation persisted its raw token.');
 		wcos_return_authority_assert(false === strpos(wp_json_encode($confirm_record), '@example.test'), 'Return Confirmation persisted customer PII.');
 
-		for ($attempt = 0; $attempt < 2; $attempt++) {
-			$disabled = false;
-			try {
-				$controller->execute_request(array_merge($request, array('operation_id' => $confirm['operation_id'], 'confirmation_token' => $confirm['confirmation_token'])));
-			} catch (WCOS_Return_Transport_Exception $exception) {
-				$disabled = 'workflow_disabled' === $exception->get_error_code();
-			}
-			wcos_return_authority_assert($disabled, 'Hard-off Return controller Execute did not return workflow_disabled.');
-		}
-		wcos_return_authority_assert(null === WCOS_Operation_Journal::get(wc_get_order($fixture['child_id']), $confirm['operation_id']), 'Hard-off Return controller Execute created a journal.');
-		wcos_return_authority_assert($child_before === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fixture['child_id'])), 'Hard-off Return controller Execute changed child commercial state.');
-		wcos_return_authority_assert($original_before === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fixture['original_id'])), 'Hard-off Return controller Execute changed original commercial state.');
+		$execute_request = array_merge($request, array('operation_id' => $confirm['operation_id'], 'confirmation_token' => $confirm['confirmation_token']));
+		$result = $controller->execute_request($execute_request);
+		wcos_return_authority_assert('completed' === $result['status'], 'Enabled Return controller Execute did not complete: ' . $strategy);
+		$child_after = WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fixture['child_id']));
+		$original_after = WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fixture['original_id']));
+		$replay = $controller->execute_request($execute_request);
+		wcos_return_authority_assert($result === $replay, 'Enabled Return response-loss retry did not replay the exact terminal result.');
+		wcos_return_authority_assert($child_after === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fixture['child_id'])), 'Enabled Return replay repeated child commercial writes.');
+		wcos_return_authority_assert($original_after === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($fixture['original_id'])), 'Enabled Return replay repeated original commercial writes.');
+		$journal = WCOS_Operation_Journal::get(wc_get_order($fixture['child_id']), $confirm['operation_id']);
+		wcos_return_authority_assert(is_array($journal) && 'completed' === $journal['status'], 'Enabled Return controller did not persist completed durable authority.');
 	}
 
 	$primary = wcos_return_authority_fixture('handoff', 'manual_quantity');
@@ -497,7 +492,7 @@ try {
 	wcos_return_authority_assert($legacy_rejected, 'Legacy yoos_* metadata minted Return Review authority.');
 	$legacy_child->delete(true); $legacy_original->delete(true); $legacy_product->delete(true);
 
-	echo "return-review-confirm-authority-ok strategies=3 gate_off_attempts=6 durable_handoff=1 immutable_handoff=1 legacy_addition_rejected=1 confirmed_states=4 corrupt_recovery=3 stripped_confirmed_quarantined=1 cas_single_consume=1\n";
+	echo "return-review-confirm-authority-ok strategies=3 enabled_execute=3 replay=3 durable_handoff=1 immutable_handoff=1 legacy_addition_rejected=1 confirmed_states=4 corrupt_recovery=3 stripped_confirmed_quarantined=1 cas_single_consume=1\n";
 } finally {
 	foreach (array_reverse($fixtures) as $fixture) {
 		try { wcos_return_authority_cleanup($fixture); } catch (Throwable $throwable) {}

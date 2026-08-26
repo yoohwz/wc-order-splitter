@@ -666,7 +666,7 @@ function wcos_return_recovery_strategy_case($strategy, $user_id) {
 	foreach ($terms as $term_id) { wp_delete_term($term_id, 'product_cat'); }
 }
 
-wcos_return_recovery_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER), 'Return production gate changed.');
+wcos_return_recovery_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER), 'Production Return gate is not enabled.');
 wcos_return_recovery_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Bulk Return production gate changed.');
 wcos_return_recovery_assert(class_exists('WCOS_Return_Compensator'), 'Return compensator is not loaded.');
 

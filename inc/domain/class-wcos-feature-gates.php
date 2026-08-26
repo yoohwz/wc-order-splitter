@@ -22,7 +22,7 @@ final class WCOS_Feature_Gates {
 		self::SPLIT => true,
 		self::DUPLICATE => true,
 		self::MERGE => true,
-		self::RETURN_ORDER => false,
+		self::RETURN_ORDER => true,
 		self::BULK_RETURN => false,
 	);
 

@@ -18,14 +18,10 @@ function wcos_p2_duplicate_enabled_expect_transport($code, $http_status, callabl
 wcos_p2_adapter_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::SPLIT), 'Production Split gate was lost while enabling Duplicate.');
 wcos_p2_adapter_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::DUPLICATE), 'Hardened Duplicate is not production-enabled in the enablement contract.');
 wcos_p2_adapter_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE), 'Production Merge gate was lost while validating Duplicate.');
+wcos_p2_adapter_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER), 'Production Return gate was lost while validating Duplicate.');
 wcos_p2_adapter_assert(WCOS_Feature_Gates::any_enabled(), 'Approved production gate set was reported as fully disabled.');
 wcos_p2_adapter_assert(WC_Order_Splitter_Safety_Guard::mutations_enabled(), 'Safety guard did not reflect the approved Duplicate gate.');
-foreach (array(
-	WCOS_Feature_Gates::RETURN_ORDER,
-	WCOS_Feature_Gates::BULK_RETURN,
-) as $disabled_workflow) {
-	wcos_p2_adapter_assert(!WCOS_Feature_Gates::enabled($disabled_workflow), 'An unapproved mutation workflow is enabled alongside Duplicate.');
-}
+wcos_p2_adapter_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Bulk Return is enabled alongside Duplicate.');
 
 $duplicate_enabled_previous_user = get_current_user_id();
 $duplicate_enabled_allowed_statuses = get_option('order_splitter_status_allowed', array('wc-processing'));

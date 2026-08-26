@@ -175,6 +175,67 @@
 		function setBusy(nextBusy) {
 			busy = !!nextBusy;
 			updateControls();
+			if (busy && !focusableElements().length) {
+				focusDialogFallback();
+			}
+		}
+
+		function isUsableFocusTarget(element) {
+			if (!element || element.disabled || 'hidden' === element.getAttribute('type')) {
+				return false;
+			}
+			var tabindex = element.getAttribute('tabindex');
+			if (null !== tabindex && parseInt(tabindex, 10) < 0) {
+				return false;
+			}
+			var current = element;
+			while (current && current !== dialog) {
+				if (current.hidden || 'true' === current.getAttribute('aria-hidden')) {
+					return false;
+				}
+				if (typeof window.getComputedStyle === 'function') {
+					var style = window.getComputedStyle(current);
+					if (style && ('none' === style.display || 'hidden' === style.visibility)) {
+						return false;
+					}
+				}
+				current = current.parentNode;
+			}
+			return current === dialog;
+		}
+
+		function focusableElements() {
+			var selector = 'a[href], area[href], input, select, textarea, button, iframe, object, embed, [contenteditable="true"], [tabindex]';
+			return Array.prototype.filter.call(dialog.querySelectorAll(selector), isUsableFocusTarget);
+		}
+
+		function focusDialogFallback() {
+			var content = dialog.querySelector('.wc-backbone-modal-content');
+			if (content && typeof content.focus === 'function') {
+				content.focus();
+			}
+		}
+
+		function trapFocus(event) {
+			if ('Tab' !== event.key) {
+				return;
+			}
+			var targets = focusableElements();
+			if (!targets.length) {
+				event.preventDefault();
+				focusDialogFallback();
+				return;
+			}
+			var first = targets[0];
+			var last = targets[targets.length - 1];
+			var active = document.activeElement;
+			if (event.shiftKey && (active === first || !dialog.contains(active))) {
+				event.preventDefault();
+				last.focus();
+			} else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+				event.preventDefault();
+				first.focus();
+			}
 		}
 
 		function resetForExplicitReview() {
@@ -207,13 +268,15 @@
 				confirmCheckbox.checked = false;
 				setPhase('reviewed');
 				setStatus(text('reviewReady', 'The child passed server review. Acknowledge the immutable summary to confirm Return.'));
-				confirmCheckbox.focus();
 			}).catch(function (error) {
 				resetForExplicitReview();
 				setStatus('');
 				showError(error.message);
 			}).finally(function () {
 				setBusy(false);
+				if ('reviewed' === phase && reviewAuthority) {
+					confirmCheckbox.focus();
+				}
 			});
 		}
 
@@ -235,7 +298,6 @@
 				retryReady = false;
 				setPhase('confirmed');
 				setStatus(text('confirmReady', 'Return is confirmed. Execute this exact operation when ready.'));
-				executeButton.focus();
 			}).catch(function (error) {
 				reviewAuthority = null;
 				confirmationAuthority = null;
@@ -246,6 +308,9 @@
 				showError(error.message);
 			}).finally(function () {
 				setBusy(false);
+				if ('confirmed' === phase && confirmationAuthority) {
+					executeButton.focus();
+				}
 			});
 		}
 
@@ -345,6 +410,10 @@
 				executeButton.addEventListener('click', executeReturn);
 				confirmCheckbox.addEventListener('change', updateControls);
 				root.addEventListener('keydown', function (event) {
+					if ('Tab' === event.key) {
+						trapFocus(event);
+						return;
+					}
 					if ('Escape' === event.key && busy) {
 						event.preventDefault();
 						event.stopImmediatePropagation();
