@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Order Splitter for WooCommerce
  * Plugin URI: https://github.com/yoohwz/wc-order-splitter
- * Description: Safely split, duplicate, and merge supported WooCommerce orders with server-side review, idempotency, HPOS support, and preserved historical order values.
- * Version: 1.4.15
+ * Description: Safely split, duplicate, merge, and return supported WooCommerce orders with server-side review, idempotency, HPOS support, and preserved historical values.
+ * Version: 1.5.0
  * Author: YoOhw.com
  * Author URI: https://yoohw.com
  * Requires at least: 6.5

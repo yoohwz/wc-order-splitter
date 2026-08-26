@@ -58,4 +58,24 @@ expect_failure 'removed telemetry endpoint entered the distribution tree' \
   "$telemetry_source/.github/scripts/validate-distribution-contract.sh" \
   "$telemetry_source" "$fixture_root/telemetry/distribution/wc-order-splitter"
 
+wrong_version_source=$(make_source_fixture wrong-version)
+sed -i.bak 's/Version: 1.5.0/Version: 1.4.15/' "$wrong_version_source/wc-order-splitter.php"
+sed -i.bak 's/Stable tag: 1.5.0/Stable tag: 1.4.15/' "$wrong_version_source/readme.txt"
+rm "$wrong_version_source/wc-order-splitter.php.bak" "$wrong_version_source/readme.txt.bak"
+expect_failure 'release candidate version must be 1.5.0' \
+  "$wrong_version_source/.github/scripts/validate-distribution-contract.sh" \
+  "$wrong_version_source" "$fixture_root/wrong-version/distribution/wc-order-splitter"
+
+unpublished_history_source=$(make_source_fixture unpublished-history)
+printf '%s\n' '= 1.4.15 (internal fixture) =' >> "$unpublished_history_source/changelog.txt"
+expect_failure 'unpublished 1.4.12-1.4.15 entries entered public release history' \
+  "$unpublished_history_source/.github/scripts/validate-distribution-contract.sh" \
+  "$unpublished_history_source" "$fixture_root/unpublished-history/distribution/wc-order-splitter"
+
+stale_copy_source=$(make_source_fixture stale-copy)
+printf '%s\n' 'Return and Bulk Return remain disabled.' >> "$stale_copy_source/readme.txt"
+expect_failure 'stale disabled-feature claim entered public release copy' \
+  "$stale_copy_source/.github/scripts/validate-distribution-contract.sh" \
+  "$stale_copy_source" "$fixture_root/stale-copy/distribution/wc-order-splitter"
+
 echo 'distribution-negative-contracts-ok'
