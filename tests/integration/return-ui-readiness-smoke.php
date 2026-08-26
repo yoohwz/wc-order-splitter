@@ -15,12 +15,10 @@ $admins = get_users(array('role' => 'administrator', 'number' => 1, 'fields' => 
 wcos_return_ui_assert(!empty($admins), 'Return UI readiness requires an administrator fixture.');
 wp_set_current_user(absint($admins[0]));
 
-wcos_return_ui_assert(false === WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER), 'Production Return gate drifted on.');
-wcos_return_ui_assert(false === WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Bulk Return gate drifted on.');
-wcos_return_ui_assert(null === WCOS_Return_Admin_Controller::bootstrap(), 'Hard-off Return bootstrap returned a controller.');
+wcos_return_ui_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER), 'Production Return gate is not enabled.');
+wcos_return_ui_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Bulk Return gate drifted on.');
 
 $controller = new WCOS_Return_Admin_Controller();
-wcos_return_ui_assert(false === $controller->register_hooks(), 'Hard-off Return controller registered hooks.');
 $hook_contracts = array(
 	'wp_ajax_' . WCOS_Return_Admin_Controller::REVIEW_ACTION => 'ajax_review',
 	'wp_ajax_' . WCOS_Return_Admin_Controller::CONFIRM_ACTION => 'ajax_confirm',
@@ -30,10 +28,8 @@ $hook_contracts = array(
 	'admin_enqueue_scripts' => 'enqueue_assets',
 );
 foreach ($hook_contracts as $hook => $method) {
-	wcos_return_ui_assert(false === has_action($hook, array($controller, $method)), 'Hard-off Return hook was registered: ' . $hook);
+	wcos_return_ui_assert(false !== has_action($hook), 'Enabled Return hook is missing: ' . $hook);
 }
-wcos_return_ui_assert(!wp_script_is('wcos-return-admin', 'registered'), 'Return client was registered through an ungated path.');
-wcos_return_ui_assert(!wp_style_is('wcos-return-admin', 'registered'), 'Return stylesheet was registered through an ungated path.');
 
 $order = wc_create_order();
 $order->set_status('pending');
@@ -68,14 +64,24 @@ try {
 	ob_start();
 	$controller->render_launcher($order);
 	$launcher = (string) ob_get_clean();
-	wcos_return_ui_assert('' === $launcher, 'Hard-off Return launcher rendered.');
+	wcos_return_ui_assert('' === $launcher, 'Ineligible non-Split order exposed a Return launcher.');
 
 	$order_screen_id = function_exists('wc_get_page_screen_id') ? wc_get_page_screen_id('shop-order') : 'woocommerce_page_wc-orders';
 	set_current_screen($order_screen_id);
 	$_GET['id'] = (string) $order->get_id();
+	WCOS_Admin_Backbone_Modal_Assets::enqueue();
 	$controller->enqueue_assets();
-	wcos_return_ui_assert(!wp_script_is('wcos-return-admin', 'enqueued'), 'Hard-off Return script was enqueued on an order screen.');
-	wcos_return_ui_assert(!wp_style_is('wcos-return-admin', 'enqueued'), 'Hard-off Return stylesheet was enqueued on an order screen.');
+	WCOS_Admin_Backbone_Modal_Assets::bind_workflow_dependencies();
+	wcos_return_ui_assert(wp_script_is('wcos-return-admin', 'enqueued'), 'Enabled Return script was not enqueued on an order screen.');
+	wcos_return_ui_assert(wp_style_is('wcos-return-admin', 'enqueued'), 'Enabled Return stylesheet was not enqueued on an order screen.');
+	wcos_return_ui_assert(wp_script_is('wcos-admin-backbone-modal', 'enqueued'), 'Shared Backbone modal bridge was not enqueued with Return.');
+	$registered_scripts = wp_scripts();
+	$return_dependencies = isset($registered_scripts->registered['wcos-return-admin']) ? (array) $registered_scripts->registered['wcos-return-admin']->deps : array();
+	wcos_return_ui_assert(in_array('wcos-admin-backbone-modal', $return_dependencies, true), 'Return client is not bound to the shared Backbone modal dependency at runtime.');
+	$return_script_data = isset($registered_scripts->registered['wcos-return-admin']->extra['data']) ? (string) $registered_scripts->registered['wcos-return-admin']->extra['data'] : '';
+	foreach (array('@example.test', 'Private Return Street', '555-0060', 'Private Return Payment') as $private_value) {
+		wcos_return_ui_assert(false === strpos($return_script_data, $private_value), 'Return localized script data exposed customer/payment PII: ' . $private_value);
+	}
 
 	$client = file_get_contents($root . '/js/p2-return-admin.js');
 	wcos_return_ui_assert(is_string($client) && '' !== $client, 'Return admin client is missing.');
@@ -134,4 +140,4 @@ try {
 	$order->delete(true);
 }
 
-echo "return-ui-readiness-ok hard_off_hooks=0 shared_modal=1 pii_free=1 client_authority=bounded\n";
+echo "return-ui-readiness-ok production_enabled=1 ineligible_launcher=hidden assets=enabled shared_modal=1 pii_free=1 client_authority=bounded\n";

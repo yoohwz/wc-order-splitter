@@ -102,7 +102,7 @@ jobs:
           grep -Fq 'self::SPLIT => true' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::DUPLICATE => true' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::MERGE => true' inc/domain/class-wcos-feature-gates.php
-          grep -Fq 'self::RETURN_ORDER => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::RETURN_ORDER => true' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::MANUAL_QUANTITY => true' inc/domain/class-wcos-split-strategy-gates.php
           grep -Fq 'self::CATEGORY => true' inc/domain/class-wcos-split-strategy-gates.php
@@ -317,19 +317,17 @@ jobs:
             if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE)) { exit(1); }
             if (!WCOS_Feature_Gates::any_enabled()) { exit(1); }
             if (!WC_Order_Splitter_Safety_Guard::mutations_enabled()) { exit(1); }
-            foreach (array(
-              WCOS_Feature_Gates::RETURN_ORDER,
-              WCOS_Feature_Gates::BULK_RETURN
-            ) as $disabled_workflow) {
+            if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER)) { exit(1); }
+            foreach (array(WCOS_Feature_Gates::BULK_RETURN) as $disabled_workflow) {
               if (WCOS_Feature_Gates::enabled($disabled_workflow)) { exit(1); }
             }
-            if (null !== WCOS_Return_Admin_Controller::bootstrap()) { exit(1); }
+            if (!(WCOS_Return_Admin_Controller::bootstrap() instanceof WCOS_Return_Admin_Controller)) { exit(1); }
             foreach (array(
               WCOS_Return_Admin_Controller::REVIEW_ACTION,
               WCOS_Return_Admin_Controller::CONFIRM_ACTION,
               WCOS_Return_Admin_Controller::EXECUTE_ACTION
             ) as $return_action) {
-              if (false !== has_action("wp_ajax_" . $return_action)) { exit(1); }
+              if (false === has_action("wp_ajax_" . $return_action)) { exit(1); }
             }
             if (!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::MANUAL_QUANTITY)) { exit(1); }
             if (!WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::CATEGORY)) { exit(1); }
@@ -408,20 +406,23 @@ jobs:
       - name: Verify governance, authorization, and metadata policy
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/governance-smoke.php
 
-      - name: Verify hard-off Return domain and hardened Split lineage authority
+      - name: Verify enabled Return domain and hardened Split lineage authority
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/return-domain-lineage-smoke.php
 
-      - name: Verify hard-off Return recovery retirement stock and sibling-evolution foundation
+      - name: Verify enabled Return recovery retirement stock and sibling-evolution foundation
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/return-recovery-foundation-smoke.php
 
-      - name: Verify hard-off Return service and WooCommerce adapter contracts
+      - name: Verify enabled Return service and WooCommerce adapter contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/return-service-adapter-smoke.php
 
-      - name: Verify hard-off Return Review Confirm Execute authority
+      - name: Verify enabled Return Review Confirm Execute authority
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/return-review-confirm-authority-smoke.php
 
-      - name: Verify hard-off Return UI readiness
+      - name: Verify enabled Return UI readiness
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/return-ui-readiness-smoke.php
+
+      - name: Verify enabled production Return controller gateway and storage contracts
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/return-enabled-production-smoke.php
 
       - name: Verify Merge domain foundation contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-domain-foundation-smoke.php

@@ -546,7 +546,7 @@ wp_set_current_user($admin_id);
 
 $evidence = array();
 try {
-	/* The adapter is directly callable while the production gateway gate remains hard-off. */
+	/* The adapter remains directly testable while production uses the enabled gateway/controller path. */
 	$fixture = wcos_return_service_fixture('success');
 	$return_operation = 'return-service-' . wp_generate_uuid4();
 	$child = wc_get_order($fixture['child_id']);
@@ -555,12 +555,7 @@ try {
 	try { (new WCOS_Return_WooCommerce_Adapter())->return_order(wc_get_order($fixture['original_id']), $unsupported_operation, 2); }
 	catch (WCOS_Return_Adapter_Exception $exception) { $unsupported = 0 === strpos($exception->get_error_code(), 'return_preflight_'); }
 	wcos_return_service_assert($unsupported && !is_array(WCOS_Operation_Journal::get(wc_get_order($fixture['original_id']), $unsupported_operation)), 'Return adapter did not reject unsupported lineage before journal persistence.');
-	$gateway_rejected = false;
-	$gate_operation = 'return-gate-' . wp_generate_uuid4();
-	try { (new WCOS_Mutation_Gateway())->return_order($child, $gate_operation, 2); }
-	catch (RuntimeException $exception) { $gateway_rejected = true; }
-	wcos_return_service_assert($gateway_rejected, 'Return production gateway did not fail before preflight while its gate is hard-off.');
-	wcos_return_service_assert(!is_array(WCOS_Operation_Journal::get($child, $gate_operation)), 'Return gate rejection created a journal.');
+	wcos_return_service_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER), 'Production Return gateway is not enabled.');
 
 	list($result, $retirement_counts) = wcos_return_service_observed_execute($child, $return_operation, 2);
 	$child = wc_get_order($fixture['child_id']); $original = wc_get_order($fixture['original_id']);

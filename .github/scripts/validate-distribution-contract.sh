@@ -47,7 +47,7 @@ grep -Fq 'return WCOS_Feature_Gates::any_enabled();' "$distribution_root/inc/cor
 grep -Fq 'self::SPLIT => true' "$distribution_root/inc/domain/class-wcos-feature-gates.php" || fail "Split gate drifted"
 grep -Fq 'self::DUPLICATE => true' "$distribution_root/inc/domain/class-wcos-feature-gates.php" || fail "Duplicate gate drifted"
 grep -Fq 'self::MERGE => true' "$distribution_root/inc/domain/class-wcos-feature-gates.php" || fail "Merge gate drifted"
-grep -Fq 'self::RETURN_ORDER => false' "$distribution_root/inc/domain/class-wcos-feature-gates.php" || fail "Return gate drifted"
+grep -Fq 'self::RETURN_ORDER => true' "$distribution_root/inc/domain/class-wcos-feature-gates.php" || fail "Return gate drifted"
 grep -Fq 'self::BULK_RETURN => false' "$distribution_root/inc/domain/class-wcos-feature-gates.php" || fail "Bulk Return gate drifted"
 grep -Fq 'self::MANUAL_QUANTITY => true' "$distribution_root/inc/domain/class-wcos-split-strategy-gates.php" || fail "Manual Quantity gate drifted"
 grep -Fq 'self::CATEGORY => true' "$distribution_root/inc/domain/class-wcos-split-strategy-gates.php" || fail "Category gate drifted"
