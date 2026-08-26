@@ -59,6 +59,51 @@ final class WCOS_Return_Confirmation_Store {
 		);
 	}
 
+	/**
+	 * Narrow server-only handoff for a batch-owned, preallocated UUIDv4.
+	 * Ordinary single Return continues to mint its own UUID in create().
+	 */
+	public static function create_for_batch(WC_Order $child, array $review_authority, $user_id, $operation_id) {
+		$child_id = absint($child->get_id());
+		$user_id = absint($user_id);
+		$operation_id = sanitize_key((string) $operation_id);
+		if (!$child_id || !$user_id || 'shop_order' !== $child->get_type() || !self::is_uuid($operation_id)) {
+			throw new WCOS_Return_Confirmation_Exception('invalid_identity', __('Batch Return Confirmation requires one persisted child, signed-in operator, and strict UUIDv4 operation.', 'wc-order-splitter'));
+		}
+		if (absint(isset($review_authority['child_order_id']) ? $review_authority['child_order_id'] : 0) !== $child_id) {
+			throw new WCOS_Return_Confirmation_Exception('review_mismatch', __('The batch Return authority does not match this child.', 'wc-order-splitter'));
+		}
+		try {
+			WCOS_Bulk_Return_Batch_Plan::assert_ordinary_authority_current($child, $review_authority);
+		} catch (Throwable $throwable) {
+			throw new WCOS_Return_Confirmation_Exception('authority_changed', __('The constrained batch Return authority is no longer current.', 'wc-order-splitter'));
+		}
+
+		$now = time();
+		$record = array_merge($review_authority, array(
+			'schema_version' => self::SCHEMA_VERSION,
+			'operation_id' => $operation_id,
+			'user_id' => $user_id,
+			'created_at' => $now,
+			'expires_at' => $now + self::TTL,
+		));
+		self::assert_complete($record);
+		return $record;
+	}
+
+	/** Recover a batch child handoff exclusively from its durable Return journal. */
+	public static function replay_for_batch(WC_Order $child, $operation_id, $user_id) {
+		$operation_id = sanitize_key((string) $operation_id);
+		if (!self::is_uuid($operation_id)) {
+			throw new WCOS_Return_Confirmation_Exception('invalid_identity', __('The batch Return child operation identity is invalid.', 'wc-order-splitter'));
+		}
+		$journal = WCOS_Operation_Journal::get($child, $operation_id);
+		if (!is_array($journal)) {
+			throw new WCOS_Return_Confirmation_Exception('journal_missing', __('The batch Return child journal is unavailable.', 'wc-order-splitter'));
+		}
+		return self::durable_replay($child, $operation_id, absint($user_id), $journal);
+	}
+
 	public static function verify(WC_Order $child, $operation_id, $token, $user_id) {
 		$operation_id = sanitize_key((string) $operation_id);
 		$user_id = absint($user_id);

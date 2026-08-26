@@ -5,8 +5,8 @@ defined('ABSPATH') || exit;
 /**
  * Central fail-closed workflow gates.
  *
- * Split, Duplicate, and Merge are the approved production mutation workflows.
- * Return and Bulk Return remain internally hard-off. Gate state is code, not
+ * Split, Duplicate, Merge, and Return are approved production mutation workflows.
+ * Bulk Return remains internally hard-off. Gate state is code, not
  * constants/options/filters, so another plugin, mu-plugin, or wp-config.php
  * cannot opt an unfinished workflow into production.
  */

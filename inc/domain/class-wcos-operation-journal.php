@@ -511,6 +511,12 @@ final class WCOS_Operation_Journal {
 			}
 		}
 
+		if (array_key_exists('bulk_return_batch', $current_context) !== array_key_exists('bulk_return_batch', $replacement_context)
+			|| (array_key_exists('bulk_return_batch', $current_context)
+				&& $current_context['bulk_return_batch'] !== $replacement_context['bulk_return_batch'])) {
+			return false;
+		}
+
         foreach (array(
             'execution_policy', 'fully_moved_item_ids', 'strategy_authority', 'merge_pair',
             'merge_recovery_snapshot', 'merge_recovery_snapshot_fingerprint', 'return_pair',
