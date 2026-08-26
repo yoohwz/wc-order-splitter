@@ -26,6 +26,7 @@ esac
 test -f "$source_root/.distignore" || fail "missing .distignore"
 test -f "$source_root/wc-order-splitter.php" || fail "missing plugin entrypoint"
 test -f "$source_root/readme.txt" || fail "missing readme.txt"
+test -f "$source_root/changelog.txt" || fail "missing changelog.txt"
 
 if test -e "$distribution_root" && find "$distribution_root" -mindepth 1 -print -quit | grep -q .; then
   fail "distribution root must be absent or empty: $distribution_root"
@@ -40,9 +41,37 @@ stable_tag=$(sed -n 's/^Stable tag: //p' "$distribution_root/readme.txt" | head 
 test -n "$plugin_version" || fail "plugin Version is empty"
 test -n "$stable_tag" || fail "Stable tag is empty"
 test "$plugin_version" = "$stable_tag" || fail "plugin Version and Stable tag differ"
+test '1.5.0' = "$plugin_version" || fail "release candidate version must be 1.5.0"
 
 grep -Fq 'Requires at least: 6.5' "$distribution_root/wc-order-splitter.php" || fail "plugin minimum WordPress version drifted"
 grep -Fq 'Requires at least: 6.5' "$distribution_root/readme.txt" || fail "readme minimum WordPress version drifted"
+grep -Fq 'Requires PHP: 7.4' "$distribution_root/wc-order-splitter.php" || fail "plugin minimum PHP version drifted"
+grep -Fq 'Requires PHP: 7.4' "$distribution_root/readme.txt" || fail "readme minimum PHP version drifted"
+grep -Fq 'Tested up to: 7.1' "$distribution_root/readme.txt" || fail "WordPress tested version drifted from release evidence"
+grep -Fq 'WC tested up to: 11.0' "$distribution_root/readme.txt" || fail "WooCommerce tested version drifted from release evidence"
+
+readme_changelog=$(sed -n '/^== Changelog ==$/,/^== Upgrade Notice ==$/p' "$distribution_root/readme.txt")
+readme_public_versions=$(printf '%s\n' "$readme_changelog" | sed -n -E 's/^= ([0-9]+\.[0-9]+\.[0-9]+)( \([^)]*\))? =$/\1/p')
+file_public_versions=$(sed -n -E 's/^= ([0-9]+\.[0-9]+\.[0-9]+)( \([^)]*\))? =$/\1/p' "$distribution_root/changelog.txt")
+
+test "$(printf '%s\n' "$readme_public_versions" | sed -n '1p')" = '1.5.0' || fail "readme public changelog must start with 1.5.0"
+test "$(printf '%s\n' "$readme_public_versions" | sed -n '2p')" = '1.4.11' || fail "readme public changelog must place 1.4.11 immediately after 1.5.0"
+test "$(printf '%s\n' "$file_public_versions" | sed -n '1p')" = '1.5.0' || fail "changelog.txt must start with public release 1.5.0"
+test "$(printf '%s\n' "$file_public_versions" | sed -n '2p')" = '1.4.11' || fail "changelog.txt must place 1.4.11 immediately after 1.5.0"
+
+if grep -E '^= 1\.4\.(12|13|14|15)( \([^)]*\))? =$' "$distribution_root/readme.txt" "$distribution_root/changelog.txt"; then
+  fail "unpublished 1.4.12-1.4.15 entries entered public release history"
+fi
+
+for stale_claim in \
+  'Return and Bulk Return remain disabled' \
+  'Return and Bulk Return remain unavailable' \
+  'Category and Stock-status Split remain disabled'; do
+  if grep -Fq "$stale_claim" "$distribution_root/readme.txt" "$distribution_root/changelog.txt"; then
+    fail "stale disabled-feature claim entered public release copy: $stale_claim"
+  fi
+done
+
 grep -Fq 'return WCOS_Feature_Gates::any_enabled();' "$distribution_root/inc/cores/safety.php" || fail "safety guard no longer follows feature gates"
 grep -Fq 'self::SPLIT => true' "$distribution_root/inc/domain/class-wcos-feature-gates.php" || fail "Split gate drifted"
 grep -Fq 'self::DUPLICATE => true' "$distribution_root/inc/domain/class-wcos-feature-gates.php" || fail "Duplicate gate drifted"

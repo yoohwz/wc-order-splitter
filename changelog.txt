@@ -2,39 +2,15 @@
 
 == Changelog ==
 
-= 1.4.15 (Aug 24, 2026) =
-* New: Enabled hardened single-source Merge for supported WooCommerce source/target order pairs.
-* Safety: Added server-owned Search -> Review -> Confirm -> Execute authority, pair authorization, dual-order leases, a durable source-keyed journal, and fail-closed rejection of unsupported participant state.
-* Integrity: Merge creates fresh target items without re-parenting or line coalescing, preserves historical quantities, money, and per-rate tax state, and preserves existing target-owned shipping under the accepted policy without current-catalog repricing or tax recalculation.
-* Stock: Merge keeps physical inventory neutral while transferring WooCommerce `_reduced_stock` operational ownership to the active target exactly once.
-* Recovery: Added deterministic replay, recovery, and compensation without a target shadow journal; the source uses non-force trash/archive retirement and the target remains active.
-* Compatibility: Validated Merge with WooCommerce 11.0.1 across legacy, HPOS-only, and HPOS compatibility/synchronization storage, with WordPress 7.1 compatibility evidence.
-* Architecture/UI: Added a shared WooCommerce Backbone modal flow for hardened Merge review and confirmation.
-* Safety boundary: Return, Bulk Return, Category Split, and Stock-status Split remain disabled; unsupported Merge pairs fail closed.
-
-= 1.4.14 (Aug 19, 2026) =
-* New: Enabled the hardened single-order Duplicate workflow for supported WooCommerce orders.
-* Safety: Added server-reviewed Duplicate confirmation, nonce/capability enforcement, source-state verification, operation leases, durable journals, and idempotent retry under the approved production gate.
-* Integrity: Duplicate creates fresh order-item objects and preserves supported historical line, shipping, fee, tax, coupon, and configured business metadata without recalculating current catalog values.
-* Payment/Stock: Duplicate targets remain Pending payment and do not inherit the source transaction ID, paid state, order-level stock-reduction state, or line `_reduced_stock`; Duplicate does not intentionally write physical product stock.
-* Compatibility: Validated production Duplicate across legacy order storage, HPOS-only, and HPOS compatibility/synchronization modes, including 0/2/3-decimal precision, deleted products, configured lines, retries, source races, and side-effect contracts.
-* Safety: Merge, Return, and Bulk Return remain disabled until their hardened production workflows are completed.
-
-= 1.4.13 (Aug 19, 2026) =
-* New: Re-enabled hardened manual quantity Split for supported WooCommerce orders.
-* Safety: Added server-side review/confirmation, strict plan parsing, nonce/capability checks, operation leases, durable journals, idempotent retry, and fail-closed recovery contracts.
-* Stock: Split remains an order-only mutation and preserves physical stock while redistributing WooCommerce stock-reduction markers for later cancellation/restock lifecycle handling.
-* Integrity: Preserved historical monetary values, per-rate tax state, exact line identity, configured line metadata policy, price precision, and source/child relationships.
-* Compatibility: Validated manual quantity Split across legacy order storage, HPOS-only, and HPOS compatibility/synchronization modes.
-* Safety: Duplicate, Merge, Return, and Bulk Return remain disabled until their hardened production workflows are completed.
-
-= 1.4.12 (Aug 18, 2026) =
-* Security/Privacy: Removed the automatic external subscription request and bundled endpoint integration.
-* Safety: Temporarily disabled split, duplicate, merge, return, and bulk-return mutations while the mutation engine is rebuilt around stock, totals, tax, line identity, idempotency, and rollback guarantees.
-* Safety: Added a fail-closed admin notice without rewriting existing order data or relationship metadata.
-* Compliance: Replaced the WordPress.org `Plugin URI` with the plugin repository URL.
-* Compatibility: Raised the minimum WordPress version to 6.5 so Core can enforce the WooCommerce plugin dependency.
-* Compatibility: Updated the declared WooCommerce tested version to 11.0.
+= 1.5.0 (Aug 26, 2026) =
+* New: Added hardened Manual Quantity, Category, and Stock-status Split; single-order Duplicate; single-source Merge; single Return; and resumable Bulk Return for supported WooCommerce orders.
+* Security & Safety: Removed the obsolete automatic external subscription request and introduced code-owned feature gates, server-side Review -> Confirm -> Execute authority, capability and nonce checks, source-state verification, and fail-closed rejection of unsupported or changed state.
+* Integrity: Preserved historical quantities, monetary values, discounts, configured line identity, and per-rate taxes without current-catalog repricing or tax recalculation; all transferred or copied lines use fresh order-item objects.
+* Stock: Kept order mutations physically stock-neutral where required, conserved `_reduced_stock` ownership through Split, Merge, and Return, and prevented Duplicate from inheriting stock-reduction ownership.
+* Recovery: Added operation-scoped leases, durable journals, immutable fingerprints, idempotent replay, recovery, compensation, and manual-reconciliation blockers for interrupted or conflicting operations.
+* Compatibility: Added WooCommerce 11.0.1 validation across legacy, HPOS-only, and HPOS compatibility/synchronization storage, with PHP 7.4/8.1/8.3 and WordPress 7.1 compatibility evidence.
+* UI/UX: Added shared accessible WooCommerce Backbone modals, server-built Split bucket review, Merge target search, single Return, resumable Bulk Return, focus management, and native order-relation links.
+* Developer: Consolidated production mutations behind one gateway and domain engine, removed legacy mutation execution paths, and hardened deterministic distribution validation and package contents.
 
 = 1.4.11 (Jun 13, 2026) =
 * Fix: Hardened AJAX capability checks for split and bulk return actions.
