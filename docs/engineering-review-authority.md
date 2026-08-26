@@ -10,7 +10,7 @@ After canonical `POST_MERGE_ACCEPTED` for WOS-GOV-005, the preferred operator li
 → Codex Executor
 → `TECHNICAL_REVIEW_REQUIRED`
 → fresh Independent Codex Reviewer
-→ `TECHNICAL_ACCEPTED`
+→ persisted GitHub `TECHNICAL_ACCEPTED`
 → ChatGPT Acceptance Review
 → `ACCEPTANCE_ACCEPTED`
 → explicit conditional Human Gate
@@ -45,22 +45,34 @@ The reviewer must:
 - use only uncommitted, disposable files or state for reproduction probes;
 - ground blocking findings in concrete code paths or invariant violations and, where reasonably possible, reproduction or test evidence;
 - report unvalidated hypotheses as non-blocking uncertainty rather than correction authority;
-- review the complete PR after every head-changing correction.
+- review the complete PR after every head-changing correction;
+- automatically persist the complete structured review to canonical GitHub authority and re-read/authenticate that new record before the cycle completes.
 
-The authoritative outcomes are:
+The authoritative persisted outcomes are:
 
 - `TECHNICAL_ACCEPTED: <TASK_ID> / PR #N / exact head <SHA> ...`
 - `TECHNICAL_CHANGES_REQUIRED: <TASK_ID> / PR #N / exact head <SHA> ...`
 
-The review record must bind the `independent_codex_reviewer` role, fresh-context attestation, explicit statement that the executor session was not reused, read-only/no-implementation-write attestation, exact PR base/head, exact tested merge-candidate/tree where available, canonical CI state, findings, and reproduction/test evidence.
+The review record must bind the task ID, PR number, `independent_codex_reviewer` role, fresh-context attestation, explicit statement that the executor session was not reused, source read-only/no-implementation-write attestation, exact PR base/head, exact tested merge-candidate/tree where available, canonical CI state, findings, reproduction/test evidence, and exact terminal signal.
 
 Distinct GitHub Codex review provenance is the strongest preferred authority. If a fresh Codex app/CLI/cloud review is posted through the repository-owner account, the structured attestation is mandatory; actor identity alone does not establish reviewer independence. If independence or provenance cannot be established, stop with `INDEPENDENT_REVIEW_AUTHORITY_REQUIRED`.
+
+A chat/session-only `TECHNICAL_ACCEPTED` or `TECHNICAL_CHANGES_REQUIRED` is evidence only and supplies no correction, Acceptance, Finalize, or merge authority. Before a review cycle is complete, the reviewer/orchestrating Codex surface must automatically persist it using either:
+
+1. a real GitHub PR review containing the complete structured record plus a concise canonical task Issue comment that references the PR review ID/URL, exact head, outcome, and reviewer provenance; or
+2. a new top-level canonical task Issue comment containing the complete structured record when a fresh Codex app/CLI/cloud context posts through the repository-owner account.
+
+Every head-changing correction/re-review cycle creates a new immutable GitHub review/comment record. Earlier records must not be edited or replaced; a later record supersedes them only for its own exact head.
+
+The reviewer/orchestrating surface must re-read GitHub and authenticate the persisted record before routing its outcome. If the write or authentication fails, stop `TECHNICAL_REVIEW_PERSISTENCE_REQUIRED: <TASK_ID> / exact head <SHA>` and do not route to Acceptance or `Finalize`.
+
+Writing review/comment governance metadata does not violate source read-only/no-implementation-write review behavior. The reviewer still must not edit source, commit, push, fix, or modify the PR head.
 
 ### ChatGPT Acceptance Reviewer
 
 ChatGPT owns product intent, external research, architecture and domain boundaries, canonical task contracts, plan review where required, contract/governance acceptance, Human-Gate coordination, and post-merge governance acceptance. It does not own authoritative technical/code-correctness review.
 
-After exact-head `TECHNICAL_ACCEPTED`, `Acceptance Review <TASK_ID>` verifies task-contract satisfaction, product/domain semantics, architecture alignment, changed-file scope, required evidence, independent review provenance, exact-head/tree CI authority, production gate expectations, security/privacy/release/package boundaries, and unresolved architecture or product decisions.
+After persisted GitHub exact-head `TECHNICAL_ACCEPTED`, `Acceptance Review <TASK_ID>` verifies task-contract satisfaction, product/domain semantics, architecture alignment, changed-file scope, required evidence, independent review provenance, exact-head/tree CI authority, production gate expectations, security/privacy/release/package boundaries, and unresolved architecture or product decisions. Conversation/session-only review output must be rejected.
 
 The authoritative outcomes are:
 
@@ -77,7 +89,7 @@ ChatGPT must not promote that hypothesis into authoritative technical correction
 
 ### Finalize orchestration
 
-`Finalize <TASK_ID>` is an explicit human command and conditional Human Gate for the exact currently technically accepted PR head. ChatGPT must authenticate exact-head `TECHNICAL_ACCEPTED`, perform Acceptance Review, and record `ACCEPTANCE_ACCEPTED` before the conditional Human Gate can take effect. It must then re-resolve head, base, CI, merge candidate/tree, ruleset, and unresolved threads. Only an unchanged, fully authorized state may receive a separate `HUMAN_GATE_APPROVED` record and merge.
+`Finalize <TASK_ID>` is an explicit human command and conditional Human Gate for the exact currently technically accepted PR head. ChatGPT must independently resolve the persisted GitHub review/comment authority ID and authenticate exact-head `TECHNICAL_ACCEPTED`; session output or a copied/reposted token is insufficient. It then performs Acceptance Review and records `ACCEPTANCE_ACCEPTED` before the conditional Human Gate can take effect. It must re-resolve head, base, CI, merge candidate/tree, ruleset, and unresolved threads. Only an unchanged, fully authorized state may receive a separate `HUMAN_GATE_APPROVED` record and merge.
 
 Failed Acceptance records only `ACCEPTANCE_CHANGES_REQUIRED` or `TECHNICAL_REVIEW_FOLLOWUP_REQUIRED` and must not merge. Any head/base/authority drift invalidates the conditional Human Gate. Successful merge still requires exact-tree Main attestation and a distinct `POST_MERGE_ACCEPTED` record. `Finalize` never grants release, publication, deployment, or public-package authority.
 
@@ -85,7 +97,7 @@ Failed Acceptance records only `ACCEPTANCE_CHANGES_REQUIRED` or `TECHNICAL_REVIE
 
 GitHub Actions supplies deterministic exact-head merge-authority CI. Green CI is required evidence, not product, technical-review, acceptance, Human-Gate, release, or publication authority.
 
-The authenticated human owns product decisions and explicit Human Gate, merge, release, and publication authority. Merge requires exact-head `TECHNICAL_ACCEPTED` and `ACCEPTANCE_ACCEPTED`, both still valid for the unchanged PR head, followed by a distinct Human Gate record from the repository owner or task-designated human approver. For an eligible compressed-flow task, issuing `Finalize` supplies that explicit Human Gate conditionally and only after ChatGPT Acceptance succeeds and authority is revalidated. An implementation Human Gate never implies release or publication approval.
+The authenticated human owns product decisions and explicit Human Gate, merge, release, and publication authority. Merge requires persisted GitHub exact-head `TECHNICAL_ACCEPTED` and `ACCEPTANCE_ACCEPTED`, both still valid for the unchanged PR head, followed by a distinct Human Gate record from the repository owner or task-designated human approver. For an eligible compressed-flow task, issuing `Finalize` supplies that explicit Human Gate conditionally and only after ChatGPT Acceptance succeeds and authority is revalidated. An implementation Human Gate never implies release or publication approval.
 
 Risk profiles control the depth of task planning, evidence, and Independent Review. `LOW`, `MEDIUM`, and `HIGH` cannot waive protected-branch `Required CI`, exact-head Technical Acceptance, ChatGPT Acceptance, Human Gate semantics, post-merge proof, or release/publication boundaries.
 

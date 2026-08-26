@@ -10,7 +10,7 @@ After canonical `POST_MERGE_ACCEPTED` for `WOS-GOV-005`, the preferred successfu
 
 The recorded authority sequence remains:
 
-`TASK_READY -> Executor evidence -> exact-head CI -> Independent Codex TECHNICAL_ACCEPTED -> ChatGPT ACCEPTANCE_ACCEPTED -> HUMAN_GATE_APPROVED -> merge -> exact-tree Main attestation -> POST_MERGE_ACCEPTED`.
+`TASK_READY -> Executor evidence -> exact-head CI -> persisted GitHub Independent Codex TECHNICAL_ACCEPTED -> ChatGPT ACCEPTANCE_ACCEPTED -> HUMAN_GATE_APPROVED -> merge -> exact-tree Main attestation -> POST_MERGE_ACCEPTED`.
 
 Compression changes orchestration only. Green CI is not review, Acceptance is not Technical Acceptance, and the conditional Human Gate inside `Finalize` is still a distinct authenticated checkpoint.
 
@@ -29,8 +29,9 @@ Plan Review is exceptional. ChatGPT records `PLAN_REVIEW_REQUIRED` only when dis
 1. Resolve the canonical Issue, comments, PR/branch, exact SHAs, CI, and current governance checkpoint.
 2. The Codex Executor discovers, implements, tests, opens or updates the PR, waits for canonical exact-head CI, and performs complete-diff self-review.
 3. Codex dispatches a fresh Independent Codex Reviewer in a separate conversation, agent, worktree, or cloud review context. Distinct GitHub Codex review provenance is preferred.
-4. The reviewer stays read-only/no-implementation-write and records exact-head `TECHNICAL_ACCEPTED` or `TECHNICAL_CHANGES_REQUIRED` with the attestation required by `docs/engineering-review-authority.md`.
-5. An authenticated changes-required tranche may return to the Executor for correction, proportional Local evidence, exact-head CI, and a new complete Independent Review of the changed head.
+4. The reviewer stays source read-only/no-implementation-write and produces exact-head `TECHNICAL_ACCEPTED` or `TECHNICAL_CHANGES_REQUIRED` with the attestation required by `docs/engineering-review-authority.md`.
+5. Before the review cycle is complete, the reviewer/orchestrating Codex surface automatically persists the complete structured Technical Review record to canonical GitHub authority and re-reads the new record to authenticate its actor, role, exact head, and outcome.
+6. An authenticated persisted changes-required tranche may return to the Executor for correction, proportional Local evidence, exact-head CI, and a new complete Independent Review of the changed head.
 
 The Executor must never review itself or issue `TECHNICAL_ACCEPTED`. If the surface cannot establish fresh reviewer separation and attestable provenance, stop:
 
@@ -42,11 +43,32 @@ Automatic correction is bounded to at most three head-changing technical correct
 
 `TECHNICAL_ESCALATION_REQUIRED: <TASK_ID>`
 
-On exact-head Technical Acceptance, Codex reports:
+## Technical Review persistence
 
-`READY_TO_FINALIZE: <TASK_ID> / PR #N / exact head <SHA> / TECHNICAL_ACCEPTED <authority>`
+Every Independent Codex Technical Review cycle must be persisted automatically before it can supply canonical authority. A chat/session-only `TECHNICAL_ACCEPTED` or `TECHNICAL_CHANGES_REQUIRED` is evidence only.
 
-`READY_TO_FINALIZE` is routing evidence only; the underlying authenticated `TECHNICAL_ACCEPTED` record remains authoritative.
+Persistence must use one of these forms:
+
+1. When the reviewer surface can submit a real GitHub PR review, publish the complete structured Technical Review as that PR review and add a concise canonical task Issue comment referencing the PR review ID/URL, exact head, outcome, and reviewer provenance.
+2. When a fresh Codex app/CLI/cloud reviewer runs under the repository-owner account, publish the complete structured review as a new top-level canonical task Issue comment.
+
+Every record must bind task ID, PR number, exact base/head, tested merge-candidate/tree where available, canonical CI, `independent_codex_reviewer` role, fresh-context and executor-session-not-reused attestations, source read-only/no-implementation-write attestation, findings and reproduction evidence, and the exact terminal outcome.
+
+Each correction/re-review cycle creates a new immutable GitHub review/comment. Never edit or replace an earlier review; the later persisted record supersedes it only for its own exact head.
+
+GitHub review/comment persistence is governance metadata, not an implementation write. The Independent Reviewer must still make no source edits, commits, pushes, or PR-head changes.
+
+If the automatic GitHub write fails, or the new record cannot be re-read and authenticated, stop:
+
+`TECHNICAL_REVIEW_PERSISTENCE_REQUIRED: <TASK_ID> / exact head <SHA>`
+
+Do not route to Acceptance or `Finalize` while this stop is active.
+
+On exact-head Technical Acceptance, the Codex engineering loop must re-read GitHub and verify the final persisted record is directly attributable to the Independent Codex Reviewer. Only then may Codex report:
+
+`READY_TO_FINALIZE: <TASK_ID> / PR #N / exact head <SHA> / TECHNICAL_ACCEPTED / persisted authority <Issue comment ID or PR review ID>`
+
+`READY_TO_FINALIZE` is routing evidence only; the identified persisted GitHub `TECHNICAL_ACCEPTED` record remains authoritative. The human operator must not need to copy/paste Technical Review results between Codex and GitHub.
 
 ## Finalize
 
@@ -55,7 +77,7 @@ On exact-head Technical Acceptance, Codex reports:
 ChatGPT must:
 
 1. Resolve the canonical Issue/PR, current `main`, exact base/head, merge candidate/tree, canonical CI, artifacts, ruleset, and unresolved threads.
-2. Authenticate fresh Independent Codex `TECHNICAL_ACCEPTED` for the exact unchanged head.
+2. Independently resolve and authenticate the persisted GitHub fresh Independent Codex `TECHNICAL_ACCEPTED` review/comment authority ID for the exact unchanged head. Reject conversation/session-only review text.
 3. Perform ChatGPT Acceptance Review for product intent, architecture, contract, scope, evidence, and governance.
 4. If Acceptance fails, record `ACCEPTANCE_CHANGES_REQUIRED` or `TECHNICAL_REVIEW_FOLLOWUP_REQUIRED` and do not merge.
 5. If Acceptance succeeds, record exact-head `ACCEPTANCE_ACCEPTED`.
@@ -98,6 +120,7 @@ Normal successful work uses `Create -> Run -> Finalize`. Additional operator int
 
 - `PLAN_REVIEW_REQUIRED`, `ARCHITECTURE_REVIEW_REQUIRED`, `PRODUCT_DECISION_REQUIRED`, or `SCOPE_REVIEW_REQUIRED` returns the unresolved decision to ChatGPT/Human governance.
 - `INDEPENDENT_REVIEW_DISPATCH_REQUIRED` routes to a manually opened fresh `Technical Review <TASK_ID>` context.
+- `TECHNICAL_REVIEW_PERSISTENCE_REQUIRED` blocks Acceptance/Finalize until the reviewer/orchestrating Codex surface persists and authenticates the structured exact-head GitHub record.
 - `TECHNICAL_ESCALATION_REQUIRED` returns repeated technical failure or ambiguity to ChatGPT/Human governance.
 - `ACCEPTANCE_CHANGES_REQUIRED` routes the bounded correction tranche to Codex.
 - `TECHNICAL_REVIEW_FOLLOWUP_REQUIRED` routes the bounded hypothesis to an Independent Codex Reviewer before it may become correction authority.
