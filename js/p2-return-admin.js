@@ -207,13 +207,15 @@
 				confirmCheckbox.checked = false;
 				setPhase('reviewed');
 				setStatus(text('reviewReady', 'The child passed server review. Acknowledge the immutable summary to confirm Return.'));
-				confirmCheckbox.focus();
 			}).catch(function (error) {
 				resetForExplicitReview();
 				setStatus('');
 				showError(error.message);
 			}).finally(function () {
 				setBusy(false);
+				if ('reviewed' === phase && reviewAuthority) {
+					confirmCheckbox.focus();
+				}
 			});
 		}
 
@@ -235,7 +237,6 @@
 				retryReady = false;
 				setPhase('confirmed');
 				setStatus(text('confirmReady', 'Return is confirmed. Execute this exact operation when ready.'));
-				executeButton.focus();
 			}).catch(function (error) {
 				reviewAuthority = null;
 				confirmationAuthority = null;
@@ -246,6 +247,9 @@
 				showError(error.message);
 			}).finally(function () {
 				setBusy(false);
+				if ('confirmed' === phase && confirmationAuthority) {
+					executeButton.focus();
+				}
 			});
 		}
 

@@ -212,6 +212,9 @@ jobs:
       - name: Verify Return admin client syntax
         run: node --check js/p2-return-admin.js
 
+      - name: Run Return focus lifecycle regression
+        run: node tests/js/p2-return-focus-lifecycle.js
+
   package-check:
     name: Package safety contract
     runs-on: ubuntu-latest
