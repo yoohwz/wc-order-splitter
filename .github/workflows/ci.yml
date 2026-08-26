@@ -615,6 +615,7 @@ jobs:
 
           npx wp-env run cli wp eval '
             $fixture = get_option("wcos_return_confirm_race_fixture", array());
+            wp_set_current_user(absint($fixture["user_id"]));
             $child = isset($fixture["child_id"]) ? wc_get_order(absint($fixture["child_id"])) : false;
             if (!$child instanceof WC_Order) { exit(1); }
             if (WCOS_Operation_Journal::get($child, "'"$operation_id"'")) { exit(1); }
