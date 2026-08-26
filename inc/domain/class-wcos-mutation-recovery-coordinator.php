@@ -22,6 +22,10 @@ final class WCOS_Mutation_Recovery_Coordinator {
 			return;
 		}
 		$type = isset($record['type']) ? sanitize_key($record['type']) : '';
+		if ('bulk_return_batch' === $type) {
+			/* Coordination journals never perform child commercial recovery. */
+			return;
+		}
 		if (!in_array($type, array('split', 'merge', 'return'), true)) {
 			return;
 		}

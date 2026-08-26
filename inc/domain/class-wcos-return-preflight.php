@@ -135,6 +135,10 @@ final class WCOS_Return_Preflight {
 		}
 		$summary = $order->get_meta(WCOS_Operation_Journal::SUMMARY_META_KEY, true);
 		foreach (is_array($summary) ? $summary : array() as $entry) {
+			if ('bulk_return_batch' === sanitize_key(isset($entry['type']) ? (string) $entry['type'] : '')) {
+				/* A batch coordinator is optimistic coordination, never a reservation. */
+				continue;
+			}
 			$status = sanitize_key(isset($entry['status']) ? (string) $entry['status'] : '');
 			if (!in_array($status, array('completed', 'compensated', 'manual_reconciled'), true)) {
 				return true;

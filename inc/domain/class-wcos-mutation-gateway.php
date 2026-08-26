@@ -79,4 +79,16 @@ final class WCOS_Mutation_Gateway {
 		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::RETURN_ORDER, $child, $original);
 		return (new WCOS_Return_WooCommerce_Adapter())->return_order($child, $operation_id, $confirmed_precision, $confirmation_authority);
 	}
+
+	/** Gate-aware production entry for one coordination-only Bulk Return step. */
+	public function bulk_return_advance($batch_id, $anchor_child_id, $batch_token, $user_id, $expected_cursor) {
+		WCOS_Feature_Gates::assert_enabled(WCOS_Feature_Gates::BULK_RETURN);
+		return (new WCOS_Bulk_Return_Orchestrator())->advance(
+			$batch_id,
+			$anchor_child_id,
+			$batch_token,
+			$user_id,
+			$expected_cursor
+		);
+	}
 }

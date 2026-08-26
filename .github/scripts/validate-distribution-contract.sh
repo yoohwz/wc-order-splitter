@@ -143,6 +143,14 @@ for required_path in \
   'inc/backend/class-wcos-return-admin-controller.php' \
   'css/p2-return-admin.css' \
   'js/p2-return-admin.js' \
+  'inc/domain/class-wcos-bulk-return-batch-plan.php' \
+  'inc/domain/class-wcos-bulk-return-journal-context.php' \
+  'inc/domain/class-wcos-bulk-return-orchestrator.php' \
+  'inc/backend/class-wcos-bulk-return-review-store.php' \
+  'inc/backend/class-wcos-bulk-return-confirmation-store.php' \
+  'inc/backend/class-wcos-bulk-return-admin-controller.php' \
+  'css/p2-bulk-return-admin.css' \
+  'js/p2-bulk-return-admin.js' \
   'css/p2-split-strategy-admin.css' \
   'js/p2-split-strategy-admin.js'; do
   if test ! -e "$distribution_root/$required_path"; then
@@ -171,6 +179,10 @@ fi
 
 if grep -R --line-number --fixed-strings 'wc-merged' "$distribution_root/wc-order-splitter.php" "$distribution_root/inc"; then
   fail "custom production merged order status entered the distribution tree"
+fi
+
+if grep -R --line-number --fixed-strings 'wp_ajax_yoos_handle_bulk_action' "$distribution_root"; then
+  fail "legacy Bulk Return AJAX authority entered the distribution tree"
 fi
 
 while IFS= read -r -d '' php_file; do

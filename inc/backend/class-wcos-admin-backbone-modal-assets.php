@@ -6,8 +6,8 @@ defined('ABSPATH') || exit;
  * Shared admin dependency for all Order Splitter modal workflows.
  *
  * WooCommerce registers wc-backbone-modal as a supported admin script handle.
- * This bridge is loaded only on order-edit screens and becomes an explicit
- * dependency of every Order Splitter workflow client.
+ * This bridge is loaded on order-edit screens and on the gate-enabled Bulk
+ * Return Orders list, then becomes an explicit workflow-client dependency.
  */
 final class WCOS_Admin_Backbone_Modal_Assets {
 	public static function bootstrap() {
@@ -47,7 +47,7 @@ final class WCOS_Admin_Backbone_Modal_Assets {
 			return;
 		}
 
-		foreach (array('wcos-split-admin', 'wcos-duplicate-admin', 'wcos-split-strategy-admin', 'wcos-merge-admin', 'wcos-return-admin') as $handle) {
+		foreach (array('wcos-split-admin', 'wcos-duplicate-admin', 'wcos-split-strategy-admin', 'wcos-merge-admin', 'wcos-return-admin', 'wcos-bulk-return-admin') as $handle) {
 			if (!isset($scripts->registered[$handle])) {
 				continue;
 			}
@@ -66,6 +66,10 @@ final class WCOS_Admin_Backbone_Modal_Assets {
 		}
 		$hpos_screen = function_exists('wc_get_page_screen_id') ? wc_get_page_screen_id('shop-order') : 'woocommerce_page_wc-orders';
 		$hpos_order_id = isset($_GET['id']) ? absint(wp_unslash($_GET['id'])) : 0;
-		return 'shop_order' === $screen->id || ($hpos_screen === $screen->id && $hpos_order_id > 0);
+		$is_edit = 'shop_order' === $screen->id || ($hpos_screen === $screen->id && $hpos_order_id > 0);
+		$is_bulk_list = class_exists('WCOS_Feature_Gates')
+			&& WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN)
+			&& ('edit-shop_order' === $screen->id || ($hpos_screen === $screen->id && 0 === $hpos_order_id));
+		return $is_edit || $is_bulk_list;
 	}
 }

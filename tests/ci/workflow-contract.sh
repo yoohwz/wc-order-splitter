@@ -40,6 +40,11 @@ assert_absent "$ci_workflow" '  push:'
 assert_contains "$ci_workflow" "matrix:"
 assert_contains "$ci_workflow" "php: ['7.4', '8.1', '8.3']"
 assert_contains "$ci_workflow" 'storage: [legacy, hpos, hpos-sync]'
+assert_contains "$ci_workflow" 'bulk-return-hard-off-coordinator-smoke.php'
+assert_contains "$ci_workflow" 'bulk-return-fail-stop-smoke.php'
+assert_contains "$ci_workflow" 'bulk-return-near-limit-smoke.php'
+assert_contains "$ci_workflow" 'bulk-return-confirm-race-worker.php'
+assert_contains "$ci_workflow" 'bulk-return-ui-readiness-smoke.php'
 assert_contains "$ci_workflow" 'name: Required CI'
 assert_contains "$ci_workflow" 'merge_candidate_tree_sha=$(git rev-parse HEAD^{tree})'
 assert_contains "$ci_workflow" '.github/scripts/validate-distribution-contract.sh'
@@ -52,6 +57,7 @@ assert_contains "$main_workflow" '      - main'
 assert_contains "$main_workflow" 'git rev-parse HEAD^{tree}'
 assert_contains "$main_workflow" 'main_parent_shas=$(git show -s --format=%P HEAD)'
 assert_contains "$main_workflow" '.github/scripts/validate-distribution-contract.sh'
+assert_contains "$main_workflow" "test ! -e inc/backend/actions/return-order-bulk-action.php"
 assert_absent "$main_workflow" 'wc-order-splitter.zip'
 assert_absent "$main_workflow" 'actions/upload-artifact'
 

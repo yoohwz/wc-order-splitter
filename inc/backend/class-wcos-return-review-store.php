@@ -79,6 +79,16 @@ final class WCOS_Return_Review_Store {
 	}
 
 	/**
+	 * Build the ordinary Return authority for a server-owned coordination flow.
+	 *
+	 * This does not persist or consume Review state. Callers must still prove
+	 * their own authenticated server authority before using the result.
+	 */
+	public static function authority_from_preflight(WC_Order $child, array $report) {
+		return self::authority_from_report($report, $child->get_id());
+	}
+
+	/**
 	 * Atomically compare-and-delete the exact DB-backed transient record.
 	 *
 	 * Two Confirm workers may both finish read-only verification and create an

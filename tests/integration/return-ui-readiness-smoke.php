@@ -132,9 +132,10 @@ try {
 	foreach (array(
 		$root . '/inc/backend/actions/return-order.php',
 		$root . '/inc/backend/actions/return-order-bulk-action.php',
+		$root . '/inc/backend/orders-bulk-return.php',
 		$root . '/js/bulk-return-action.js',
 	) as $legacy_path) {
-		wcos_return_ui_assert(false === strpos(file_get_contents($root . '/inc/cores/script.php'), basename($legacy_path)), 'Legacy Return runtime path was reintroduced: ' . basename($legacy_path));
+		wcos_return_ui_assert(!file_exists($legacy_path) || false === strpos(file_get_contents($root . '/inc/cores/script.php'), basename($legacy_path)), 'Legacy Return runtime path was reintroduced: ' . basename($legacy_path));
 	}
 } finally {
 	$order->delete(true);

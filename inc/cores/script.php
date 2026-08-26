@@ -83,6 +83,8 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-return-commit-guard.php';
 		include_once $root . 'domain/class-wcos-return-compensator.php';
 		include_once $root . 'domain/class-wcos-return-order-service.php';
+		include_once $root . 'domain/class-wcos-bulk-return-batch-plan.php';
+		include_once $root . 'domain/class-wcos-bulk-return-journal-context.php';
 		include_once $root . 'domain/class-wcos-mutation-recovery-coordinator.php';
 		WCOS_Mutation_Recovery_Coordinator::bootstrap();
 		include_once $root . 'domain/class-wcos-duplicate-preflight.php';
@@ -90,6 +92,7 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-duplicate-woocommerce-adapter.php';
 		include_once $root . 'domain/class-wcos-merge-woocommerce-adapter.php';
 		include_once $root . 'domain/class-wcos-return-woocommerce-adapter.php';
+		include_once $root . 'domain/class-wcos-bulk-return-orchestrator.php';
 		include_once $root . 'domain/class-wcos-mutation-gateway.php';
 
 		include_once $root . 'backend/class-wcos-admin-backbone-modal-assets.php';
@@ -116,6 +119,11 @@ class WC_Order_Splitter_Script {
 			include_once $root . 'backend/class-wcos-return-confirmation-store.php';
 			include_once $root . 'backend/class-wcos-return-admin-controller.php';
 			WCOS_Return_Admin_Controller::bootstrap();
+
+			include_once $root . 'backend/class-wcos-bulk-return-review-store.php';
+			include_once $root . 'backend/class-wcos-bulk-return-confirmation-store.php';
+			include_once $root . 'backend/class-wcos-bulk-return-admin-controller.php';
+			WCOS_Bulk_Return_Admin_Controller::bootstrap();
 
 		include_once $root . 'backend/settings.php';
 		include_once $root . 'backend/orders.php';
