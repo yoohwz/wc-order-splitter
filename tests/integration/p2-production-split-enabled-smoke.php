@@ -20,7 +20,7 @@ wcos_p2_adapter_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE), '
 wcos_p2_adapter_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER), 'Production Return gate was lost while validating Split.');
 wcos_p2_adapter_assert(WCOS_Feature_Gates::any_enabled(), 'Production gate set was reported as fully disabled.');
 wcos_p2_adapter_assert(WC_Order_Splitter_Safety_Guard::mutations_enabled(), 'Safety guard did not reflect the approved Split gate.');
-wcos_p2_adapter_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Bulk Return is enabled alongside Split.');
+wcos_p2_adapter_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Production Bulk Return is not enabled alongside Split.');
 
 $enabled_previous_user = get_current_user_id();
 $enabled_allowed_statuses = get_option('order_splitter_status_allowed', array('wc-processing'));

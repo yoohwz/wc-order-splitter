@@ -108,7 +108,7 @@ $admins = get_users(array('role' => 'administrator', 'number' => 1, 'fields' => 
 wcos_return_production_assert(!empty($admins), 'Enabled Return production requires an administrator.');
 wp_set_current_user(absint($admins[0]));
 wcos_return_production_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER), 'Production Return gate is not enabled.');
-wcos_return_production_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Production Bulk Return gate drifted on.');
+wcos_return_production_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Production Bulk Return gate is not enabled alongside Return.');
 foreach (array(WCOS_Feature_Gates::SPLIT, WCOS_Feature_Gates::DUPLICATE, WCOS_Feature_Gates::MERGE) as $workflow) {
 	wcos_return_production_assert(WCOS_Feature_Gates::enabled($workflow), 'Accepted production workflow gate drifted off: ' . $workflow);
 }

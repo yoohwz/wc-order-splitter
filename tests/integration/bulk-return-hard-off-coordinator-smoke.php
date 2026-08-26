@@ -55,10 +55,10 @@ $operator_id = absint($admins[0]);
 wp_set_current_user($operator_id);
 $fixtures = array('orders' => array(), 'products' => array());
 
-wcos_bulk_return_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Production Bulk Return gate drifted on.');
-wcos_bulk_return_assert(null === WCOS_Bulk_Return_Admin_Controller::bootstrap(), 'Hard-off Bulk Return controller bootstrapped.');
+wcos_bulk_return_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Production Bulk Return gate is not enabled.');
+wcos_bulk_return_assert(WCOS_Bulk_Return_Admin_Controller::bootstrap() instanceof WCOS_Bulk_Return_Admin_Controller, 'Enabled Bulk Return controller did not bootstrap.');
 foreach (array(WCOS_Bulk_Return_Admin_Controller::REVIEW_ACTION, WCOS_Bulk_Return_Admin_Controller::CONFIRM_ACTION, WCOS_Bulk_Return_Admin_Controller::EXECUTE_ACTION, WCOS_Bulk_Return_Admin_Controller::RESUME_ACTION) as $action) {
-	wcos_bulk_return_assert(false === has_action('wp_ajax_' . $action), 'Hard-off Bulk Return AJAX hook is registered: ' . $action);
+	wcos_bulk_return_assert(false !== has_action('wp_ajax_' . $action), 'Enabled Bulk Return AJAX hook is missing: ' . $action);
 }
 wcos_bulk_return_assert(!file_exists(dirname(__DIR__, 2) . '/inc/backend/actions/return-order-bulk-action.php'), 'Legacy Bulk Return action still exists.');
 wcos_bulk_return_assert(!file_exists(dirname(__DIR__, 2) . '/inc/backend/orders-bulk-return.php'), 'Legacy Bulk Return bootstrap still exists.');
@@ -163,14 +163,8 @@ try {
 		wcos_bulk_return_assert(null === WCOS_Operation_Journal::get(wc_get_order($plan['rows'][$ordinal]['child_order_id']), $uuid), 'Zero-completed response-loss replay started a child mutation.');
 	}
 
-	$gateway_hard_off = false;
-	try { (new WCOS_Mutation_Gateway())->bulk_return_advance($confirmed['batch_id'], $confirmed['anchor_child_id'], $confirmed['batch_token'], $operator_id, 0); }
-	catch (Throwable $throwable) { $gateway_hard_off = true; }
-	wcos_bulk_return_assert($gateway_hard_off, 'Production Bulk Return gateway did not fail closed.');
-	wcos_bulk_return_assert(null === WCOS_Operation_Journal::get(wc_get_order($plan['rows'][0]['child_order_id']), $uuids[0]), 'Hard-off gateway created a child Return journal.');
-
 	$orchestrator = new WCOS_Bulk_Return_Orchestrator();
-	$first = $orchestrator->advance($confirmed['batch_id'], $confirmed['anchor_child_id'], $confirmed['batch_token'], $operator_id, 0);
+	$first = (new WCOS_Mutation_Gateway())->bulk_return_advance($confirmed['batch_id'], $confirmed['anchor_child_id'], $confirmed['batch_token'], $operator_id, 0);
 	wcos_bulk_return_assert(1 === $first['cursor'] && $first['has_more'], 'First Bulk Return request did not advance exactly one child.');
 	$first_child_signature = WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($plan['rows'][0]['child_order_id']));
 	$coordinator_key = 'wcos_mutation_op_' . hash('sha256', absint($confirmed['anchor_child_id']) . '|' . sanitize_key((string) $confirmed['batch_id']));
@@ -236,7 +230,7 @@ try {
 	$retention_probe['status'] = 'committed';
 	wcos_bulk_return_assert(!WCOS_Operation_Journal_Retention::is_expired_terminal_record($retention_probe), 'Committed Bulk Return coordinator became retention-eligible.');
 
-	echo "bulk-return-hard-off-coordinator-ok siblings=2 duplicates=1 auth=closed child_journals=2 coordinator=1 checkpoint=reconstructed response_loss=zero-one-terminal committed_window=healed corruption=blocked retention=terminal-only gateway=hard-off stock=neutral\n";
+	echo "bulk-return-enabled-coordinator-ok siblings=2 duplicates=1 auth=closed child_journals=2 coordinator=1 checkpoint=reconstructed response_loss=zero-one-terminal committed_window=healed corruption=blocked retention=terminal-only gateway=production-enabled stock=neutral\n";
 } finally {
 	wcos_bulk_return_cleanup($fixtures);
 }

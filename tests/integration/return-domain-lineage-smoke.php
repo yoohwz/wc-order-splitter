@@ -201,7 +201,7 @@ function wcos_return_foundation_strategy_case($strategy, $user_id) {
 wcos_return_foundation_assert(class_exists('WCOS_Return_Lineage_Authority'), 'Return lineage class is not loaded.');
 wcos_return_foundation_assert(class_exists('WCOS_Return_Preflight'), 'Return preflight class is not loaded.');
 wcos_return_foundation_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER), 'Production Return gate is not enabled.');
-wcos_return_foundation_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Bulk Return production gate changed.');
+wcos_return_foundation_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Production Bulk Return gate is not enabled.');
 
 $user_id = wp_insert_user(array(
 	'user_login' => 'wcos_return_foundation_' . wp_generate_password(8, false),
