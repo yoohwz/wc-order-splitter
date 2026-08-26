@@ -50,14 +50,7 @@ final class WCOS_Split_Admin_Controller {
         $order = $this->authorized_order($request, $order_id);
         $raw_plan = isset($request['plan']) ? (string) $request['plan'] : '';
 
-        try {
-            $plan = WCOS_Split_Request_Parser::parse_json($raw_plan, $order);
-            $summary = $this->plan_summary($plan);
-        } catch (InvalidArgumentException $exception) {
-            throw new WCOS_Split_Transport_Exception('invalid_plan', $exception->getMessage(), 422, false);
-        }
-
-        $preflight = (new WCOS_Mutation_Gateway())->split_preflight($order);
+        $preflight = (new WCOS_Mutation_Gateway())->manual_split_preflight($order);
         if (empty($preflight['supported'])) {
             throw new WCOS_Split_Transport_Exception(
                 'preflight_' . (isset($preflight['reason']) ? $preflight['reason'] : 'unsupported'),
@@ -67,8 +60,28 @@ final class WCOS_Split_Admin_Controller {
                 array('preflight' => $preflight)
             );
         }
+		if (empty($preflight['manual_quantity_authority']) || !is_array($preflight['manual_quantity_authority'])) {
+			throw new WCOS_Split_Transport_Exception('preflight_quantity_authority_missing', __('The server could not establish Manual Split quantity-step authority.', 'wc-order-splitter'), 409, false);
+		}
 
-        $confirmation = WCOS_Split_Confirmation_Store::create($order, $plan, $preflight, get_current_user_id());
+		try {
+			$plan = WCOS_Split_Request_Parser::parse_json($raw_plan, $order, $preflight['manual_quantity_authority']);
+			$summary = $this->plan_summary($plan);
+		} catch (InvalidArgumentException $exception) {
+			throw new WCOS_Split_Transport_Exception('invalid_plan', $exception->getMessage(), 422, false);
+		}
+
+		try {
+			$confirmation = WCOS_Split_Confirmation_Store::create($order, $plan, $preflight, get_current_user_id());
+		} catch (WCOS_Split_Confirmation_Exception $exception) {
+			$reason = $exception->get_reason();
+			throw new WCOS_Split_Transport_Exception(
+				'confirmation_' . $reason,
+				$exception->getMessage(),
+				in_array($reason, array('source_changed', 'quantity_authority_changed', 'quantity_authority_incomplete'), true) ? 409 : 422,
+				false
+			);
+		}
         return array(
             'operation_id' => $confirmation['operation_id'],
             'confirmation_token' => $confirmation['confirmation_token'],
@@ -105,6 +118,8 @@ final class WCOS_Split_Admin_Controller {
                 'manual_reconciliation' => 409,
                 'operation_closed' => 409,
                 'journal_incomplete' => 409,
+				'quantity_authority_changed' => 409,
+				'quantity_authority_incomplete' => 409,
             );
             $reason = $exception->get_reason();
             throw new WCOS_Split_Transport_Exception(
@@ -125,11 +140,12 @@ final class WCOS_Split_Admin_Controller {
         }
 
         try {
-            $children = (new WCOS_Mutation_Gateway())->split(
+            $children = (new WCOS_Mutation_Gateway())->split_manual_confirmed(
                 $order,
                 $confirmation['plan'],
                 $operation_id,
-                $confirmation['price_precision']
+				$confirmation['price_precision'],
+				$confirmation
             );
         } catch (WCOS_Split_Preflight_Exception $exception) {
             throw new WCOS_Split_Transport_Exception(
@@ -139,6 +155,14 @@ final class WCOS_Split_Admin_Controller {
                 false,
                 array('preflight' => $exception->get_report())
             );
+		} catch (WCOS_Manual_Split_Quantity_Authority_Exception $exception) {
+			throw new WCOS_Split_Transport_Exception(
+				'confirmation_quantity_authority_changed',
+				$exception->getMessage(),
+				409,
+				false,
+				array('quantity_authority' => $exception->get_report())
+			);
         } catch (WCOS_Unexpected_Stock_Mutation_Exception $exception) {
             throw new WCOS_Split_Transport_Exception(
                 'manual_reconciliation_required',
@@ -206,7 +230,7 @@ final class WCOS_Split_Admin_Controller {
         try {
             WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::SPLIT, $order);
             $this->assert_status_enabled($order);
-            $preflight = (new WCOS_Split_WooCommerce_Adapter())->preflight($order);
+            $preflight = (new WCOS_Split_WooCommerce_Adapter())->manual_preflight($order);
         } catch (Throwable $throwable) {
             return;
         }
@@ -260,15 +284,20 @@ final class WCOS_Split_Admin_Controller {
     }
 
     public function dialog_html(WC_Order $order, array $preflight = array()) {
-        if (empty($preflight)) {
-            $preflight = (new WCOS_Split_WooCommerce_Adapter())->preflight($order);
+        if (empty($preflight['manual_quantity_authority'])) {
+            $preflight = (new WCOS_Split_WooCommerce_Adapter())->manual_preflight($order);
         }
         $dialog_id = 'wcos-split-dialog-' . $order->get_id();
         $title_id = $dialog_id . '-title';
         $description_id = $dialog_id . '-description';
         $nonce = wp_create_nonce('wcos_split_order_' . $order->get_id());
-        $fractional_supported = !empty($preflight['fractional_quantity_supported']);
-        $step = $fractional_supported ? '0.000001' : '1';
+		$quantity_authority = WCOS_Manual_Split_Quantity_Authority::assert_valid($preflight['manual_quantity_authority']);
+		$step_labels = array();
+		foreach ($quantity_authority['lines'] as $line_authority) {
+			$step_labels[] = WCOS_Manual_Split_Quantity_Authority::display_decimal($line_authority['quantity_step']);
+		}
+		$step_labels = array_values(array_unique($step_labels));
+		sort($step_labels, SORT_NATURAL);
 
         ob_start();
         ?>
@@ -297,18 +326,30 @@ final class WCOS_Split_Admin_Controller {
                             </thead>
                             <tbody>
                                 <?php foreach ($order->get_items('line_item') as $item_id => $item) :
-                                    $quantity = WCOS_Decimal::normalize($item->get_quantity(), 6);
+									$line_authority = isset($quantity_authority['lines'][$item_id]) ? $quantity_authority['lines'][$item_id] : array();
+									$quantity = isset($line_authority['source_quantity']) ? (string) $line_authority['source_quantity'] : WCOS_Decimal::normalize($item->get_quantity(), 6);
+									$display_quantity = WCOS_Manual_Split_Quantity_Authority::display_decimal($quantity);
+									$step = WCOS_Manual_Split_Quantity_Authority::display_decimal($line_authority['quantity_step']);
+									$maximum = WCOS_Manual_Split_Quantity_Authority::display_decimal($line_authority['maximum_quantity']);
+									$inputmode = 0 === ((int) $line_authority['step_units'] % WCOS_Decimal::factor(6)) ? 'numeric' : 'decimal';
+									$can_partially_split = !empty($line_authority['can_partially_split']);
                                     ?>
-                                    <tr data-item-id="<?php echo esc_attr($item_id); ?>" data-source-quantity="<?php echo esc_attr($quantity); ?>">
+									<tr data-item-id="<?php echo esc_attr($item_id); ?>" data-source-quantity="<?php echo esc_attr($quantity); ?>" data-source-units="<?php echo esc_attr($line_authority['source_quantity_units']); ?>" data-step-units="<?php echo esc_attr($line_authority['step_units']); ?>" data-maximum-units="<?php echo esc_attr($line_authority['maximum_quantity_units']); ?>" data-splittable="<?php echo $can_partially_split ? '1' : '0'; ?>">
                                         <th scope="row"><?php echo esc_html($item->get_name()); ?></th>
-                                        <td><?php echo esc_html($quantity); ?></td>
+										<td>
+											<?php echo esc_html($display_quantity); ?>
+											<small class="wcos-split-step-hint"><?php echo esc_html(sprintf(__('Step: %s', 'wc-order-splitter'), $step)); ?></small>
+											<?php if (!$can_partially_split) : ?>
+												<small class="wcos-split-non-splittable"><?php esc_html_e('No partial quantity can move while retaining one step.', 'wc-order-splitter'); ?></small>
+											<?php endif; ?>
+										</td>
                                         <?php for ($child_index = 1; $child_index <= 10; $child_index++) :
                                             $child_key = 'child-' . $child_index;
                                             $quantity_id = 'wcos-split-quantity-' . $order->get_id() . '-' . $item_id . '-' . $child_index;
                                             ?>
                                             <td>
                                                 <label class="screen-reader-text" for="<?php echo esc_attr($quantity_id); ?>"><?php echo esc_html(sprintf(__('Quantity of %1$s to move to Child %2$d', 'wc-order-splitter'), $item->get_name(), $child_index)); ?></label>
-                                                <input id="<?php echo esc_attr($quantity_id); ?>" class="wcos-split-quantity" data-child-key="<?php echo esc_attr($child_key); ?>" type="number" min="0" max="<?php echo esc_attr($quantity); ?>" step="<?php echo esc_attr($step); ?>" inputmode="decimal" value="0" />
+												<input id="<?php echo esc_attr($quantity_id); ?>" class="wcos-split-quantity" data-child-key="<?php echo esc_attr($child_key); ?>" type="number" min="0" max="<?php echo esc_attr($maximum); ?>" step="<?php echo esc_attr($step); ?>" inputmode="<?php echo esc_attr($inputmode); ?>" value="0"<?php echo disabled(!$can_partially_split, true, false); ?> />
                                             </td>
                                         <?php endfor; ?>
                                     </tr>
@@ -326,7 +367,7 @@ final class WCOS_Split_Admin_Controller {
                             <li><?php esc_html_e('The Split request must not write physical product stock.', 'wc-order-splitter'); ?></li>
                             <li><?php esc_html_e('Coupons, refunds, negative fees, nested splits, and unclassified private line metadata are rejected before mutation.', 'wc-order-splitter'); ?></li>
                             <li><?php esc_html_e('Extensions that change stock directly in the database instead of WooCommerce stock APIs are unsupported unless they provide an explicit compatibility adapter.', 'wc-order-splitter'); ?></li>
-                            <li><?php echo esc_html($fractional_supported ? __('Fractional quantities are enabled by the active WooCommerce quantity integration.', 'wc-order-splitter') : __('The active WooCommerce quantity integration only supports integer Split quantities.', 'wc-order-splitter')); ?></li>
+							<li><?php echo esc_html(sprintf(__('Manual allocation steps are enforced per line: %s.', 'wc-order-splitter'), implode(', ', $step_labels))); ?></li>
                         </ul>
                     </div>
 

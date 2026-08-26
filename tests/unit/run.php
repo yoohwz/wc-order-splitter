@@ -29,6 +29,7 @@ require_once $root . 'class-wcos-mutation-fingerprint.php';
 require_once $root . 'class-wcos-price-precision-scope.php';
 require_once $root . 'class-wcos-mutation-contract.php';
 require_once $root . 'class-wcos-split-plan.php';
+require_once $root . 'class-wcos-manual-split-quantity-authority.php';
 require_once $root . 'class-wcos-merge-retirement-policy.php';
 require_once $root . 'class-wcos-merge-plan.php';
 require_once $root . 'class-wcos-merge-recovery-state-graph.php';
@@ -38,6 +39,50 @@ require_once $root . 'class-wcos-return-retirement-policy.php';
 require_once $root . 'class-wcos-return-recovery-state-graph.php';
 
 $tests = array();
+
+function manual_quantity_authority_fixture() {
+	$authority = array(
+		'schema_version' => WCOS_Manual_Split_Quantity_Authority::SCHEMA_VERSION,
+		'policy_version' => WCOS_Manual_Split_Quantity_Authority::POLICY_VERSION,
+		'precision' => 6,
+		'source_order_id' => 42,
+		'source_signature' => str_repeat('a', 64),
+		'lines' => array(
+			11 => array(
+				'source_order_id' => 42,
+				'source_item_id' => 11,
+				'product_id' => 101,
+				'variation_id' => 0,
+				'source_quantity' => '4.000000',
+				'source_quantity_units' => 4000000,
+				'quantity_step' => '1.000000',
+				'step_units' => 1000000,
+				'maximum_quantity' => '3.000000',
+				'maximum_quantity_units' => 3000000,
+				'can_partially_split' => true,
+			),
+			22 => array(
+				'source_order_id' => 42,
+				'source_item_id' => 22,
+				'product_id' => 202,
+				'variation_id' => 203,
+				'source_quantity' => '3.500000',
+				'source_quantity_units' => 3500000,
+				'quantity_step' => '0.250000',
+				'step_units' => 250000,
+				'maximum_quantity' => '3.250000',
+				'maximum_quantity_units' => 3250000,
+				'can_partially_split' => true,
+			),
+		),
+	);
+	$authority['authority_fingerprint'] = WCOS_Mutation_Fingerprint::create(
+		'manual_split_quantity_authority_v1',
+		42,
+		$authority
+	);
+	return $authority;
+}
 
 $tests['decimal rounds half up without binary floats'] = static function() {
 	assert_same(1001, WCOS_Decimal::to_units('10.005', 2));
@@ -131,6 +176,40 @@ $tests['split request rejects normalized source item ID collisions'] = static fu
 			'child-a' => array('01' => '0.25', 1 => '0.50'),
 		));
 	}, InvalidArgumentException::class);
+};
+
+$tests['manual split authority accepts exact mixed-line step multiples'] = static function() {
+	$authority = manual_quantity_authority_fixture();
+	$plan = WCOS_Manual_Split_Quantity_Authority::assert_plan(array(
+		'child-2' => array(22 => '1.75'),
+		'child-1' => array(11 => '1', 22 => '0.50'),
+	), $authority);
+	assert_same('1.000000', $plan['child-1'][11]);
+	assert_same('0.500000', $plan['child-1'][22]);
+	assert_same('1.750000', $plan['child-2'][22]);
+};
+
+$tests['manual split authority rejects sub-step and aggregate residual violations'] = static function() {
+	$authority = manual_quantity_authority_fixture();
+	foreach (array('0.000001', '0.1', '0.30') as $quantity) {
+		assert_throws(static function() use ($authority, $quantity) {
+			WCOS_Manual_Split_Quantity_Authority::assert_plan(array('child-1' => array(22 => $quantity)), $authority);
+		}, WCOS_Manual_Split_Quantity_Authority_Exception::class);
+	}
+	assert_throws(static function() use ($authority) {
+		WCOS_Manual_Split_Quantity_Authority::assert_plan(array(
+			'child-1' => array(22 => '1.750000'),
+			'child-2' => array(22 => '1.750000'),
+		), $authority);
+	}, WCOS_Manual_Split_Quantity_Authority_Exception::class);
+};
+
+$tests['manual split authority fingerprint rejects browser or journal tampering'] = static function() {
+	$authority = manual_quantity_authority_fixture();
+	$authority['lines'][22]['step_units'] = 100000;
+	assert_throws(static function() use ($authority) {
+		WCOS_Manual_Split_Quantity_Authority::assert_valid($authority);
+	}, WCOS_Manual_Split_Quantity_Authority_Exception::class);
 };
 
 $tests['mutation contract accepts conserved snapshot'] = static function() {

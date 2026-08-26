@@ -135,6 +135,7 @@ wcos_control_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::DUPLICATE), 
 wcos_control_assert(WC_Order_Splitter_Safety_Guard::mutations_enabled(), 'Safety guard did not restore the production-enabled state.');
 
 require __DIR__ . '/p2-production-split-enabled-smoke.php';
+require __DIR__ . '/p2-manual-quantity-step-authority-smoke.php';
 require __DIR__ . '/p2-production-duplicate-enabled-smoke.php';
 require __DIR__ . '/p2-whole-line-plan-smoke.php';
 require __DIR__ . '/p2-duplicate-side-effects-smoke.php';

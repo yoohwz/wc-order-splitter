@@ -17,6 +17,7 @@ list($policy_source, $policy_item_id) = wcos_p2_adapter_order($policy_product, 3
 $policy_source_id = $policy_source->get_id();
 $policy_operation = wp_generate_uuid4();
 $policy_plan = array('child-1' => array($policy_item_id => '1.000000'));
+$policy_quantity_authority = WCOS_Manual_Split_Quantity_Authority::create($policy_source);
 $policy_fingerprint = WCOS_Mutation_Fingerprint::create(
     'split',
     $policy_source_id,
@@ -28,7 +29,7 @@ wcos_p2_adapter_assert(
         $policy_source,
         $policy_operation,
         'split',
-        array('plan' => $policy_plan),
+		array('plan' => $policy_plan, 'manual_quantity_authority' => $policy_quantity_authority),
         $policy_fingerprint
     ),
     'Unable to start durable-policy journal fixture.'
@@ -93,6 +94,26 @@ try {
     $policy_changed = 'policy_changed' === $exception->get_reason();
 }
 wcos_p2_adapter_assert($policy_changed, 'Durable replay crossed a changed Split safety policy.');
+
+update_option($journal_key, $policy_record, false);
+wp_cache_delete($journal_key, 'options');
+
+$legacy_record = $policy_record;
+unset($legacy_record['context']['manual_quantity_authority']);
+update_option($journal_key, $legacy_record, false);
+wp_cache_delete($journal_key, 'options');
+$legacy_authority_rejected = false;
+try {
+	WCOS_Split_Confirmation_Store::verify(
+		wc_get_order($policy_source_id),
+		$policy_operation,
+		'',
+		$policy_user_id
+	);
+} catch (WCOS_Split_Confirmation_Exception $exception) {
+	$legacy_authority_rejected = 'quantity_authority_incomplete' === $exception->get_reason();
+}
+wcos_p2_adapter_assert($legacy_authority_rejected, 'Durable Manual Split replay accepted a journal without quantity-step authority.');
 
 update_option($journal_key, $policy_record, false);
 wp_cache_delete($journal_key, 'options');

@@ -31,7 +31,7 @@ try {
     /* Split: verify succeeds, source changes, adapter must still fail before journal/child persistence. */
     $split_source = wc_get_order($split_source_id);
     $split_plan = array('child-1' => array($split_item_id => '1.000000'));
-    $split_preflight = (new WCOS_Split_WooCommerce_Adapter())->preflight($split_source);
+    $split_preflight = (new WCOS_Split_WooCommerce_Adapter())->manual_preflight($split_source);
     $split_confirmation = WCOS_Split_Confirmation_Store::create(
         $split_source,
         $split_plan,
@@ -51,17 +51,34 @@ try {
         'Split verify did not publish request-local source authority.'
     );
 
+	$confirmation_mismatch_rejected = false;
+	try {
+		$forged_confirmation = $split_verified;
+		$forged_confirmation['operation_id'] = wp_generate_uuid4();
+		(new WCOS_Mutation_Gateway())->split_manual_confirmed(
+			wc_get_order($split_source_id),
+			$split_verified['plan'],
+			$split_operation,
+			$split_verified['price_precision'],
+			$forged_confirmation
+		);
+	} catch (RuntimeException $exception) {
+		$confirmation_mismatch_rejected = false !== strpos($exception->getMessage(), 'does not match');
+	}
+	wcos_p2_adapter_assert($confirmation_mismatch_rejected, 'Split mutation Gateway accepted mismatched verified confirmation authority.');
+
     $changed_split = wc_get_order($split_source_id);
     $changed_split->set_customer_note('changed-after-split-verify');
     $changed_split->save();
 
     $split_rejected = false;
     try {
-        (new WCOS_Mutation_Gateway())->split(
+        (new WCOS_Mutation_Gateway())->split_manual_confirmed(
             wc_get_order($split_source_id),
             $split_verified['plan'],
             $split_operation,
-            $split_verified['price_precision']
+			$split_verified['price_precision'],
+			$split_verified
         );
     } catch (WCOS_Split_Preflight_Exception $exception) {
         $split_rejected = 'source_changed_after_confirmation' === $exception->get_reason();

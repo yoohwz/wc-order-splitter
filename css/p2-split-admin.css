@@ -148,6 +148,18 @@
     white-space: nowrap;
 }
 
+.wcos-split-step-hint,
+.wcos-split-non-splittable {
+    display: block;
+    margin-top: 3px;
+    color: #646970;
+    font-size: 12px;
+}
+
+.wcos-split-non-splittable {
+    color: #8a2424;
+}
+
 .wcos-split-remaining.is-invalid {
     color: #b32d2e;
 }

@@ -39,6 +39,12 @@ final class WCOS_Split_Order_Service {
 		}
 
 		$canonical_plan = WCOS_Split_Plan::canonicalize_request($plan);
+		if (isset($operation_context['manual_quantity_authority'])) {
+			$canonical_plan = WCOS_Manual_Split_Quantity_Authority::assert_plan(
+				$canonical_plan,
+				$operation_context['manual_quantity_authority']
+			);
+		}
 		$existing = WCOS_Operation_Journal::get($source, $operation_id);
 		$legacy_journal = is_array($existing)
 			&& (!isset($existing['context']) || !is_array($existing['context']) || !array_key_exists('execution_policy', $existing['context']));
@@ -58,6 +64,9 @@ final class WCOS_Split_Order_Service {
 		}
 		if (isset($operation_context['strategy_authority'])) {
 			$fingerprint_context['strategy_authority'] = $operation_context['strategy_authority'];
+		}
+		if (isset($operation_context['manual_quantity_authority'])) {
+			$fingerprint_context['manual_quantity_authority'] = $operation_context['manual_quantity_authority'];
 		}
 		$fingerprint = WCOS_Mutation_Fingerprint::create(self::TYPE, $source->get_id(), $fingerprint_context);
 
@@ -146,6 +155,9 @@ final class WCOS_Split_Order_Service {
 				);
 				if (isset($operation_context['strategy_authority'])) {
 					$context['strategy_authority'] = $operation_context['strategy_authority'];
+				}
+				if (isset($operation_context['manual_quantity_authority'])) {
+					$context['manual_quantity_authority'] = $operation_context['manual_quantity_authority'];
 				}
 				if (!WCOS_Operation_Journal::start($source, $operation_id, self::TYPE, $context, $fingerprint)) {
 					throw new RuntimeException(__('Unable to start the split operation journal.', 'wc-order-splitter'));
@@ -268,19 +280,33 @@ final class WCOS_Split_Order_Service {
 
 	private function normalize_operation_context(array $operation_context, $execution_policy) {
 		foreach (array_keys($operation_context) as $key) {
-			if ('strategy_authority' !== $key) {
+			if (!in_array($key, array('strategy_authority', 'manual_quantity_authority'), true)) {
 				throw new InvalidArgumentException(__('Unknown Split operation authority context.', 'wc-order-splitter'));
 			}
 		}
-		if (!array_key_exists('strategy_authority', $operation_context)) {
+		$has_strategy = array_key_exists('strategy_authority', $operation_context);
+		$has_manual = array_key_exists('manual_quantity_authority', $operation_context);
+		if ($has_strategy && $has_manual) {
+			throw new InvalidArgumentException(__('A Split operation cannot carry both strategy and Manual quantity authority.', 'wc-order-splitter'));
+		}
+		if (!$has_strategy && !$has_manual) {
 			return array();
 		}
-		if (WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER !== $execution_policy
+		if ($has_strategy && (WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER !== $execution_policy
 			|| !is_array($operation_context['strategy_authority'])
-			|| empty($operation_context['strategy_authority'])) {
+			|| empty($operation_context['strategy_authority']))) {
 			throw new InvalidArgumentException(__('Semantic Split strategy authority requires the whole-line execution policy.', 'wc-order-splitter'));
 		}
-		return array('strategy_authority' => $operation_context['strategy_authority']);
+		if ($has_strategy) {
+			return array('strategy_authority' => $operation_context['strategy_authority']);
+		}
+		if (WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY !== $execution_policy
+			|| !is_array($operation_context['manual_quantity_authority'])) {
+			throw new InvalidArgumentException(__('Manual quantity authority requires the partial-lines-only Split policy.', 'wc-order-splitter'));
+		}
+		return array(
+			'manual_quantity_authority' => WCOS_Manual_Split_Quantity_Authority::assert_valid($operation_context['manual_quantity_authority']),
+		);
 	}
 
 	private function assert_supported_source(WC_Order $source) {

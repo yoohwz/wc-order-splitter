@@ -209,6 +209,9 @@ jobs:
       - name: Run Split method focus lifecycle regression
         run: node tests/js/p2-split-method-focus-lifecycle.js
 
+      - name: Run Split quantity-step integer-unit regression
+        run: node tests/js/p2-split-quantity-step-math.js
+
       - name: Verify Return admin client syntax
         run: node --check js/p2-return-admin.js
 

@@ -18,7 +18,7 @@ try {
         '1.001'
     );
     $confirmation_precision_source_id = $confirmation_precision_source->get_id();
-    $preflight = (new WCOS_Split_WooCommerce_Adapter())->preflight($confirmation_precision_source);
+    $preflight = (new WCOS_Split_WooCommerce_Adapter())->manual_preflight($confirmation_precision_source);
     wcos_p2_adapter_assert(3 === (int) $preflight['price_precision'], 'Confirmation precision fixture was not reviewed at three decimals.');
 
     $confirmation = WCOS_Split_Confirmation_Store::create(

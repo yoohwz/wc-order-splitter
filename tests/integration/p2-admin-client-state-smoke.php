@@ -12,7 +12,11 @@ wcos_p2_adapter_assert(is_string($js) && '' !== $js, 'Unable to read the Split a
 foreach (array(
     'var completed = false;',
     "dialog.querySelectorAll('.wcos-split-quantity')",
-    'field.disabled = busy || completed || !!state;',
+	"row.getAttribute('data-splittable') !== '1'",
+	'field.disabled = permanentlyDisabled || busy || completed || !!state;',
+	'quantityUnits % authority.step !== BigInt(0)',
+	'movedForLine > authority.maximum',
+	'unitsToDecimal(quantityUnits)',
     'reviewButton.disabled = busy || completed || !!state || !canBuildPlan();',
     'confirmCheckbox.disabled = busy || completed || !state;',
     'executeButton.disabled = busy || completed || !state || !confirmCheckbox.checked;',
@@ -47,6 +51,9 @@ wcos_p2_adapter_assert(
 );
 wcos_p2_adapter_assert(false === strpos($js, 'window.alert'), 'Split admin client reintroduced blocking alert UI.');
 wcos_p2_adapter_assert(false === strpos($js, '.innerHTML'), 'Split admin client reintroduced innerHTML rendering.');
+wcos_p2_adapter_assert(false === strpos($js, 'toFixed(6)'), 'Split admin client uses binary floating-point formatting for quantity conservation.');
+wcos_p2_adapter_assert(false === strpos($js, 'movedForLine += Number('), 'Split admin client uses Number() for quantity accumulation.');
+wcos_p2_adapter_assert(false === strpos($js, 'currentCell.textContent = humanDecimal(sourceQuantity);'), 'Split admin client removes server-rendered per-line step guidance.');
 
 $bridge = file_get_contents($root . '/js/p2-backbone-modal.js');
 wcos_p2_adapter_assert(is_string($bridge) && '' !== $bridge, 'WooCommerce Backbone modal bridge is missing.');

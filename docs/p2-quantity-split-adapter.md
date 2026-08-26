@@ -61,8 +61,8 @@ The canonical WooCommerce integration matrix proves:
 - variation-owned stock preserves variation identity and does not move physical stock;
 - parent-managed variation stock resolves the real stock owner and remains unchanged;
 - backorder lines are identified and remain safe under the no-write Split policy;
-- native WooCommerce integer quantity behavior is respected;
-- fractional quantity behavior is proven only when an explicit integration replaces WooCommerce's default integer stock-amount filter.
+- native WooCommerce integer quantity behavior is respected through per-line step `1` authority;
+- fractional quantity behavior is proven only when an explicit integration both replaces WooCommerce's default integer stock-amount filter and exposes the applicable WooCommerce admin quantity step.
 
 ### Historical tax, charge, payment, and rounding contracts
 

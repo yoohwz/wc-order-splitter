@@ -23,7 +23,7 @@ final class WCOS_Split_Confirmation_Exception extends RuntimeException {
  * interrupted operation can be resumed after the confirmation TTL expires.
  */
 final class WCOS_Split_Confirmation_Store {
-    const SCHEMA_VERSION = 1;
+    const SCHEMA_VERSION = 2;
     const TTL = 1800;
 
     private static $verified_source_signatures = array();
@@ -40,6 +40,16 @@ final class WCOS_Split_Confirmation_Store {
         $precision_token = WCOS_Price_Precision_Scope::begin($precision);
         try {
             $reviewed_signature = isset($preflight['source_signature']) ? (string) $preflight['source_signature'] : '';
+			try {
+				$manual_authority = WCOS_Manual_Split_Quantity_Authority::assert_valid(
+					isset($preflight['manual_quantity_authority']) && is_array($preflight['manual_quantity_authority'])
+						? $preflight['manual_quantity_authority']
+						: array()
+				);
+				$plan = WCOS_Manual_Split_Quantity_Authority::assert_plan($plan, $manual_authority);
+			} catch (WCOS_Manual_Split_Quantity_Authority_Exception $exception) {
+				throw new WCOS_Split_Confirmation_Exception('quantity_authority_incomplete', $exception->getMessage());
+			}
 
             /*
              * The passed source is the exact object the strict request parser
@@ -47,7 +57,9 @@ final class WCOS_Split_Confirmation_Store {
              * closing parser -> preflight races inside one Review request.
              */
             $parsed_signature = WCOS_Order_Contract_Snapshot::source_signature($source);
-            if ('' === $reviewed_signature || !hash_equals($reviewed_signature, $parsed_signature)) {
+            if ('' === $reviewed_signature
+				|| !hash_equals($reviewed_signature, $parsed_signature)
+				|| !hash_equals($reviewed_signature, (string) $manual_authority['source_signature'])) {
                 throw new WCOS_Split_Confirmation_Exception(
                     'source_changed',
                     __('The order changed while the Split plan was being reviewed. Review the current order state again before creating a confirmation.', 'wc-order-splitter')
@@ -70,6 +82,11 @@ final class WCOS_Split_Confirmation_Store {
                     __('The order changed while the Split confirmation was being created. Review the current order state again.', 'wc-order-splitter')
                 );
             }
+			try {
+				WCOS_Manual_Split_Quantity_Authority::assert_current($scoped_source, $manual_authority);
+			} catch (WCOS_Manual_Split_Quantity_Authority_Exception $exception) {
+				throw new WCOS_Split_Confirmation_Exception('quantity_authority_changed', $exception->getMessage());
+			}
 
             $now = time();
             $record = array(
@@ -82,6 +99,8 @@ final class WCOS_Split_Confirmation_Store {
                 'plan' => WCOS_Split_Plan::canonicalize_request($plan),
                 'price_precision' => $precision,
                 'policy_version' => isset($preflight['policy']['policy_version']) ? absint($preflight['policy']['policy_version']) : 0,
+				'manual_quantity_authority' => $manual_authority,
+				'manual_quantity_authority_fingerprint' => $manual_authority['authority_fingerprint'],
                 'created_at' => $now,
                 'expires_at' => $now + self::TTL,
             );
@@ -127,6 +146,22 @@ final class WCOS_Split_Confirmation_Store {
         if (!isset($record['policy_version']) || (int) $record['policy_version'] !== (int) WCOS_Split_Preflight::POLICY_VERSION) {
             throw new WCOS_Split_Confirmation_Exception('policy_changed', __('The Split safety policy changed after this plan was reviewed. Review the plan again before executing it.', 'wc-order-splitter'));
         }
+		if (!isset($record['schema_version']) || self::SCHEMA_VERSION !== (int) $record['schema_version']) {
+			throw new WCOS_Split_Confirmation_Exception('quantity_authority_incomplete', __('The Split confirmation predates the required Manual quantity-step authority. Review the plan again.', 'wc-order-splitter'));
+		}
+		try {
+			$manual_authority = WCOS_Manual_Split_Quantity_Authority::assert_valid(
+				isset($record['manual_quantity_authority']) && is_array($record['manual_quantity_authority'])
+					? $record['manual_quantity_authority']
+					: array()
+			);
+		} catch (WCOS_Manual_Split_Quantity_Authority_Exception $exception) {
+			throw new WCOS_Split_Confirmation_Exception('quantity_authority_incomplete', $exception->getMessage());
+		}
+		if (empty($record['manual_quantity_authority_fingerprint'])
+			|| !hash_equals((string) $record['manual_quantity_authority_fingerprint'], (string) $manual_authority['authority_fingerprint'])) {
+			throw new WCOS_Split_Confirmation_Exception('quantity_authority_incomplete', __('The Split confirmation quantity-step fingerprint is incomplete.', 'wc-order-splitter'));
+		}
 
         $precision = WCOS_Price_Precision_Scope::validate(isset($record['price_precision']) ? $record['price_precision'] : null);
         $precision_token = WCOS_Price_Precision_Scope::begin($precision);
@@ -144,6 +179,19 @@ final class WCOS_Split_Confirmation_Store {
                     throw new WCOS_Split_Confirmation_Exception('source_changed', __('The order changed after the Split plan was reviewed. Review the plan again before executing it.', 'wc-order-splitter'));
                 }
                 self::$verified_source_signatures[$operation_id] = $expected;
+				try {
+					WCOS_Manual_Split_Quantity_Authority::assert_current($scoped_source, $manual_authority);
+				} catch (WCOS_Manual_Split_Quantity_Authority_Exception $exception) {
+					throw new WCOS_Split_Confirmation_Exception('quantity_authority_changed', $exception->getMessage());
+				}
+				try {
+					WCOS_Manual_Split_Quantity_Authority::assert_plan(
+						isset($record['plan']) && is_array($record['plan']) ? $record['plan'] : array(),
+						$manual_authority
+					);
+				} catch (WCOS_Manual_Split_Quantity_Authority_Exception $exception) {
+					throw new WCOS_Split_Confirmation_Exception('quantity_authority_incomplete', $exception->getMessage());
+				}
             } else {
                 $journal_context = isset($journal['context']) && is_array($journal['context']) ? $journal['context'] : array();
                 if (!array_key_exists('price_precision', $journal_context)
@@ -154,11 +202,24 @@ final class WCOS_Split_Confirmation_Store {
                     || (int) $journal_context['policy_version'] !== (int) $record['policy_version']) {
                     throw new WCOS_Split_Confirmation_Exception('policy_changed', __('The durable Split operation no longer matches the safety policy that was reviewed.', 'wc-order-splitter'));
                 }
+				if (empty($journal_context['manual_quantity_authority'])
+					|| !is_array($journal_context['manual_quantity_authority'])) {
+					throw new WCOS_Split_Confirmation_Exception('quantity_authority_incomplete', __('The durable Split operation is missing Manual quantity-step replay authority.', 'wc-order-splitter'));
+				}
+				try {
+					$journal_authority = WCOS_Manual_Split_Quantity_Authority::assert_valid($journal_context['manual_quantity_authority']);
+				} catch (WCOS_Manual_Split_Quantity_Authority_Exception $exception) {
+					throw new WCOS_Split_Confirmation_Exception('quantity_authority_incomplete', $exception->getMessage());
+				}
+				if (!hash_equals($manual_authority['authority_fingerprint'], $journal_authority['authority_fingerprint'])) {
+					throw new WCOS_Split_Confirmation_Exception('quantity_authority_incomplete', __('The durable Split quantity-step authority does not match its confirmation.', 'wc-order-splitter'));
+				}
             }
 
             $record['operation_id'] = $operation_id;
             $record['plan'] = WCOS_Split_Plan::canonicalize_request(isset($record['plan']) && is_array($record['plan']) ? $record['plan'] : array());
             $record['price_precision'] = $precision;
+			$record['manual_quantity_authority'] = $manual_authority;
             $record['replay_authority'] = is_array($journal) ? 'journal' : 'confirmation';
             return $record;
         } finally {
@@ -212,7 +273,7 @@ final class WCOS_Split_Confirmation_Store {
             throw new WCOS_Split_Confirmation_Exception('policy_changed', __('The Split safety policy changed after this durable operation started. Review the operation manually before continuing it.', 'wc-order-splitter'));
         }
 
-        return array(
+        $result = array(
             'schema_version' => self::SCHEMA_VERSION,
             'operation_id' => $operation_id,
             'source_order_id' => $source->get_id(),
@@ -221,6 +282,19 @@ final class WCOS_Split_Confirmation_Store {
             'policy_version' => (int) $context['policy_version'],
             'replay_authority' => 'journal',
         );
+		if (!isset($context['manual_quantity_authority']) || !is_array($context['manual_quantity_authority'])) {
+			throw new WCOS_Split_Confirmation_Exception(
+				'quantity_authority_incomplete',
+				__('The durable Manual Split operation predates required quantity-step authority and cannot be resumed automatically.', 'wc-order-splitter')
+			);
+		}
+		try {
+			$result['manual_quantity_authority'] = WCOS_Manual_Split_Quantity_Authority::assert_valid($context['manual_quantity_authority']);
+			$result['plan'] = WCOS_Manual_Split_Quantity_Authority::assert_plan($result['plan'], $result['manual_quantity_authority']);
+		} catch (WCOS_Manual_Split_Quantity_Authority_Exception $exception) {
+			throw new WCOS_Split_Confirmation_Exception('quantity_authority_incomplete', $exception->getMessage());
+		}
+		return $result;
     }
 
     private static function token_hash($token) {

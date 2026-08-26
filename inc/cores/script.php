@@ -43,6 +43,7 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-order-totals-rebuilder.php';
 		include_once $root . 'domain/class-wcos-tax-item-synchronizer.php';
 		include_once $root . 'domain/class-wcos-order-contract-snapshot.php';
+		include_once $root . 'domain/class-wcos-manual-split-quantity-authority.php';
 		include_once $root . 'domain/class-wcos-order-copy-context.php';
 		include_once $root . 'domain/class-wcos-order-mutation-snapshot.php';
 		include_once $root . 'domain/class-wcos-merge-retirement-policy.php';

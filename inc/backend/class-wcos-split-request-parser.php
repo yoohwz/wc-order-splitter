@@ -13,7 +13,7 @@ final class WCOS_Split_Request_Parser {
     const MAX_CHILDREN = 10;
     const MAX_LINE_ASSIGNMENTS = 500;
 
-    public static function parse_json($raw_plan, WC_Order $source) {
+    public static function parse_json($raw_plan, WC_Order $source, array $quantity_authority) {
         if (!is_string($raw_plan)) {
             throw new InvalidArgumentException(__('The Split plan must be a JSON string.', 'wc-order-splitter'));
         }
@@ -26,17 +26,29 @@ final class WCOS_Split_Request_Parser {
         if (JSON_ERROR_NONE !== json_last_error() || !is_array($decoded)) {
             throw new InvalidArgumentException(__('The Split plan contains invalid JSON.', 'wc-order-splitter'));
         }
-        return self::parse_array($decoded, $source);
+        return self::parse_array($decoded, $source, $quantity_authority);
     }
 
-    public static function parse_array(array $plan, WC_Order $source) {
+    public static function parse_array(array $plan, WC_Order $source, array $quantity_authority) {
         if (empty($plan) || count($plan) > self::MAX_CHILDREN) {
             throw new InvalidArgumentException(__('A Split plan must contain between one and ten child orders.', 'wc-order-splitter'));
         }
 
+        try {
+            $quantity_authority = WCOS_Manual_Split_Quantity_Authority::assert_valid($quantity_authority);
+        } catch (WCOS_Manual_Split_Quantity_Authority_Exception $exception) {
+            throw new InvalidArgumentException($exception->getMessage(), 0, $exception);
+        }
+        if ($source->get_id() !== (int) $quantity_authority['source_order_id']
+            || !hash_equals(
+                (string) $quantity_authority['source_signature'],
+                WCOS_Order_Contract_Snapshot::source_signature($source)
+            )) {
+            throw new InvalidArgumentException(__('The source order no longer matches the reviewed Manual Split quantity authority.', 'wc-order-splitter'));
+        }
+
         $strict = array();
         $assignments = 0;
-        $fractional_supported = WCOS_Split_Preflight::fractional_quantities_supported();
         foreach ($plan as $raw_child_key => $items) {
             $child_key = (string) $raw_child_key;
             if (!preg_match('/^child-(?:[1-9]|10)$/D', $child_key)) {
@@ -65,10 +77,7 @@ final class WCOS_Split_Request_Parser {
                 if (!$item_id || $quantity_units <= 0) {
                     throw new InvalidArgumentException(__('Split item IDs and quantities must be positive.', 'wc-order-splitter'));
                 }
-                if (0 !== ($quantity_units % 1000000) && !$fractional_supported) {
-                    throw new InvalidArgumentException(__('Fractional Split quantities require an integration that enables fractional WooCommerce stock amounts.', 'wc-order-splitter'));
-                }
-                if (!$source->get_item($item_id) instanceof WC_Order_Item_Product) {
+                if (!isset($quantity_authority['lines'][$item_id])) {
                     throw new InvalidArgumentException(__('The Split plan references an item outside the source order.', 'wc-order-splitter'));
                 }
                 if (isset($strict[$child_key][$item_id])) {
@@ -84,7 +93,9 @@ final class WCOS_Split_Request_Parser {
         }
 
         try {
-            return WCOS_Split_Plan::normalize($source, $strict);
+            return WCOS_Manual_Split_Quantity_Authority::assert_plan($strict, $quantity_authority);
+        } catch (WCOS_Manual_Split_Quantity_Authority_Exception $exception) {
+            throw new InvalidArgumentException($exception->getMessage(), 0, $exception);
         } catch (OverflowException $exception) {
             throw new InvalidArgumentException(__('The Split plan exceeds the supported numeric range.', 'wc-order-splitter'), 0, $exception);
         }

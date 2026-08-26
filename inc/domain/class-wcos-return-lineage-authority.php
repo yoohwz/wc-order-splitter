@@ -83,7 +83,7 @@ final class WCOS_Return_Lineage_Authority {
 			self::reject('execution_policy_mismatch', __('A partial-line Split journal contains whole-line provenance.', 'wc-order-splitter'));
 		}
 
-		$strategy = self::assert_strategy_authority($context, $execution_policy, $snapshot);
+		$strategy = self::assert_strategy_authority($context, $execution_policy, $snapshot, $plan);
 		self::assert_split_fingerprint($record, $plan, $execution_policy, $context);
 		$initial_target_ids = self::canonical_id_list(isset($context['target_order_ids']) ? $context['target_order_ids'] : array(), 'target_order_ids');
 		$current_relation_ids = self::canonical_id_list($source->get_meta(WCOS_Split_Order_Service::RELATION_CHILDREN_META, true), 'source_child_relations');
@@ -275,11 +275,23 @@ final class WCOS_Return_Lineage_Authority {
 		}
 	}
 
-	private static function assert_strategy_authority(array $context, $execution_policy, array $snapshot) {
+	private static function assert_strategy_authority(array $context, $execution_policy, array $snapshot, array $plan) {
 		$has_strategy = isset($context['strategy_authority']) && is_array($context['strategy_authority']);
 		if (WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY === $execution_policy) {
 			if ($has_strategy) {
 				self::reject('strategy_policy_mismatch', __('A manual partial Split unexpectedly carries strategy authority.', 'wc-order-splitter'));
+			}
+			if (isset($context['manual_quantity_authority'])) {
+				try {
+					$manual = WCOS_Manual_Split_Quantity_Authority::assert_valid($context['manual_quantity_authority']);
+					WCOS_Manual_Split_Quantity_Authority::assert_plan($plan, $manual);
+				} catch (Throwable $throwable) {
+					self::reject('manual_quantity_authority_invalid', __('The durable Manual Split quantity-step authority is invalid.', 'wc-order-splitter'));
+				}
+				if ((int) $manual['source_order_id'] !== (int) $snapshot['order_id']
+					|| !hash_equals((string) $manual['source_signature'], (string) $snapshot['source_signature'])) {
+					self::reject('manual_quantity_authority_mismatch', __('The durable Manual Split quantity-step authority does not match its source snapshot.', 'wc-order-splitter'));
+				}
 			}
 			return 'manual_quantity';
 		}
@@ -314,6 +326,9 @@ final class WCOS_Return_Lineage_Authority {
 		);
 		if (isset($context['strategy_authority'])) {
 			$fingerprint_context['strategy_authority'] = $context['strategy_authority'];
+		}
+		if (isset($context['manual_quantity_authority'])) {
+			$fingerprint_context['manual_quantity_authority'] = $context['manual_quantity_authority'];
 		}
 		$expected = WCOS_Mutation_Fingerprint::create('split', absint($record['source_order_id']), $fingerprint_context);
 		$stored = self::fingerprint_value(isset($record['fingerprint']) ? $record['fingerprint'] : '', 'split_operation_fingerprint');
