@@ -6,7 +6,7 @@ Normal implementation work uses the active WordPress Local plugin worktree and r
 
 `push/main` runs only the lightweight `Main attestation`. It records the exact commit and tree SHA, verifies the code-owned production gates and gateway smoke contract, runs representative PHP/unit checks, and validates the distributable tree. It does not create or upload an installable archive.
 
-Fast main attestation is safe only while repository rules require changes to `main` to enter through a pull request and require the canonical `Required CI` status. Independent Codex Technical Review, ChatGPT Acceptance Review, and Human Gate remain separate governance requirements under `docs/engineering-review-authority.md`. If those mechanical rules cannot be proven, stop with the task-defined branch-rules signal and do not merge a topology that removes the full `push/main` matrix.
+Fast main attestation is safe only while repository rules require changes to `main` to enter through a pull request and require the canonical `Required CI` status. Independent Codex Technical Review, ChatGPT Acceptance Review, and Human Gate remain separate governance requirements under `docs/engineering-review-authority.md`. The compressed `Finalize` command may coordinate Acceptance and the user's explicit conditional Human Gate, but it must record them separately and cannot merge after failed Acceptance or head/base/CI drift. If those mechanical rules cannot be proven, stop with the task-defined branch-rules signal and do not merge a topology that removes the full `push/main` matrix.
 
 ## Exact-tree post-merge authority
 
@@ -28,6 +28,8 @@ Normal CI validates only the distributable tree. It does not create a ZIP, check
 
 Manual dispatch and a successful artifact build are evidence only. They never imply release freeze, release, publication, deployment, or Human Gate authority. A sandbox artifact requires explicit authority in its canonical task; a release candidate requires the separate release workflow authority.
 
+`Finalize <TASK_ID>` may merge an accepted implementation or release-bookkeeping PR, but it never invokes the manual package workflow and never authorizes tagging, publishing, deploying, or uploading a public artifact. Release freeze and publication remain separate exact-SHA/artifact authorities.
+
 ## Future task authority block
 
-New task Issues should reference stable repository contracts and bind only the task-specific authority delta: task ID/classification, exact source SHA, code-owned gate files plus the exact expected gate map, scope delta, verification profile, task-specific invariants, stop signals, and Independent Codex Technical Review / ChatGPT Acceptance Review / Human Gate boundary.
+New task Issues should reference stable repository contracts and bind only the task-specific authority delta: task ID/classification and `LOW`/`MEDIUM`/`HIGH` risk profile, exact source SHA, code-owned gate files plus the exact expected gate map, scope delta, verification profile, task-specific invariants, stop signals, and Independent Codex Technical Review / ChatGPT Acceptance Review / Human Gate boundary. Risk changes evidence depth, not protected-branch or authority requirements.

@@ -22,7 +22,9 @@ Operator prompts may use the repository short-command protocol in `docs/codex-sh
 
 Examples:
 
+- `Create WOS-MERGE-009`
 - `Chạy WOS-MERGE-009`
+- `Finalize WOS-MERGE-009`
 - `Tiếp tục WOS-MERGE-009`
 - `Review WOS-MERGE-009`
 - `Sửa WOS-MERGE-009`
@@ -30,6 +32,12 @@ Examples:
 - `Status WOS-MERGE-009`
 
 A short command is only a task/action selector. Before substantive work, Codex must resolve the canonical GitHub Issue, its comments, associated PR/branch, exact SHAs, CI/check state, and latest explicit governance checkpoint. The Issue/PR contract supplies scope, invariants, tests, stop conditions, and completion signals; the short prompt does not duplicate or override them.
+
+After canonical `POST_MERGE_ACCEPTED` for WOS-GOV-005, the preferred normal lifecycle is `ChatGPT Create -> Codex Run -> ChatGPT Finalize` as defined by `docs/compressed-engineering-workflow.md`. `Run/Chạy` represents the complete Executor, exact-head CI, fresh Independent Codex Review, and bounded correction/re-review engineering loop when the Codex surface can establish separate reviewer provenance. If it cannot, stop with `INDEPENDENT_REVIEW_DISPATCH_REQUIRED`; the Executor must never self-issue `TECHNICAL_ACCEPTED`.
+
+Every Independent Codex Technical Review cycle must be persisted automatically as a new structured GitHub PR review/comment authority before that cycle completes. Chat/session-only `TECHNICAL_ACCEPTED` or `TECHNICAL_CHANGES_REQUIRED` is evidence only. The reviewer/orchestrating Codex surface must re-read and authenticate the persisted exact-head record; `READY_TO_FINALIZE` must include its Issue comment ID or PR review ID. If persistence or authentication fails, stop `TECHNICAL_REVIEW_PERSISTENCE_REQUIRED: <TASK_ID> / exact head <SHA>` and do not route to Acceptance or `Finalize`. Writing governance review metadata does not authorize source edits, commits, pushes, fixes, or PR-head changes by the Independent Reviewer.
+
+`Finalize <TASK_ID>` is the authenticated human's explicit conditional Human Gate for the exact currently technically accepted head. ChatGPT must independently resolve and authenticate the persisted GitHub Technical Acceptance authority, reject session-only review text, issue a distinct successful `ACCEPTANCE_ACCEPTED`, revalidate unchanged head/base/CI authority, then record `HUMAN_GATE_APPROVED`, merge, and prove exact-tree `POST_MERGE_ACCEPTED`. Failed Acceptance or drift cannot merge. `Finalize` never authorizes release, publication, deployment, or a public package.
 
 If the task contract cannot be retrieved, stop with `TASK_CONTRACT_UNAVAILABLE`. If resolution is ambiguous, stop with `TASK_RESOLUTION_REQUIRED`. `Continue` must recover and resume current state rather than restart work. `Review` is executor-side readiness review and never substitutes for a fresh Independent Codex Technical Review where the task requires it.
 
@@ -41,7 +49,7 @@ A short `Merge` or `Release` command never implies Human Gate. Merge/release aut
 
 Every meaningful Codex task-state response and every deterministic stop signal must end with exactly one `NEXT_ACTION_HINT` footer in the canonical format defined by `docs/codex-short-command-protocol.md`. The footer must identify who acts next, whether the command belongs in ChatGPT, Codex, or the GitHub UI, the exact copy/paste-ready command, and the expected signal or outcome.
 
-The footer is navigation only. It must not widen task authority, bypass CI or review, imply Human Gate or release/publication approval, let an executor self-accept, or collapse Independent Codex Technical Review into ChatGPT Acceptance Review. When no authorized action is available, the footer must name the actual blocking authority without inventing a command. Completed tasks must use the deterministic `None` footer only when no further authorized next action exists. If the canonical task contract explicitly identifies an authorized next milestone, the footer may point the operator to it, but Codex must not automatically start unrelated or merely inferred work.
+The footer is navigation only. It must not widen task authority, bypass CI or review, imply release/publication approval, let an executor self-accept, or collapse Independent Codex Technical Review into ChatGPT Acceptance Review. For compressed-flow tasks, persisted and authenticated GitHub exact-head Technical Acceptance routes to `Finalize <TASK_ID>`; `INDEPENDENT_REVIEW_DISPATCH_REQUIRED` routes to the fresh-reviewer fallback, while `TECHNICAL_REVIEW_PERSISTENCE_REQUIRED` blocks Acceptance/Finalize. Older or explicitly bootstrapped tasks retain their task-bound lower-level handoffs. When no authorized action is available, the footer must name the actual blocking authority without inventing a command. Completed tasks must use the deterministic `None` footer only when no further authorized next action exists. If the canonical task contract explicitly identifies an authorized next milestone, the footer may point the operator to it, but Codex must not automatically start unrelated or merely inferred work.
 
 ## Production gate authority
 
@@ -138,6 +146,9 @@ When a task brief designates Local-runtime mode:
 - Review the complete diff, not only the newest commit.
 - Keep Codex Executor, fresh Independent Codex Reviewer, and ChatGPT Acceptance Reviewer as distinct authorities under `docs/engineering-review-authority.md`.
 - The executor must not self-issue `TECHNICAL_ACCEPTED`; ChatGPT must not substitute Acceptance Review for independent technical/code-correctness review.
+- The Independent Reviewer must persist a new immutable structured GitHub review/comment record for every exact-head review cycle; GitHub metadata writes do not relax source read-only behavior.
+- Automatic technical correction/re-review orchestration is limited to three head-changing cycles per engineering loop; then stop with `TECHNICAL_ESCALATION_REQUIRED`.
+- A risk profile changes planning, evidence, and reviewer depth only; it cannot waive protected-branch CI, exact-head review/acceptance, Human Gate, post-merge proof, or release/publication authority.
 - Treat money, tax, stock, refunds, and relation metadata as one transaction boundary.
 - Reject hidden fallback behavior. Unsupported input must return a stable error and leave orders unchanged.
 - Keep pull requests draft while required checks are absent, queued, or failing.
