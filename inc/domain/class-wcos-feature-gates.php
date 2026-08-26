@@ -6,9 +6,9 @@ defined('ABSPATH') || exit;
  * Central fail-closed workflow gates.
  *
  * Split, Duplicate, Merge, and Return are approved production mutation workflows.
- * Bulk Return remains internally hard-off. Gate state is code, not
- * constants/options/filters, so another plugin, mu-plugin, or wp-config.php
- * cannot opt an unfinished workflow into production.
+ * Bulk Return is an approved production mutation workflow. Gate state is code,
+ * not constants/options/filters, so another plugin, mu-plugin, or wp-config.php
+ * cannot override the accepted production workflow map.
  */
 final class WCOS_Feature_Gates {
 
@@ -23,7 +23,7 @@ final class WCOS_Feature_Gates {
 		self::DUPLICATE => true,
 		self::MERGE => true,
 		self::RETURN_ORDER => true,
-		self::BULK_RETURN => false,
+		self::BULK_RETURN => true,
 	);
 
 	public static function enabled($workflow) {

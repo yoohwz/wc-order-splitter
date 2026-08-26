@@ -152,7 +152,7 @@ $controller = new WCOS_Return_Admin_Controller();
 $fixtures = array();
 
 wcos_return_authority_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER), 'Production Return gate is not enabled.');
-wcos_return_authority_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Bulk Return production gate drifted on.');
+wcos_return_authority_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Production Bulk Return gate is not enabled alongside Return.');
 foreach (array(WCOS_Return_Admin_Controller::REVIEW_ACTION, WCOS_Return_Admin_Controller::CONFIRM_ACTION, WCOS_Return_Admin_Controller::EXECUTE_ACTION) as $action) {
 	wcos_return_authority_assert(false !== has_action('wp_ajax_' . $action), 'Enabled Return AJAX hook is missing: ' . $action);
 }

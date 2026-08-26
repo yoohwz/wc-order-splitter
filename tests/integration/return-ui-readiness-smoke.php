@@ -16,7 +16,7 @@ wcos_return_ui_assert(!empty($admins), 'Return UI readiness requires an administ
 wp_set_current_user(absint($admins[0]));
 
 wcos_return_ui_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER), 'Production Return gate is not enabled.');
-wcos_return_ui_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Bulk Return gate drifted on.');
+wcos_return_ui_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Production Bulk Return gate is not enabled alongside Return UI.');
 
 $controller = new WCOS_Return_Admin_Controller();
 $hook_contracts = array(

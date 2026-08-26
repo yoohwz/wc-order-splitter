@@ -46,7 +46,7 @@ jobs:
           grep -Fq 'self::DUPLICATE => true' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::MERGE => true' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::RETURN_ORDER => true' inc/domain/class-wcos-feature-gates.php
-          grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::BULK_RETURN => true' inc/domain/class-wcos-feature-gates.php
           test ! -e inc/backend/actions/return-order-bulk-action.php
           test ! -e inc/backend/orders-bulk-return.php
           test ! -e js/bulk-return-action.js

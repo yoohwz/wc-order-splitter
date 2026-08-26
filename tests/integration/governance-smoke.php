@@ -38,7 +38,7 @@ wcos_governance_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE), '
 wcos_governance_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER), 'Approved hardened Return gate is not enabled.');
 wcos_governance_assert(WCOS_Feature_Gates::any_enabled(), 'Approved production workflow set was reported as entirely disabled.');
 wcos_governance_assert(WC_Order_Splitter_Safety_Guard::mutations_enabled(), 'Safety guard did not reflect the approved production gate set.');
-wcos_governance_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Bulk Return became production-enabled.');
+wcos_governance_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Approved Bulk Return production gate is not enabled.');
 
 $order = wc_create_order();
 $order->set_status('pending');

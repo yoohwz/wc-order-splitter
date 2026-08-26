@@ -44,6 +44,9 @@ assert_contains "$ci_workflow" 'bulk-return-hard-off-coordinator-smoke.php'
 assert_contains "$ci_workflow" 'bulk-return-fail-stop-smoke.php'
 assert_contains "$ci_workflow" 'bulk-return-near-limit-smoke.php'
 assert_contains "$ci_workflow" 'bulk-return-confirm-race-worker.php'
+assert_contains "$ci_workflow" 'bulk-return-enabled-controller-smoke.php'
+assert_contains "$ci_workflow" 'bulk-return-execute-race-worker.php'
+assert_contains "$ci_workflow" 'Verify real concurrent overlapping Bulk Return current-row authority'
 assert_contains "$ci_workflow" 'bulk-return-ui-readiness-smoke.php'
 assert_contains "$ci_workflow" 'name: Required CI'
 assert_contains "$ci_workflow" 'merge_candidate_tree_sha=$(git rev-parse HEAD^{tree})'
@@ -57,6 +60,8 @@ assert_contains "$main_workflow" '      - main'
 assert_contains "$main_workflow" 'git rev-parse HEAD^{tree}'
 assert_contains "$main_workflow" 'main_parent_shas=$(git show -s --format=%P HEAD)'
 assert_contains "$main_workflow" '.github/scripts/validate-distribution-contract.sh'
+assert_contains "$main_workflow" "grep -Fq 'self::BULK_RETURN => true' inc/domain/class-wcos-feature-gates.php"
+assert_absent "$main_workflow" "grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php"
 assert_contains "$main_workflow" "test ! -e inc/backend/actions/return-order-bulk-action.php"
 assert_absent "$main_workflow" 'wc-order-splitter.zip'
 assert_absent "$main_workflow" 'actions/upload-artifact'

@@ -103,7 +103,7 @@ jobs:
           grep -Fq 'self::DUPLICATE => true' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::MERGE => true' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::RETURN_ORDER => true' inc/domain/class-wcos-feature-gates.php
-          grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php
+          grep -Fq 'self::BULK_RETURN => true' inc/domain/class-wcos-feature-gates.php
           grep -Fq 'self::MANUAL_QUANTITY => true' inc/domain/class-wcos-split-strategy-gates.php
           grep -Fq 'self::CATEGORY => true' inc/domain/class-wcos-split-strategy-gates.php
           grep -Fq 'self::STOCK_STATUS => true' inc/domain/class-wcos-split-strategy-gates.php
@@ -321,17 +321,15 @@ jobs:
             if (!WCOS_Feature_Gates::any_enabled()) { exit(1); }
             if (!WC_Order_Splitter_Safety_Guard::mutations_enabled()) { exit(1); }
             if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER)) { exit(1); }
-            foreach (array(WCOS_Feature_Gates::BULK_RETURN) as $disabled_workflow) {
-              if (WCOS_Feature_Gates::enabled($disabled_workflow)) { exit(1); }
-            }
-            if (null !== WCOS_Bulk_Return_Admin_Controller::bootstrap()) { exit(1); }
+            if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN)) { exit(1); }
+            if (!(WCOS_Bulk_Return_Admin_Controller::bootstrap() instanceof WCOS_Bulk_Return_Admin_Controller)) { exit(1); }
             foreach (array(
               WCOS_Bulk_Return_Admin_Controller::REVIEW_ACTION,
               WCOS_Bulk_Return_Admin_Controller::CONFIRM_ACTION,
               WCOS_Bulk_Return_Admin_Controller::EXECUTE_ACTION,
               WCOS_Bulk_Return_Admin_Controller::RESUME_ACTION
             ) as $bulk_return_action) {
-              if (false !== has_action("wp_ajax_" . $bulk_return_action)) { exit(1); }
+              if (false === has_action("wp_ajax_" . $bulk_return_action)) { exit(1); }
             }
             if (!(WCOS_Return_Admin_Controller::bootstrap() instanceof WCOS_Return_Admin_Controller)) { exit(1); }
             foreach (array(
@@ -436,16 +434,19 @@ jobs:
       - name: Verify enabled production Return controller gateway and storage contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/return-enabled-production-smoke.php
 
-      - name: Verify hard-off Bulk Return coordinator and same-original replay contracts
+      - name: Verify enabled Bulk Return coordinator and same-original replay contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/bulk-return-hard-off-coordinator-smoke.php
 
-      - name: Verify hard-off Bulk Return different-original fail-stop contracts
+      - name: Verify enabled Bulk Return controller Review Confirm Execute contracts
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/bulk-return-enabled-controller-smoke.php
+
+      - name: Verify enabled Bulk Return different-original fail-stop contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/bulk-return-fail-stop-smoke.php
 
-      - name: Verify hard-off Bulk Return near-limit bounds
+      - name: Verify enabled Bulk Return near-limit bounds
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/bulk-return-near-limit-smoke.php
 
-      - name: Verify hard-off Bulk Return Orders-list UI readiness
+      - name: Verify enabled Bulk Return Orders-list UI readiness
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/bulk-return-ui-readiness-smoke.php
 
       - name: Verify Merge domain foundation contracts
@@ -720,6 +721,52 @@ jobs:
           '
 
           cleanup_bulk_race
+          trap - EXIT
+
+      - name: Verify real concurrent overlapping Bulk Return current-row authority
+        if: matrix.storage == 'hpos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture='wp-content/plugins/wc-order-splitter/tests/integration/bulk-return-execute-race-fixture.php'
+          worker='wp-content/plugins/wc-order-splitter/tests/integration/bulk-return-execute-race-worker.php'
+          postcheck='wp-content/plugins/wc-order-splitter/tests/integration/bulk-return-execute-race-postcheck.php'
+          cleanup='wp-content/plugins/wc-order-splitter/tests/integration/bulk-return-execute-race-cleanup.php'
+
+          cleanup_bulk_execute_race() {
+            npx wp-env run cli wp eval-file "$cleanup" || true
+          }
+          trap cleanup_bulk_execute_race EXIT
+
+          npx wp-env run cli wp eval-file "$fixture"
+          npx wp-env run cli wp eval-file "$worker" worker-a 0 > /tmp/wcos-bulk-execute-worker-a.log 2>&1 &
+          worker_a_pid=$!
+          npx wp-env run cli wp eval-file "$worker" worker-b 1 > /tmp/wcos-bulk-execute-worker-b.log 2>&1 &
+          worker_b_pid=$!
+
+          set +e
+          wait "$worker_a_pid"
+          worker_a_status=$?
+          wait "$worker_b_pid"
+          worker_b_status=$?
+          set -e
+
+          printf 'worker-a-status=%s\nworker-b-status=%s\n' "$worker_a_status" "$worker_b_status"
+          for worker_log in /tmp/wcos-bulk-execute-worker-a.log /tmp/wcos-bulk-execute-worker-b.log; do
+            printf '%s\n' "--- $(basename "$worker_log") (sanitized) ---"
+            sed -E \
+              -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[REDACTED_EMAIL]/g' \
+              -e 's/[A-Za-z0-9]{40,}/[REDACTED_SECRET]/g' \
+              "$worker_log"
+          done
+
+          test "$worker_a_status" -eq 0
+          test "$worker_b_status" -eq 0
+
+          grep -E '^(RESULT|RETRY) ' /tmp/wcos-bulk-execute-worker-a.log /tmp/wcos-bulk-execute-worker-b.log | sed -E 's#^/tmp/[^:]+:##'
+          npx wp-env run cli wp eval-file "$postcheck"
+
+          cleanup_bulk_execute_race
           trap - EXIT
 
       - name: Stop WordPress

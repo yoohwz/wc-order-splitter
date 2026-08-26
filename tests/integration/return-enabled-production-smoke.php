@@ -108,7 +108,7 @@ $admins = get_users(array('role' => 'administrator', 'number' => 1, 'fields' => 
 wcos_return_production_assert(!empty($admins), 'Enabled Return production requires an administrator.');
 wp_set_current_user(absint($admins[0]));
 wcos_return_production_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::RETURN_ORDER), 'Production Return gate is not enabled.');
-wcos_return_production_assert(!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Production Bulk Return gate drifted on.');
+wcos_return_production_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN), 'Production Bulk Return gate is not enabled alongside Return.');
 foreach (array(WCOS_Feature_Gates::SPLIT, WCOS_Feature_Gates::DUPLICATE, WCOS_Feature_Gates::MERGE) as $workflow) {
 	wcos_return_production_assert(WCOS_Feature_Gates::enabled($workflow), 'Accepted production workflow gate drifted off: ' . $workflow);
 }
@@ -217,7 +217,7 @@ try {
 	catch (WCOS_Return_Transport_Exception $exception) { $blocked_rejected = 0 === strpos($exception->get_error_code(), 'preflight_'); }
 	wcos_return_production_assert($blocked_rejected, 'Blocked Return child minted Review authority.');
 
-	echo "return-enabled-production-ok strategies=3 hooks=6 client_original_rejected=3 replay=3 drift=1 blocked=1 bulk_return=off\n";
+	echo "return-enabled-production-ok strategies=3 hooks=6 client_original_rejected=3 replay=3 drift=1 blocked=1 bulk_return=enabled\n";
 } finally {
 	foreach (array_reverse($fixtures) as $fixture) {
 		try { wcos_return_production_cleanup($fixture); } catch (Throwable $throwable) {}
