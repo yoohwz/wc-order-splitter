@@ -4,7 +4,7 @@
 
 This contract separates implementation, technical review, acceptance governance, mechanical CI, and Human Gate authority. A canonical task Issue may add stricter task-specific requirements, but it may not collapse these roles or weaken exact-head, release, publication, or post-merge authority.
 
-The canonical implementation sequence is:
+After canonical `POST_MERGE_ACCEPTED` for WOS-GOV-005, the preferred operator lifecycle is `ChatGPT Create -> Codex Run -> ChatGPT Finalize`, governed by `docs/compressed-engineering-workflow.md`. The canonical recorded authority sequence remains:
 
 `TASK_READY`
 → Codex Executor
@@ -13,9 +13,11 @@ The canonical implementation sequence is:
 → `TECHNICAL_ACCEPTED`
 → ChatGPT Acceptance Review
 → `ACCEPTANCE_ACCEPTED`
-→ explicit Human Gate
+→ explicit conditional Human Gate
 → merge
 → exact-tree Main attestation and post-merge governance acceptance.
+
+Compression is orchestration, not authority collapse. `Run` may dispatch the Executor and a fresh Independent Codex Reviewer and may route authenticated correction tranches between them, but those roles remain separate. `Finalize` may coordinate Acceptance, Human Gate, merge, and post-merge verification after one explicit human command, but it must record each authority separately and in order.
 
 Any changes-required outcome returns only the authenticated, bounded correction tranche to the appropriate executor. A changed exact head invalidates every earlier head-bound Technical and Acceptance outcome for merge.
 
@@ -28,6 +30,8 @@ The executor owns repository discovery, file/class-level implementation planning
 The executor must not self-issue `TECHNICAL_ACCEPTED`. Its terminal readiness signal is:
 
 `TECHNICAL_REVIEW_REQUIRED: <TASK_ID> <task-specific readiness statement>.`
+
+When the compressed workflow is active and the current Codex surface can establish independent reviewer provenance, the Executor readiness signal may remain internal to the `Run` orchestration while a fresh Independent Codex Reviewer is dispatched. If that provenance cannot be established, Codex stops `INDEPENDENT_REVIEW_DISPATCH_REQUIRED: <TASK_ID>` and requires a manually opened fresh `Technical Review <TASK_ID>` context. Automatic technical correction is limited to three head-changing cycles before `TECHNICAL_ESCALATION_REQUIRED: <TASK_ID>`.
 
 ### Independent Codex Reviewer
 
@@ -71,11 +75,19 @@ The acceptance record must bind the `chatgpt_acceptance_reviewer` role, exact PR
 
 ChatGPT must not promote that hypothesis into authoritative technical correction work. A fresh or continuing independent reviewer must validate or dismiss it and update the technical outcome.
 
+### Finalize orchestration
+
+`Finalize <TASK_ID>` is an explicit human command and conditional Human Gate for the exact currently technically accepted PR head. ChatGPT must authenticate exact-head `TECHNICAL_ACCEPTED`, perform Acceptance Review, and record `ACCEPTANCE_ACCEPTED` before the conditional Human Gate can take effect. It must then re-resolve head, base, CI, merge candidate/tree, ruleset, and unresolved threads. Only an unchanged, fully authorized state may receive a separate `HUMAN_GATE_APPROVED` record and merge.
+
+Failed Acceptance records only `ACCEPTANCE_CHANGES_REQUIRED` or `TECHNICAL_REVIEW_FOLLOWUP_REQUIRED` and must not merge. Any head/base/authority drift invalidates the conditional Human Gate. Successful merge still requires exact-tree Main attestation and a distinct `POST_MERGE_ACCEPTED` record. `Finalize` never grants release, publication, deployment, or public-package authority.
+
 ### GitHub Actions and Human
 
 GitHub Actions supplies deterministic exact-head merge-authority CI. Green CI is required evidence, not product, technical-review, acceptance, Human-Gate, release, or publication authority.
 
-The authenticated human owns product decisions and explicit Human Gate, merge, release, and publication authority. Merge requires exact-head `TECHNICAL_ACCEPTED` and `ACCEPTANCE_ACCEPTED`, both still valid for the unchanged PR head, followed by a separate Human Gate from the repository owner or task-designated human approver. An implementation Human Gate never implies release or publication approval.
+The authenticated human owns product decisions and explicit Human Gate, merge, release, and publication authority. Merge requires exact-head `TECHNICAL_ACCEPTED` and `ACCEPTANCE_ACCEPTED`, both still valid for the unchanged PR head, followed by a distinct Human Gate record from the repository owner or task-designated human approver. For an eligible compressed-flow task, issuing `Finalize` supplies that explicit Human Gate conditionally and only after ChatGPT Acceptance succeeds and authority is revalidated. An implementation Human Gate never implies release or publication approval.
+
+Risk profiles control the depth of task planning, evidence, and Independent Review. `LOW`, `MEDIUM`, and `HIGH` cannot waive protected-branch `Required CI`, exact-head Technical Acceptance, ChatGPT Acceptance, Human Gate semantics, post-merge proof, or release/publication boundaries.
 
 ## Corrections and drift
 
@@ -87,9 +99,11 @@ The authenticated human owns product decisions and explicit Human Gate, merge, r
 
 Completed milestones remain accepted and are not reopened solely because review roles changed. Historical Issue, PR, and review comments remain immutable evidence; their wording must not be rewritten to impersonate this workflow. Active tasks transition only through an explicit canonical task comment, and an existing Technical Acceptance may be grandfathered only when that comment says so.
 
-`WOS-GOV-004` uses its one-time owner-approved bootstrap sequence: Codex Executor → fresh Independent Codex Technical Review → ChatGPT Acceptance Review → explicit Human Gate → exact-tree post-merge acceptance.
+`WOS-GOV-004` used its one-time owner-approved bootstrap sequence: Codex Executor → fresh Independent Codex Technical Review → ChatGPT Acceptance Review → explicit Human Gate → exact-tree post-merge acceptance. That historical completion remains accepted.
 
-While `WOS-GOV-004` is active, `WOS-RETURN-004` / Issue #75 / PR #76 is paused. Its implementation must not change under the governance task. After `WOS-GOV-004` is post-merge accepted, PR #76 receives a fresh, zero-assumption Independent Codex review of its complete then-current head. Earlier ChatGPT code-review findings, including the completed-terminal-corruption finding recorded in review `5016242245`, are hypotheses only unless that independent reviewer validates them. `WOS-RETURN-005` must not begin until `WOS-RETURN-004` completes the new Technical Review → Acceptance Review → Human Gate → post-merge sequence.
+`WOS-GOV-005` also uses the pre-existing WOS-GOV-004 sequence for its own bootstrap. The compressed lifecycle becomes active only after WOS-GOV-005 receives canonical `POST_MERGE_ACCEPTED`. Tasks created earlier may opt into compressed `Finalize` only through an explicit canonical transition comment; historical records are not rewritten.
+
+After that transition, the forward single-Return roadmap is `WOS-RETURN-006 — Return UI + Sandbox Readiness` followed by the separate HIGH-risk `WOS-RETURN-007 — Return Production Enablement`. Bulk Return remains audit-first and milestone-minimal as defined in `docs/compressed-engineering-workflow.md`.
 
 ## Release and post-merge boundary
 
