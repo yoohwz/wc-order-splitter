@@ -680,8 +680,25 @@ jobs:
           worker_a_pid=$!
           npx wp-env run cli wp eval-file "$worker" worker-b > /tmp/wcos-bulk-confirm-worker-b.log 2>&1 &
           worker_b_pid=$!
+
+          set +e
           wait "$worker_a_pid"
+          worker_a_status=$?
           wait "$worker_b_pid"
+          worker_b_status=$?
+          set -e
+
+          printf 'worker-a-status=%s\nworker-b-status=%s\n' "$worker_a_status" "$worker_b_status"
+          for worker_log in /tmp/wcos-bulk-confirm-worker-a.log /tmp/wcos-bulk-confirm-worker-b.log; do
+            printf '%s\n' "--- $(basename "$worker_log") (sanitized) ---"
+            sed -E \
+              -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[REDACTED_EMAIL]/g' \
+              -e 's/[A-Za-z0-9]{40,}/[REDACTED_SECRET]/g' \
+              "$worker_log"
+          done
+
+          test "$worker_a_status" -eq 0
+          test "$worker_b_status" -eq 0
 
           grep -E '^(CONFIRMED|REJECTED) ' /tmp/wcos-bulk-confirm-worker-a.log /tmp/wcos-bulk-confirm-worker-b.log | sed -E 's#^/tmp/[^:]+:##'
           success_count="$(awk '/^CONFIRMED / { count++ } END { print count + 0 }' /tmp/wcos-bulk-confirm-worker-a.log /tmp/wcos-bulk-confirm-worker-b.log)"
