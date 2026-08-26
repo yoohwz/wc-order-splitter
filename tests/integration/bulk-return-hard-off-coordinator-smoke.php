@@ -81,10 +81,19 @@ try {
 	foreach ($children as $child) { $fixtures['orders'][] = $child->get_id(); }
 	$child_ids = array($children[1]->get_id(), $children[0]->get_id(), $children[0]->get_id());
 
-	$malformed = false;
-	try { WCOS_Bulk_Return_Batch_Plan::build(array(array($children[0]->get_id()))); }
-	catch (WCOS_Bulk_Return_Batch_Exception $exception) { $malformed = 'invalid_selection' === $exception->get_reason(); }
-	wcos_bulk_return_assert($malformed, 'Nested Bulk Return IDs were accepted.');
+	foreach (array(
+		array(array($children[0]->get_id())),
+		array('0'),
+		array('-1'),
+		array('1.0'),
+		array('01'),
+		array((string) PHP_INT_MAX . '0'),
+	) as $invalid_ids) {
+		$malformed = false;
+		try { WCOS_Bulk_Return_Batch_Plan::build($invalid_ids); }
+		catch (WCOS_Bulk_Return_Batch_Exception $exception) { $malformed = 'invalid_selection' === $exception->get_reason(); }
+		wcos_bulk_return_assert($malformed, 'Malformed Bulk Return IDs were accepted: ' . wp_json_encode($invalid_ids));
+	}
 	$oversize = false;
 	try { WCOS_Bulk_Return_Batch_Plan::build(range(1000001, 1000021)); }
 	catch (WCOS_Bulk_Return_Batch_Exception $exception) { $oversize = 'batch_too_large' === $exception->get_reason(); }

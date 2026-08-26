@@ -181,7 +181,7 @@ final class WCOS_Bulk_Return_Batch_Plan {
 				throw new WCOS_Bulk_Return_Batch_Exception('invalid_selection', __('Bulk Return order IDs must be positive decimal scalars.', 'wc-order-splitter'));
 			}
 			$value = (string) $raw;
-			if (1 !== preg_match('/^[1-9][0-9]*$/D', $value) || strlen($value) > strlen((string) PHP_INT_MAX) || (string) (int) $value !== ltrim($value, '0')) {
+			if (1 !== preg_match('/^[1-9][0-9]*$/D', $value) || strlen($value) > strlen((string) PHP_INT_MAX) || (string) (int) $value !== $value) {
 				throw new WCOS_Bulk_Return_Batch_Exception('invalid_selection', __('Bulk Return order IDs must be positive decimal scalars.', 'wc-order-splitter'));
 			}
 			$id = (int) $value;
