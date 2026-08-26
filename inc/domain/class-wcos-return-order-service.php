@@ -201,19 +201,14 @@ final class WCOS_Return_Order_Service {
 		if ((int) $pair['price_precision'] !== (int) $precision) {
 			throw new RuntimeException(__('This Return operation carries conflicting precision authority.', 'wc-order-splitter'));
 		}
-		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
-		if (array_key_exists('return_confirmation_required', $context)
-			|| array_key_exists('return_confirmation', $context) || !empty($confirmation_authority)) {
-			try {
-				if (empty($confirmation_authority)) {
-					WCOS_Return_Journal_Context::confirmation_handoff_if_required($record);
-				} else {
-					WCOS_Return_Journal_Context::assert_confirmation_matches_record($record, $confirmation_authority);
-				}
-			} catch (Throwable $throwable) {
-				$this->quarantine_replay_authority($child_id, $operation_id, 'return_confirmation_replay_integrity_failed');
-				throw new RuntimeException(__('The Return pair requires manual reconciliation.', 'wc-order-splitter'), 0, $throwable);
+		try {
+			WCOS_Return_Journal_Context::confirmation_handoff_if_required($record);
+			if (!empty($confirmation_authority)) {
+				WCOS_Return_Journal_Context::assert_confirmation_matches_record($record, $confirmation_authority);
 			}
+		} catch (Throwable $throwable) {
+			$this->quarantine_replay_authority($child_id, $operation_id, 'return_confirmation_replay_integrity_failed');
+			throw new RuntimeException(__('The Return pair requires manual reconciliation.', 'wc-order-splitter'), 0, $throwable);
 		}
 		$status = sanitize_key(isset($record['status']) ? (string) $record['status'] : '');
 		if ('completed' !== $status) {

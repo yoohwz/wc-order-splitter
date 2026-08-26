@@ -137,7 +137,7 @@ final class WCOS_Return_Review_Store {
 		}
 		$plan = $report['return_plan'];
 		$lineage = $report['lineage_authority'];
-		$context = WCOS_Return_Journal_Context::create($child, $original, $plan, $lineage, $lineage['source_evolution_authority']);
+		$context = WCOS_Return_Journal_Context::create($child, $original, $plan, $lineage, $lineage['source_evolution_authority'], '', array(), true);
 		$pair = WCOS_Return_Journal_Context::pair_from_context($context);
 		if (!is_array($pair)) {
 			throw new WCOS_Return_Review_Exception('review_invalid', __('The canonical Return pair authority could not be frozen.', 'wc-order-splitter'));
@@ -150,6 +150,7 @@ final class WCOS_Return_Review_Store {
 			'plan' => $plan,
 			'plan_fingerprint' => $pair['plan_fingerprint'],
 			'pair_authority' => $context['return_pair']['authority'],
+			'confirmation_provenance' => $context['return_pair']['confirmation_provenance'],
 			'pair_fingerprint' => $pair['pair_fingerprint'],
 			'lineage_authority_fingerprint' => $pair['lineage_authority_fingerprint'],
 			'source_evolution_authority_fingerprint' => $pair['source_evolution_authority_fingerprint'],
@@ -197,7 +198,7 @@ final class WCOS_Return_Review_Store {
 	private static function assert_authority_complete(array $authority) {
 		$required = array(
 			'child_order_id', 'original_order_id', 'split_operation_id', 'split_child_key', 'plan', 'plan_fingerprint',
-			'pair_authority', 'pair_fingerprint', 'lineage_authority_fingerprint', 'source_evolution_authority_fingerprint',
+			'pair_authority', 'confirmation_provenance', 'pair_fingerprint', 'lineage_authority_fingerprint', 'source_evolution_authority_fingerprint',
 			'price_precision', 'currency', 'prices_include_tax', 'return_service_policy_version', 'preflight_policy_version',
 			'plan_schema_version', 'plan_policy_version', 'lineage_schema_version', 'lineage_policy_version',
 			'journal_context_schema_version', 'retirement_policy_schema_version', 'retirement_policy_identifier',
@@ -208,13 +209,14 @@ final class WCOS_Return_Review_Store {
 				throw new WCOS_Return_Review_Exception('review_invalid', __('The stored Return Review authority is incomplete.', 'wc-order-splitter'));
 			}
 		}
-		if (!is_array($authority['plan']) || !is_array($authority['pair_authority'])
+		if (!is_array($authority['plan']) || !is_array($authority['pair_authority']) || !is_array($authority['confirmation_provenance'])
 			|| !hash_equals((string) $authority['plan_fingerprint'], WCOS_Return_Plan::fingerprint($authority['plan']))) {
 			throw new WCOS_Return_Review_Exception('review_invalid', __('The stored Return Review plan authority is malformed.', 'wc-order-splitter'));
 		}
 		$context = array('return_pair' => array(
 			'schema_version' => WCOS_Return_Journal_Context::SCHEMA_VERSION,
 			'authority' => $authority['pair_authority'],
+			'confirmation_provenance' => $authority['confirmation_provenance'],
 			'pair_fingerprint' => $authority['pair_fingerprint'],
 		));
 		$pair = WCOS_Return_Journal_Context::pair_from_context($context);

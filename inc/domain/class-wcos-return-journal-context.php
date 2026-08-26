@@ -5,11 +5,13 @@ defined('ABSPATH') || exit;
 /** Self-verifying, PII-free authority for one child-keyed Return journal. */
 final class WCOS_Return_Journal_Context {
 
-	const SCHEMA_VERSION = 1;
+	const SCHEMA_VERSION = 2;
+	const LEGACY_SCHEMA_VERSION = 1;
 	const TERMINAL_RESULT_SCHEMA_VERSION = 1;
 	const CONFIRMATION_SCHEMA_VERSION = 1;
+	const CONFIRMATION_PROVENANCE_SCHEMA_VERSION = 1;
 
-	public static function create(WC_Order $child, WC_Order $original, array $plan, array $lineage_authority, array $source_evolution_authority, $operation_id = '', array $confirmation_authority = array()) {
+	public static function create(WC_Order $child, WC_Order $original, array $plan, array $lineage_authority, array $source_evolution_authority, $operation_id = '', array $confirmation_authority = array(), $confirmation_required = null) {
 		$child_id = absint($child->get_id());
 		$original_id = absint($original->get_id());
 		if (!$child_id || !$original_id || $child_id === $original_id
@@ -60,11 +62,19 @@ final class WCOS_Return_Journal_Context {
 		if (!is_array($authority)) {
 			throw new RuntimeException(__('The canonical Return pair authority could not be constructed.', 'wc-order-splitter'));
 		}
+		if (null === $confirmation_required) {
+			$confirmation_required = !empty($confirmation_authority);
+		}
+		if (!is_bool($confirmation_required) || (!empty($confirmation_authority) && true !== $confirmation_required)) {
+			throw new InvalidArgumentException(__('Return Confirmation provenance is invalid.', 'wc-order-splitter'));
+		}
+		$confirmation_provenance = self::create_confirmation_provenance($child_id, $original_id, $confirmation_required);
 		$context = array(
 			'return_pair' => array(
 				'schema_version' => self::SCHEMA_VERSION,
 				'authority' => $authority,
-				'pair_fingerprint' => self::authority_fingerprint($authority),
+				'confirmation_provenance' => $confirmation_provenance,
+				'pair_fingerprint' => self::authority_fingerprint($authority, $confirmation_provenance),
 			),
 			'return_plan' => $plan,
 		);
@@ -80,7 +90,7 @@ final class WCOS_Return_Journal_Context {
 		$operation_id = sanitize_key((string) $operation_id);
 		$pair = self::pair_from_context($context);
 		$authority = self::canonical_confirmation_authority($confirmation_authority);
-		if ('' === $operation_id || !is_array($pair) || !is_array($authority)
+		if ('' === $operation_id || !is_array($pair) || true !== $pair['confirmation_required'] || !is_array($authority)
 			|| $operation_id !== $authority['operation_id']
 			|| !self::confirmation_matches_pair($authority, $pair)) {
 			throw new RuntimeException(__('Return Confirmation authority does not match the locked server Return pair.', 'wc-order-splitter'));
@@ -98,7 +108,7 @@ final class WCOS_Return_Journal_Context {
 		$authority = self::canonical_confirmation_authority($stored);
 		$fingerprint = self::fingerprint(isset($stored['authority_fingerprint']) ? $stored['authority_fingerprint'] : '');
 		$operation_id = sanitize_key(isset($record['operation_id']) ? (string) $record['operation_id'] : '');
-		if (!is_array($pair) || !is_array($authority) || '' === $fingerprint
+		if (!is_array($pair) || true !== $pair['confirmation_required'] || !is_array($authority) || '' === $fingerprint
 			|| !hash_equals($fingerprint, self::confirmation_fingerprint($authority))
 			|| $operation_id !== $authority['operation_id']
 			|| !self::confirmation_matches_pair($authority, $pair)) {
@@ -108,15 +118,22 @@ final class WCOS_Return_Journal_Context {
 		return $authority;
 	}
 
-	/** Preserve pre-Confirmation journals while failing closed for every journal that declares or carries a handoff. */
+	/** Preserve genuine schema-v1 journals while enforcing the sealed schema-v2 Confirmation provenance. */
 	public static function confirmation_handoff_if_required(array $record) {
+		$pair = self::pair_from_record($record);
+		if (!is_array($pair)) {
+			throw new RuntimeException(__('The durable Return pair failed integrity verification.', 'wc-order-splitter'));
+		}
 		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
 		$declared = array_key_exists('return_confirmation_required', $context);
 		$stored = array_key_exists('return_confirmation', $context);
-		if (!$declared && !$stored) {
+		if (true !== $pair['confirmation_required']) {
+			if ($declared || $stored) {
+				throw new RuntimeException(__('A legacy or unconfirmed Return journal cannot acquire Confirmation authority.', 'wc-order-splitter'));
+			}
 			return null;
 		}
-		if (($declared && true !== $context['return_confirmation_required']) || !$stored || !is_array($context['return_confirmation'])) {
+		if (!$declared || true !== $context['return_confirmation_required'] || !$stored || !is_array($context['return_confirmation'])) {
 			throw new RuntimeException(__('The durable Return journal is missing its required Confirmation handoff.', 'wc-order-splitter'));
 		}
 		return self::confirmation_handoff_from_record($record);
@@ -136,17 +153,11 @@ final class WCOS_Return_Journal_Context {
 			return null;
 		}
 		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
-		$pair = isset($context['return_pair']) && is_array($context['return_pair']) ? $context['return_pair'] : array();
-		if (self::SCHEMA_VERSION !== (int) (isset($pair['schema_version']) ? $pair['schema_version'] : 0)
-			|| !isset($pair['authority']) || !is_array($pair['authority'])) {
+		$authority = self::pair_from_context($context);
+		if (!is_array($authority)) {
 			return null;
 		}
-		$authority = self::canonical_authority($pair['authority']);
-		if (!is_array($authority) || $authority !== $pair['authority']) {
-			return null;
-		}
-		$computed = self::authority_fingerprint($authority);
-		$stored = self::fingerprint(isset($pair['pair_fingerprint']) ? $pair['pair_fingerprint'] : '');
+		$computed = $authority['pair_fingerprint'];
 		$journal = self::fingerprint(isset($record['fingerprint']) ? $record['fingerprint'] : '');
 		$plan = isset($context['return_plan']) && is_array($context['return_plan']) ? $context['return_plan'] : array();
 		try {
@@ -159,13 +170,12 @@ final class WCOS_Return_Journal_Context {
 		} catch (Throwable $throwable) {
 			return null;
 		}
-		if ('' === $stored || '' === $journal || !hash_equals($computed, $stored) || !hash_equals($computed, $journal)
+		if ('' === $journal || !hash_equals($computed, $journal)
 			|| !hash_equals($authority['plan_fingerprint'], $plan_actual)
 			|| $authority['child_order_id'] !== absint(isset($record['source_order_id']) ? $record['source_order_id'] : 0)
 			|| $authority['price_precision'] !== (int) (isset($context['price_precision']) ? $context['price_precision'] : -1)) {
 			return null;
 		}
-		$authority['pair_fingerprint'] = $computed;
 		return $authority;
 	}
 
@@ -311,9 +321,32 @@ final class WCOS_Return_Journal_Context {
 		$pair = isset($context['return_pair']) && is_array($context['return_pair']) ? $context['return_pair'] : array();
 		$authority = isset($pair['authority']) && is_array($pair['authority']) ? self::canonical_authority($pair['authority']) : null;
 		$fingerprint = self::fingerprint(isset($pair['pair_fingerprint']) ? $pair['pair_fingerprint'] : '');
-		if (self::SCHEMA_VERSION !== (int) (isset($pair['schema_version']) ? $pair['schema_version'] : 0)
-			|| !is_array($authority) || '' === $fingerprint
-			|| !hash_equals($fingerprint, self::authority_fingerprint($authority))) {
+		$schema_version = (int) (isset($pair['schema_version']) ? $pair['schema_version'] : 0);
+		$expected_keys = self::SCHEMA_VERSION === $schema_version
+			? array('authority', 'confirmation_provenance', 'pair_fingerprint', 'schema_version')
+			: array('authority', 'pair_fingerprint', 'schema_version');
+		$actual_keys = array_keys($pair);
+		sort($actual_keys, SORT_STRING);
+		sort($expected_keys, SORT_STRING);
+		if (!is_array($authority) || $authority !== $pair['authority'] || '' === $fingerprint || $actual_keys !== $expected_keys) {
+			return null;
+		}
+		if (self::LEGACY_SCHEMA_VERSION === $schema_version) {
+			if (!hash_equals($fingerprint, self::legacy_authority_fingerprint($authority))) {
+				return null;
+			}
+			$authority['confirmation_required'] = false;
+			$authority['confirmation_provenance'] = null;
+		} elseif (self::SCHEMA_VERSION === $schema_version) {
+			$provenance = is_array($pair['confirmation_provenance'])
+				? self::canonical_confirmation_provenance($pair['confirmation_provenance'], $authority) : null;
+			if (!is_array($provenance) || $provenance !== $pair['confirmation_provenance']
+				|| !hash_equals($fingerprint, self::authority_fingerprint($authority, $provenance))) {
+				return null;
+			}
+			$authority['confirmation_required'] = $provenance['confirmation_required'];
+			$authority['confirmation_provenance'] = $provenance;
+		} else {
 			return null;
 		}
 		$authority['pair_fingerprint'] = $fingerprint;
@@ -404,7 +437,8 @@ final class WCOS_Return_Journal_Context {
 				return false;
 			}
 		}
-		return self::SCHEMA_VERSION === (int) $confirmation['journal_context_schema_version']
+		return true === $pair['confirmation_required']
+			&& self::SCHEMA_VERSION === (int) $confirmation['journal_context_schema_version']
 			&& WCOS_Return_Order_Service::POLICY_VERSION === (int) $confirmation['return_service_policy_version'];
 	}
 
@@ -416,7 +450,53 @@ final class WCOS_Return_Journal_Context {
 		return WCOS_Mutation_Fingerprint::create('return_confirmation_handoff_v1', $canonical['child_order_id'], $canonical);
 	}
 
-	private static function authority_fingerprint(array $authority) {
+	private static function create_confirmation_provenance($child_id, $original_id, $confirmation_required) {
+		$provenance = array(
+			'schema_version' => self::CONFIRMATION_PROVENANCE_SCHEMA_VERSION,
+			'child_order_id' => absint($child_id),
+			'original_order_id' => absint($original_id),
+			'confirmation_required' => (bool) $confirmation_required,
+		);
+		$provenance['provenance_fingerprint'] = self::confirmation_provenance_fingerprint($provenance);
+		return $provenance;
+	}
+
+	private static function canonical_confirmation_provenance(array $provenance, array $authority) {
+		$expected = array('schema_version', 'child_order_id', 'original_order_id', 'confirmation_required', 'provenance_fingerprint');
+		$actual = array_keys($provenance);
+		sort($actual, SORT_STRING);
+		sort($expected, SORT_STRING);
+		$fingerprint = self::fingerprint(isset($provenance['provenance_fingerprint']) ? $provenance['provenance_fingerprint'] : '');
+		$canonical = array(
+			'schema_version' => (int) (isset($provenance['schema_version']) ? $provenance['schema_version'] : 0),
+			'child_order_id' => absint(isset($provenance['child_order_id']) ? $provenance['child_order_id'] : 0),
+			'original_order_id' => absint(isset($provenance['original_order_id']) ? $provenance['original_order_id'] : 0),
+			'confirmation_required' => isset($provenance['confirmation_required']) ? $provenance['confirmation_required'] : null,
+			'provenance_fingerprint' => $fingerprint,
+		);
+		if ($actual !== $expected || self::CONFIRMATION_PROVENANCE_SCHEMA_VERSION !== $canonical['schema_version']
+			|| $canonical['child_order_id'] !== $authority['child_order_id']
+			|| $canonical['original_order_id'] !== $authority['original_order_id']
+			|| !is_bool($canonical['confirmation_required']) || '' === $fingerprint
+			|| !hash_equals($fingerprint, self::confirmation_provenance_fingerprint($canonical))) {
+			return null;
+		}
+		return $canonical;
+	}
+
+	private static function confirmation_provenance_fingerprint(array $provenance) {
+		unset($provenance['provenance_fingerprint']);
+		return WCOS_Mutation_Fingerprint::create('return_confirmation_provenance_v1', absint($provenance['child_order_id']), $provenance);
+	}
+
+	private static function authority_fingerprint(array $authority, array $confirmation_provenance) {
+		return WCOS_Mutation_Fingerprint::create('return_pair_authority_v2', $authority['child_order_id'], array(
+			'authority' => $authority,
+			'confirmation_provenance' => $confirmation_provenance,
+		));
+	}
+
+	private static function legacy_authority_fingerprint(array $authority) {
 		return WCOS_Mutation_Fingerprint::create('return_pair_authority_v1', $authority['child_order_id'], $authority);
 	}
 

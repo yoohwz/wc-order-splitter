@@ -240,6 +240,13 @@ try {
 	wcos_return_authority_assert('completed' === $result['status'], 'Confirmed lower-level Return did not complete.');
 	$journal = WCOS_Operation_Journal::get(wc_get_order($primary['child_id']), $confirm['operation_id']);
 	$handoff = WCOS_Return_Journal_Context::confirmation_handoff_from_record($journal);
+	$sealed_pair = WCOS_Return_Journal_Context::pair_from_record($journal);
+	wcos_return_authority_assert(
+		is_array($sealed_pair) && true === $sealed_pair['confirmation_required']
+		&& WCOS_Return_Journal_Context::SCHEMA_VERSION === (int) $journal['context']['return_pair']['schema_version']
+		&& WCOS_Return_Journal_Context::CONFIRMATION_PROVENANCE_SCHEMA_VERSION === (int) $sealed_pair['confirmation_provenance']['schema_version'],
+		'Confirmed Return journal did not seal versioned Confirmation provenance into its pair authority.'
+	);
 	wcos_return_authority_assert(true === $journal['context']['return_confirmation_required'], 'Confirmed Return journal did not declare mandatory handoff authority.');
 	wcos_return_authority_assert($confirm['operation_id'] === $handoff['operation_id'] && $operator_id === $handoff['operator_user_id'], 'Return journal did not bind exact operation/operator Confirmation authority.');
 	wcos_return_authority_assert($confirmed['pair_fingerprint'] === $handoff['pair_fingerprint'] && $confirmed['plan_fingerprint'] === $handoff['plan_fingerprint'], 'Return journal handoff changed frozen pair/plan authority.');
@@ -258,6 +265,33 @@ try {
 	$removed_marker = $journal;
 	unset($removed_marker['context']['return_confirmation_required']);
 	wcos_return_authority_assert(false === $immutable_method->invoke(null, $journal, $removed_marker), 'Return journal accepted Confirmation requirement removal.');
+	$legacy_fingerprint_method = (new ReflectionClass('WCOS_Return_Journal_Context'))->getMethod('legacy_authority_fingerprint');
+	$legacy_fingerprint_method->setAccessible(true);
+	$legacy_journal = $journal;
+	unset(
+		$legacy_journal['context']['return_pair']['confirmation_provenance'],
+		$legacy_journal['context']['return_confirmation_required'],
+		$legacy_journal['context']['return_confirmation']
+	);
+	$legacy_journal['context']['return_pair']['schema_version'] = WCOS_Return_Journal_Context::LEGACY_SCHEMA_VERSION;
+	$legacy_journal['context']['return_pair']['pair_fingerprint'] = $legacy_fingerprint_method->invoke(
+		null,
+		$legacy_journal['context']['return_pair']['authority']
+	);
+	$legacy_journal['fingerprint'] = $legacy_journal['context']['return_pair']['pair_fingerprint'];
+	wcos_return_authority_assert(is_array(WCOS_Return_Journal_Context::pair_from_record($legacy_journal)), 'Genuine schema-v1 Return journal compatibility was not preserved.');
+	wcos_return_authority_assert(null === WCOS_Return_Journal_Context::confirmation_handoff_if_required($legacy_journal), 'Genuine schema-v1 Return journal was incorrectly treated as Confirmation-required.');
+	$legacy_with_confirmation = $legacy_journal;
+	$legacy_with_confirmation['context']['return_confirmation_required'] = true;
+	$legacy_with_confirmation['context']['return_confirmation'] = $journal['context']['return_confirmation'];
+	wcos_return_authority_assert(
+		false === $immutable_method->invoke(null, $legacy_journal, $legacy_with_confirmation),
+		'Legacy Return journal accepted addition of both Confirmation fields.'
+	);
+	$legacy_addition_rejected = false;
+	try { WCOS_Return_Journal_Context::confirmation_handoff_if_required($legacy_with_confirmation); }
+	catch (Throwable $throwable) { $legacy_addition_rejected = true; }
+	wcos_return_authority_assert($legacy_addition_rejected, 'Legacy Return journal addition was treated as valid Confirmation authority.');
 
 	WCOS_Return_Confirmation_Store::delete($confirm['operation_id']);
 	$durable = WCOS_Return_Confirmation_Store::verify(wc_get_order($primary['child_id']), $confirm['operation_id'], '', $operator_id);
@@ -324,14 +358,16 @@ try {
 	}
 	wcos_return_authority_assert($manual_reconciled_closed, 'Manual-reconciled confirmed Return journal remained replayable.');
 
-	foreach (array('corrupt' => false, 'missing' => true) as $confirmation_fault => $remove_handoff) {
+	foreach (array('corrupt', 'missing', 'stripped') as $confirmation_fault) {
 		$fault = wcos_return_authority_fixture('confirmed-recovery-' . $confirmation_fault, 'manual_quantity');
 		$fixtures[] = $fault; $fault_index = count($fixtures) - 1;
 		list($fault_confirm, $fault_confirmation, $fault_journal) = wcos_return_authority_freeze_recovery($controller, $fault, $operator_id);
 		$fixtures[$fault_index]['operation_ids'][] = $fault_confirm['operation_id'];
 		WCOS_Return_Confirmation_Store::delete($fault_confirm['operation_id']);
-		if ($remove_handoff) {
+		if ('missing' === $confirmation_fault) {
 			unset($fault_journal['context']['return_confirmation']);
+		} elseif ('stripped' === $confirmation_fault) {
+			unset($fault_journal['context']['return_confirmation_required'], $fault_journal['context']['return_confirmation']);
 		} else {
 			$fault_journal['context']['return_confirmation']['authority_fingerprint'] = hash('sha256', 'confirmed-recovery-corruption');
 		}
@@ -461,7 +497,7 @@ try {
 	wcos_return_authority_assert($legacy_rejected, 'Legacy yoos_* metadata minted Return Review authority.');
 	$legacy_child->delete(true); $legacy_original->delete(true); $legacy_product->delete(true);
 
-	echo "return-review-confirm-authority-ok strategies=3 gate_off_attempts=6 durable_handoff=1 immutable_handoff=1 confirmed_states=4 corrupt_recovery=2 cas_single_consume=1\n";
+	echo "return-review-confirm-authority-ok strategies=3 gate_off_attempts=6 durable_handoff=1 immutable_handoff=1 legacy_addition_rejected=1 confirmed_states=4 corrupt_recovery=3 stripped_confirmed_quarantined=1 cas_single_consume=1\n";
 } finally {
 	foreach (array_reverse($fixtures) as $fixture) {
 		try { wcos_return_authority_cleanup($fixture); } catch (Throwable $throwable) {}

@@ -199,6 +199,7 @@ final class WCOS_Return_Confirmation_Store {
 			'user_id' => $user_id,
 			'plan' => isset($context['return_plan']) && is_array($context['return_plan']) ? $context['return_plan'] : array(),
 			'pair_authority' => isset($context['return_pair']['authority']) && is_array($context['return_pair']['authority']) ? $context['return_pair']['authority'] : array(),
+			'confirmation_provenance' => isset($context['return_pair']['confirmation_provenance']) && is_array($context['return_pair']['confirmation_provenance']) ? $context['return_pair']['confirmation_provenance'] : array(),
 			'replay_authority' => 'journal',
 			'journal_status' => $status,
 			'terminal_result' => $terminal_result,
@@ -211,7 +212,7 @@ final class WCOS_Return_Confirmation_Store {
 
 	private static function assert_complete(array $record) {
 		$required = array(
-			'operation_id', 'user_id', 'child_order_id', 'original_order_id', 'plan', 'pair_authority',
+			'operation_id', 'user_id', 'child_order_id', 'original_order_id', 'plan', 'pair_authority', 'confirmation_provenance',
 			'plan_fingerprint', 'pair_fingerprint', 'lineage_authority_fingerprint', 'source_evolution_authority_fingerprint',
 			'price_precision', 'currency', 'prices_include_tax', 'return_service_policy_version', 'preflight_policy_version',
 			'plan_schema_version', 'plan_policy_version', 'lineage_schema_version', 'lineage_policy_version',
@@ -225,13 +226,14 @@ final class WCOS_Return_Confirmation_Store {
 		}
 		if ((int) (isset($record['schema_version']) ? $record['schema_version'] : 0) !== self::SCHEMA_VERSION
 			|| !self::is_uuid($record['operation_id']) || !absint($record['user_id'])
-			|| !is_array($record['plan']) || !is_array($record['pair_authority'])
+			|| !is_array($record['plan']) || !is_array($record['pair_authority']) || !is_array($record['confirmation_provenance'])
 			|| !hash_equals((string) $record['plan_fingerprint'], WCOS_Return_Plan::fingerprint($record['plan']))) {
 			throw new WCOS_Return_Confirmation_Exception('confirmation_invalid', __('The stored Return Confirmation plan is malformed.', 'wc-order-splitter'));
 		}
 		$context = array('return_pair' => array(
 			'schema_version' => WCOS_Return_Journal_Context::SCHEMA_VERSION,
 			'authority' => $record['pair_authority'],
+			'confirmation_provenance' => $record['confirmation_provenance'],
 			'pair_fingerprint' => $record['pair_fingerprint'],
 		));
 		try {
