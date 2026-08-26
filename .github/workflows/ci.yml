@@ -193,8 +193,10 @@ jobs:
           grep -Fq 'class-wcos-return-confirmation-store.php' inc/cores/script.php
           grep -Fq 'class-wcos-return-admin-controller.php' inc/cores/script.php
           grep -Fq 'WCOS_Return_Admin_Controller::bootstrap();' inc/cores/script.php
-          test ! -e js/p2-return-admin.js
-          test ! -e css/p2-return-admin.css
+          test -e js/p2-return-admin.js
+          test -e css/p2-return-admin.css
+          grep -Fq "'wcos-return-admin'" inc/backend/class-wcos-admin-backbone-modal-assets.php
+          grep -Fq 'window.WCOSBackboneModal.open' js/p2-return-admin.js
           grep -Fq "const SEARCH_ACTION = 'wcos_merge_target_search';" inc/backend/class-wcos-merge-admin-controller.php
           grep -Fq "'wcos-merge-admin'" inc/backend/class-wcos-admin-backbone-modal-assets.php
           grep -Fq 'window.WCOSBackboneModal.open' js/p2-merge-admin.js
@@ -206,6 +208,9 @@ jobs:
 
       - name: Run Split method focus lifecycle regression
         run: node tests/js/p2-split-method-focus-lifecycle.js
+
+      - name: Verify Return admin client syntax
+        run: node --check js/p2-return-admin.js
 
   package-check:
     name: Package safety contract
@@ -414,6 +419,9 @@ jobs:
 
       - name: Verify hard-off Return Review Confirm Execute authority
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/return-review-confirm-authority-smoke.php
+
+      - name: Verify hard-off Return UI readiness
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/return-ui-readiness-smoke.php
 
       - name: Verify Merge domain foundation contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-domain-foundation-smoke.php

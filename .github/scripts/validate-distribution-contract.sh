@@ -75,8 +75,6 @@ for forbidden_path in \
   'js/merge-action.js' \
   'js/post-action-tip.js' \
   'js/split-table.js' \
-  'js/p2-return-admin.js' \
-  'css/p2-return-admin.css' \
   'inc/mutation-v2'; do
   if test -e "$distribution_root/$forbidden_path"; then
     fail "unsafe or development-only path entered distribution: $forbidden_path"
@@ -143,6 +141,8 @@ for required_path in \
   'inc/backend/class-wcos-return-review-store.php' \
   'inc/backend/class-wcos-return-confirmation-store.php' \
   'inc/backend/class-wcos-return-admin-controller.php' \
+  'css/p2-return-admin.css' \
+  'js/p2-return-admin.js' \
   'css/p2-split-strategy-admin.css' \
   'js/p2-split-strategy-admin.js'; do
   if test ! -e "$distribution_root/$required_path"; then
