@@ -217,7 +217,7 @@ try {
 	catch (WCOS_Return_Transport_Exception $exception) { $blocked_rejected = 0 === strpos($exception->get_error_code(), 'preflight_'); }
 	wcos_return_production_assert($blocked_rejected, 'Blocked Return child minted Review authority.');
 
-	echo "return-enabled-production-ok strategies=3 hooks=6 client_original_rejected=3 replay=3 drift=1 blocked=1 bulk_return=off\n";
+	echo "return-enabled-production-ok strategies=3 hooks=6 client_original_rejected=3 replay=3 drift=1 blocked=1 bulk_return=enabled\n";
 } finally {
 	foreach (array_reverse($fixtures) as $fixture) {
 		try { wcos_return_production_cleanup($fixture); } catch (Throwable $throwable) {}

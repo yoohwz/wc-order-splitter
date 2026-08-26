@@ -60,6 +60,8 @@ assert_contains "$main_workflow" '      - main'
 assert_contains "$main_workflow" 'git rev-parse HEAD^{tree}'
 assert_contains "$main_workflow" 'main_parent_shas=$(git show -s --format=%P HEAD)'
 assert_contains "$main_workflow" '.github/scripts/validate-distribution-contract.sh'
+assert_contains "$main_workflow" "grep -Fq 'self::BULK_RETURN => true' inc/domain/class-wcos-feature-gates.php"
+assert_absent "$main_workflow" "grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php"
 assert_contains "$main_workflow" "test ! -e inc/backend/actions/return-order-bulk-action.php"
 assert_absent "$main_workflow" 'wc-order-splitter.zip'
 assert_absent "$main_workflow" 'actions/upload-artifact'
