@@ -4,9 +4,19 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact current main commit SHA to attest
+        required: true
+        type: string
+      authority:
+        description: Governance reason or task reference authorizing recovery
+        required: true
+        type: string
 
 concurrency:
-  group: main-attestation-${{ github.ref }}
+  group: main-attestation-${{ github.event_name }}-${{ github.sha }}
   cancel-in-progress: true
 
 permissions:
@@ -17,6 +27,20 @@ jobs:
     name: Exact main tree attestation
     runs-on: ubuntu-latest
     steps:
+      - name: Validate manual recovery request
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          ATTESTATION_AUTHORITY: ${{ inputs.authority }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          expected_sha="$(printf '%s' "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')"
+          test "$GITHUB_SHA" = "$expected_sha"
+          test -n "${ATTESTATION_AUTHORITY//[[:space:]]/}"
+
       - name: Checkout exact main revision
         uses: actions/checkout@v7
         with:
@@ -24,12 +48,31 @@ jobs:
 
       - name: Record exact commit and tree identity
         shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          ATTESTATION_AUTHORITY: ${{ inputs.authority }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          checked_out_sha="$(git rev-parse HEAD)"
+          test "$checked_out_sha" = "$GITHUB_SHA"
+
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
+            test "$GITHUB_REF" = 'refs/heads/main'
+            [[ "$EXPECTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+            expected_sha="$(printf '%s' "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')"
+            test "$GITHUB_SHA" = "$expected_sha"
+            test "$checked_out_sha" = "$expected_sha"
+            test -n "${ATTESTATION_AUTHORITY//[[:space:]]/}"
+          else
+            ATTESTATION_AUTHORITY='automatic push to main'
+          fi
+
           echo "main_commit_sha=$(git rev-parse HEAD)"
           echo "main_tree_sha=$(git rev-parse HEAD^{tree})"
           echo "main_parent_shas=$(git show -s --format=%P HEAD)"
+          echo "attestation_event_name=$GITHUB_EVENT_NAME"
+          echo "attestation_run_attempt=$GITHUB_RUN_ATTEMPT"
+          echo "attestation_authority=$ATTESTATION_AUTHORITY"
 
       - name: Setup representative PHP
         uses: shivammathur/setup-php@v2
