@@ -55,12 +55,18 @@
 .wcos-return-backbone-modal .wcos-return-confirm-label {
 	display: flex;
 	align-items: flex-start;
-	gap: 8px;
+	gap: 10px;
 	font-weight: 600;
+	line-height: 1.45;
 }
 
-.wcos-return-backbone-modal .wcos-return-confirm-label input {
-	margin-top: 2px;
+.wcos-return-backbone-modal .wcos-return-confirm-label input[type="checkbox"] {
+	flex: 0 0 auto;
+	margin: 2px 0 0;
+}
+
+.wcos-return-backbone-modal .wcos-return-confirm-label span {
+	min-width: 0;
 }
 
 .wcos-return-backbone-modal .wcos-return-status {
