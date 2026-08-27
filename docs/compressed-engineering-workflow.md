@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This contract reduces normal operator interaction without collapsing implementation, technical review, acceptance, Human Gate, CI, release, or publication authority.
+This contract reduces operator interaction without collapsing implementation, technical review, Human Gate, CI, release, or publication authority. ChatGPT Acceptance remains mandatory for normal `LOW` / `MEDIUM` / `HIGH` work; the only exception is an exact, fail-closed `TRIVIAL / CODEX_DIRECT` task governed by `docs/codex-direct-workflow.md`.
 
 After canonical `POST_MERGE_ACCEPTED` for `WOS-GOV-005`, the preferred successful path for a newly created implementation task is:
 
@@ -14,11 +14,17 @@ The recorded authority sequence remains:
 
 Compression changes orchestration only. Green CI is not review, Acceptance is not Technical Acceptance, and the conditional Human Gate inside `Finalize` is still a distinct authenticated checkpoint.
 
+After canonical `POST_MERGE_ACCEPTED` for `WOS-GOV-007`, explicitly requested eligible direct work may instead use:
+
+`Human Direct/Quick -> persisted DIRECT_HUMAN_AUTHORIZED -> Codex Executor -> Required CI -> fresh persisted Independent Codex TECHNICAL_ACCEPTED with direct eligibility confirmed -> HUMAN_GATE_APPROVED_DIRECT -> squash merge -> exact-tree Main attestation -> POST_MERGE_ACCEPTED_DIRECT`.
+
+This path waives only ChatGPT `Create`, Acceptance, and `Finalize`; all other authority remains distinct. It must satisfy the CSS-first allowlist, semantic guard, pre-edit persistence, fail-closed escalation, and no-release boundary in `docs/codex-direct-workflow.md`.
+
 ## Create
 
 `Create <TASK_ID>` is a ChatGPT command. A natural-language request is equivalent only when it clearly authorizes creation of the named task.
 
-ChatGPT must resolve current accepted `main`, create or update the canonical GitHub Issue, assign a `LOW`, `MEDIUM`, or `HIGH` risk profile, bind source and gate authority, define scope, invariants, evidence, stop conditions, and release/publication boundaries, and record `TASK_READY`.
+For normal work, ChatGPT must resolve current accepted `main`, create or update the canonical GitHub Issue, assign a `LOW`, `MEDIUM`, or `HIGH` risk profile, bind source and gate authority, define scope, invariants, evidence, stop conditions, and release/publication boundaries, and record `TASK_READY`. A `TRIVIAL / CODEX_DIRECT` task is bootstrapped in Codex only through an explicit `Direct <request>` / `Quick <request>` and the pre-edit authority sequence in `docs/codex-direct-workflow.md`.
 
 Plan Review is exceptional. ChatGPT records `PLAN_REVIEW_REQUIRED` only when discovery exposes a product or architecture decision that cannot safely be bound in the task contract. It is not an automatic extra step.
 
@@ -64,11 +70,13 @@ If the automatic GitHub write fails, or the new record cannot be re-read and aut
 
 Do not route to Acceptance or `Finalize` while this stop is active.
 
-On exact-head Technical Acceptance, the Codex engineering loop must re-read GitHub and verify the final persisted record is directly attributable to the Independent Codex Reviewer. Only then may Codex report:
+On exact-head Technical Acceptance for normal `LOW` / `MEDIUM` / `HIGH` work, the Codex engineering loop must re-read GitHub and verify the final persisted record is directly attributable to the Independent Codex Reviewer. Only then may Codex report:
 
 `READY_TO_FINALIZE: <TASK_ID> / PR #N / exact head <SHA> / TECHNICAL_ACCEPTED / persisted authority <Issue comment ID or PR review ID>`
 
 `READY_TO_FINALIZE` is routing evidence only; the identified persisted GitHub `TECHNICAL_ACCEPTED` record remains authoritative. The human operator must not need to copy/paste Technical Review results between Codex and GitHub.
+
+An eligible direct task never reports `READY_TO_FINALIZE`. Its persisted Independent Review must explicitly confirm `TRIVIAL / CODEX_DIRECT` eligibility; Codex then applies only the pre-edit authenticated conditional Human Gate sequence in `docs/codex-direct-workflow.md`.
 
 ## Finalize
 
@@ -94,7 +102,15 @@ Failed Acceptance or drift cannot merge.
 
 ## Risk profiles
 
-Risk controls planning, Local evidence, and independent-review depth. It never waives exact-head Technical Acceptance, ChatGPT Acceptance, protected-branch `Required CI`, Human Gate semantics, post-merge proof, or release/publication boundaries.
+Risk controls planning, Local evidence, and independent-review depth. No profile may waive exact-head Technical Acceptance, protected-branch `Required CI`, explicit Human Gate semantics, post-merge proof, or release/publication boundaries. `LOW`, `MEDIUM`, and `HIGH` also never waive ChatGPT Acceptance. Only `TRIVIAL / CODEX_DIRECT` omits ChatGPT Acceptance under the exact scope and authority guards below.
+
+### TRIVIAL / CODEX_DIRECT
+
+Use only after canonical `POST_MERGE_ACCEPTED` for `WOS-GOV-007`, and only for an explicitly requested direct task that stays within `docs/codex-direct-workflow.md`.
+
+The initial allowlist is limited to modifications of existing Git-tracked regular-text `*.css` presentation files beneath `css/`. Direct tasks cannot add/delete/rename files and cannot touch PHP, JavaScript, runtime/state/security/release/package/gate/test or normative-governance scope. CSS that changes control reachability, busy/disabled/blocked semantics, interaction authority, authoritative messaging, accessibility-critical state, or external network loading is not TRIVIAL.
+
+Codex must persist and authenticate `DIRECT_HUMAN_AUTHORIZED` before the first source edit, use a fresh branch, run protected-branch `Required CI`, obtain a fresh persisted exact-head Independent Codex `TECHNICAL_ACCEPTED` that explicitly confirms direct eligibility, revalidate unchanged authority, persist `HUMAN_GATE_APPROVED_DIRECT`, squash-merge, and prove exact-tree `POST_MERGE_ACCEPTED_DIRECT`. The Executor cannot self-accept. Any ambiguity or wider actual diff stops `CODEX_DIRECT_NOT_ELIGIBLE` before edits or `CODEX_DIRECT_SCOPE_ESCALATION_REQUIRED` before widening.
 
 ### LOW
 
@@ -116,7 +132,7 @@ Require a detailed threat/failure model, exact invariants, the strongest relevan
 
 ## Exception routing and compatibility commands
 
-Normal successful work uses `Create -> Run -> Finalize`. Additional operator interactions are reserved for real exceptions:
+Normal `LOW` / `MEDIUM` / `HIGH` work uses `Create -> Run -> Finalize`. Eligible `TRIVIAL / CODEX_DIRECT` is the sole no-ChatGPT exception and follows `docs/codex-direct-workflow.md`. Additional operator interactions are reserved for real exceptions:
 
 - `PLAN_REVIEW_REQUIRED`, `ARCHITECTURE_REVIEW_REQUIRED`, `PRODUCT_DECISION_REQUIRED`, or `SCOPE_REVIEW_REQUIRED` returns the unresolved decision to ChatGPT/Human governance.
 - `INDEPENDENT_REVIEW_DISPATCH_REQUIRED` routes to a manually opened fresh `Technical Review <TASK_ID>` context.
@@ -125,6 +141,8 @@ Normal successful work uses `Create -> Run -> Finalize`. Additional operator int
 - `ACCEPTANCE_CHANGES_REQUIRED` routes the bounded correction tranche to Codex.
 - `TECHNICAL_REVIEW_FOLLOWUP_REQUIRED` routes the bounded hypothesis to an Independent Codex Reviewer before it may become correction authority.
 - `TASK_BRANCH_SYNC_REQUIRED`, `LOCAL_RUNTIME_WORKTREE_SYNC_REQUIRED`, and release/publication-specific signals remain fail-closed.
+- `CODEX_DIRECT_NOT_ELIGIBLE` makes no source edit and routes the request to normal `LOW`, `MEDIUM`, or `HIGH` task creation.
+- `CODEX_DIRECT_SCOPE_ESCALATION_REQUIRED` stops before widening the diff and preserves the existing direct Issue for an explicit normal-workflow transition.
 
 `Review`, `Sửa/Fix`, `Technical Review`, `Acceptance Review`, and `Human Gate` remain supported lower-level, fallback, and compatibility commands. They are not mandatory operator steps when the compressed lifecycle is active and automatic reviewer provenance is available.
 
