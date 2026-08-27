@@ -85,7 +85,7 @@
     justify-content: center;
     width: 32px;
     height: 32px;
-    color: #2271b1;
+    color: var(--wp-admin-theme-color, #2271b1);
     text-decoration: none;
 }
 
@@ -162,7 +162,7 @@
 }
 
 .wcos-dismiss-link:hover {
-    color: #2271b1;
+    color: var(--wp-admin-theme-color, #2271b1);
 }
 
 .wcos-premium-matrix {

@@ -51,8 +51,19 @@
 
 .wcos-merge-backbone-modal .wcos-merge-confirm-label {
 	display: flex;
-	gap: 8px;
 	align-items: flex-start;
+	gap: 10px;
+	font-weight: 600;
+	line-height: 1.45;
+}
+
+.wcos-merge-backbone-modal .wcos-merge-confirm-label input[type="checkbox"] {
+	flex: 0 0 auto;
+	margin: 2px 0 0;
+}
+
+.wcos-merge-backbone-modal .wcos-merge-confirm-label span {
+	min-width: 0;
 }
 
 .wcos-merge-backbone-modal .wcos-merge-status {

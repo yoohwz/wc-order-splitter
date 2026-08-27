@@ -42,8 +42,18 @@
 .wcos-bulk-return-ack {
 	display: flex;
 	align-items: flex-start;
-	gap: 8px;
+	gap: 10px;
 	font-weight: 600;
+	line-height: 1.45;
+}
+
+.wcos-bulk-return-ack input[type="checkbox"] {
+	flex: 0 0 auto;
+	margin: 2px 0 0;
+}
+
+.wcos-bulk-return-ack span {
+	min-width: 0;
 }
 
 .wcos-bulk-return-status,
