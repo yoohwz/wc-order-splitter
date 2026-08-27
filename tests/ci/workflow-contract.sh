@@ -11,6 +11,7 @@ agents_contract="$repo_root/AGENTS.md"
 short_command_contract="$repo_root/docs/codex-short-command-protocol.md"
 review_authority_contract="$repo_root/docs/engineering-review-authority.md"
 compressed_workflow_contract="$repo_root/docs/compressed-engineering-workflow.md"
+direct_workflow_contract="$repo_root/docs/codex-direct-workflow.md"
 ci_contract="$repo_root/docs/ci-workflow-contract.md"
 
 assert_contains() {
@@ -39,6 +40,20 @@ assert_occurrences() {
   actual=$(grep -Foc -- "$text" "$file" || true)
   if [[ "$actual" -ne "$expected" ]]; then
     echo "workflow-contract-error: expected '$text' exactly $expected times in $file, found $actual" >&2
+    exit 1
+  fi
+}
+
+assert_before() {
+  local file=$1
+  local first=$2
+  local second=$3
+  local first_line
+  local second_line
+  first_line=$(grep -Fnm1 -- "$first" "$file" | cut -d: -f1 || true)
+  second_line=$(grep -Fnm1 -- "$second" "$file" | cut -d: -f1 || true)
+  if [[ -z "$first_line" || -z "$second_line" || "$first_line" -ge "$second_line" ]]; then
+    echo "workflow-contract-error: expected '$first' before '$second' in $file" >&2
     exit 1
   fi
 }
@@ -109,6 +124,11 @@ assert_contains "$agents_contract" 'docs/engineering-review-authority.md'
 assert_contains "$agents_contract" 'docs/compressed-engineering-workflow.md'
 assert_contains "$agents_contract" 'fresh Independent Codex Technical Review'
 assert_contains "$agents_contract" 'ChatGPT Create -> Codex Run -> ChatGPT Finalize'
+assert_contains "$agents_contract" 'docs/codex-direct-workflow.md'
+assert_contains "$agents_contract" '`TRIVIAL / CODEX_DIRECT` is the only no-ChatGPT exception.'
+assert_contains "$agents_contract" '`DIRECT_HUMAN_AUTHORIZED` before the first source edit'
+assert_contains "$agents_contract" '`HUMAN_GATE_APPROVED_DIRECT`'
+assert_contains "$agents_contract" '`POST_MERGE_ACCEPTED_DIRECT`'
 assert_contains "$agents_contract" '`INDEPENDENT_REVIEW_DISPATCH_REQUIRED`'
 assert_contains "$agents_contract" '`TECHNICAL_ESCALATION_REQUIRED`'
 assert_contains "$agents_contract" '`TECHNICAL_REVIEW_PERSISTENCE_REQUIRED: <TASK_ID> / exact head <SHA>`'
@@ -117,18 +137,23 @@ assert_absent "$agents_contract" 'independent ChatGPT Technical Review'
 
 assert_contains "$short_command_contract" '| Independent Codex Reviewer (fresh context) | `Technical Review <TASK_ID>` |'
 assert_contains "$short_command_contract" '| ChatGPT | `Create <TASK_ID>` |'
+assert_contains "$short_command_contract" '| Codex | `Direct <request>` / `Quick <request>` |'
 assert_contains "$short_command_contract" '| ChatGPT | `Finalize <TASK_ID>` |'
 assert_contains "$short_command_contract" '| ChatGPT | `Acceptance Review <TASK_ID>` |'
 assert_contains "$short_command_contract" 'Command: Acceptance Review <TASK_ID>'
 assert_contains "$short_command_contract" 'Command: Finalize <TASK_ID>'
 assert_contains "$short_command_contract" '`Create <TASK_ID> -> Run <TASK_ID> -> Finalize <TASK_ID>`'
+assert_contains "$short_command_contract" '## Direct bootstrap resolution'
+assert_contains "$short_command_contract" '`CODEX_DIRECT_NOT_ELIGIBLE: <reason> / proposed profile LOW|MEDIUM|HIGH`'
+assert_contains "$short_command_contract" '`CODEX_DIRECT_SCOPE_ESCALATION_REQUIRED: <DIRECT_TASK_ID> / proposed profile LOW|MEDIUM|HIGH / <exact reason>`'
+assert_contains "$short_command_contract" 'It must never emit `READY_TO_FINALIZE` for a direct task.'
 assert_contains "$short_command_contract" '`INDEPENDENT_REVIEW_DISPATCH_REQUIRED: <TASK_ID>`'
 assert_contains "$short_command_contract" '`TECHNICAL_ESCALATION_REQUIRED: <TASK_ID>`'
 assert_contains "$short_command_contract" '## Create bootstrap resolution'
 assert_contains "$short_command_contract" 'If there are zero canonical matches, permit ChatGPT to create the named canonical Issue only after binding the accepted source and authority.'
 assert_contains "$short_command_contract" 'If there is exactly one canonical match, read its complete body and comments and permit only an authorized update consistent with current authority.'
 assert_contains "$short_command_contract" 'If multiple plausible matches exist, stop `TASK_RESOLUTION_REQUIRED`'
-assert_contains "$short_command_contract" 'This bootstrap exception applies only to `Create`.'
+assert_contains "$short_command_contract" 'This normal-workflow bootstrap exception applies only to `Create`.'
 assert_contains "$short_command_contract" 'Before doing substantive work for any command that requires an existing task'
 assert_contains "$short_command_contract" '`TECHNICAL_REVIEW_PERSISTENCE_REQUIRED: <TASK_ID> / exact head <SHA>`'
 assert_contains "$short_command_contract" 'Chat/session-only review output is evidence only and cannot authorize correction, Acceptance, or `Finalize`.'
@@ -140,6 +165,9 @@ assert_contains "$review_authority_contract" 'The executor must not self-issue `
 assert_contains "$review_authority_contract" '`INDEPENDENT_REVIEW_AUTHORITY_REQUIRED`'
 assert_contains "$review_authority_contract" 'exact-head `TECHNICAL_ACCEPTED` and `ACCEPTANCE_ACCEPTED`'
 assert_contains "$review_authority_contract" '`Finalize <TASK_ID>` is an explicit human command and conditional Human Gate'
+assert_contains "$review_authority_contract" '`TRIVIAL / CODEX_DIRECT` is the only exception'
+assert_contains "$review_authority_contract" 'The executor cannot create `DIRECT_HUMAN_AUTHORIZED` after source edits, cannot self-review'
+assert_contains "$review_authority_contract" '`HUMAN_GATE_APPROVED_DIRECT`'
 assert_contains "$review_authority_contract" '`WOS-RETURN-006 — Return UI + Sandbox Readiness`'
 assert_contains "$review_authority_contract" 'automatically persist the complete structured review to canonical GitHub authority'
 assert_contains "$review_authority_contract" 'A chat/session-only `TECHNICAL_ACCEPTED` or `TECHNICAL_CHANGES_REQUIRED` is evidence only'
@@ -157,15 +185,34 @@ assert_contains "$compressed_workflow_contract" 'at most three head-changing tec
 assert_contains "$compressed_workflow_contract" 'The Executor must never review itself or issue `TECHNICAL_ACCEPTED`.'
 assert_contains "$compressed_workflow_contract" 'Failed Acceptance or drift cannot merge.'
 assert_contains "$compressed_workflow_contract" '`Finalize` never grants tag, release, publication, deployment, or public-package authority.'
+assert_contains "$compressed_workflow_contract" '### TRIVIAL / CODEX_DIRECT'
 assert_contains "$compressed_workflow_contract" '### LOW'
 assert_contains "$compressed_workflow_contract" '### MEDIUM'
 assert_contains "$compressed_workflow_contract" '### HIGH'
 assert_contains "$compressed_workflow_contract" '`WOS-RETURN-006 — Return UI + Sandbox Readiness`'
 assert_contains "$compressed_workflow_contract" '`WOS-RETURN-007 — Return Production Enablement`'
 assert_contains "$compressed_workflow_contract" 'Bulk Return starts with one zero-assumption parity/architecture audit.'
+assert_before "$compressed_workflow_contract" '### TRIVIAL / CODEX_DIRECT' '### LOW'
 
-assert_contains "$ci_contract" 'Independent Codex Technical Review, ChatGPT Acceptance Review, and Human Gate'
-assert_contains "$ci_contract" 'independent Codex `TECHNICAL_ACCEPTED`, ChatGPT `ACCEPTANCE_ACCEPTED`, and Human Gate'
+assert_contains "$direct_workflow_contract" 'This workflow becomes active only after `WOS-GOV-007` has canonical `POST_MERGE_ACCEPTED`.'
+assert_contains "$direct_workflow_contract" 'persist `DIRECT_HUMAN_AUTHORIZED` in that Issue before source edits'
+assert_contains "$direct_workflow_contract" 'The executor cannot self-accept.'
+assert_contains "$direct_workflow_contract" 'existing, Git-tracked, regular-text `*.css` presentation files beneath `css/`'
+assert_contains "$direct_workflow_contract" 'Documentation, copy, and translation are not in the initial direct allowlist'
+assert_contains "$direct_workflow_contract" '`CODEX_DIRECT_NOT_ELIGIBLE: <reason> / proposed profile LOW|MEDIUM|HIGH`'
+assert_contains "$direct_workflow_contract" '`CODEX_DIRECT_SCOPE_ESCALATION_REQUIRED: <DIRECT_TASK_ID> / proposed profile LOW|MEDIUM|HIGH / <exact reason>`'
+assert_contains "$direct_workflow_contract" 'protected-branch `Required CI` success with artifacts=`0`'
+assert_contains "$direct_workflow_contract" '`TECHNICAL_ACCEPTED: <DIRECT_TASK_ID> / TRIVIAL / CODEX_DIRECT / PR #N / exact head <SHA> / direct eligibility confirmed / persisted authority <ID>`'
+assert_contains "$direct_workflow_contract" '`HUMAN_GATE_APPROVED_DIRECT: <DIRECT_TASK_ID> / PR #N / exact head <SHA> / derived from DIRECT_HUMAN_AUTHORIZED <ID>`'
+assert_contains "$direct_workflow_contract" '`POST_MERGE_ACCEPTED_DIRECT: <DIRECT_TASK_ID> / PR #N / main <SHA> / tree <TREE_SHA> / Main attestation <RUN_ID> / artifacts=0`'
+assert_contains "$direct_workflow_contract" 'requires no ChatGPT `Acceptance Review`, `ACCEPTANCE_ACCEPTED`, or `Finalize`.'
+assert_contains "$direct_workflow_contract" 'CODEX_DIRECT never authorizes version or stable-tag changes'
+assert_absent "$direct_workflow_contract" 'Executor may self-issue `TECHNICAL_ACCEPTED`'
+
+assert_contains "$ci_contract" 'Independent Codex Technical Review, ChatGPT Acceptance Review where applicable, and Human Gate'
+assert_contains "$ci_contract" 'independent Codex `TECHNICAL_ACCEPTED`, ChatGPT `ACCEPTANCE_ACCEPTED` where applicable, and Human Gate'
 assert_contains "$ci_contract" '`Finalize <TASK_ID>` may merge an accepted implementation or release-bookkeeping PR, but it never invokes the manual package workflow'
+assert_contains "$ci_contract" 'The sole `TRIVIAL / CODEX_DIRECT` exception omits ChatGPT Acceptance only under `docs/codex-direct-workflow.md`'
+assert_contains "$ci_contract" '`DIRECT_HUMAN_AUTHORIZED`, direct-eligibility-confirmed `TECHNICAL_ACCEPTED`, and `HUMAN_GATE_APPROVED_DIRECT`'
 
 echo 'workflow-contract-ok'
