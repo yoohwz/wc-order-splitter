@@ -164,6 +164,26 @@ commit_case escaped-remote-css-url >/dev/null
 assert_profile FULL escaped-remote-css-url
 
 reset_fixture
+printf '.fixture { background: url(//cdn.example.invalid/a.png); }\n' > "$fixture_root/css/admin.css"
+commit_case scheme-relative-css-url >/dev/null
+assert_profile FULL scheme-relative-css-url
+
+reset_fixture
+printf '.fixture { background: url("//cdn.example.invalid/a.png"); }\n' > "$fixture_root/css/admin.css"
+commit_case quoted-scheme-relative-css-url >/dev/null
+assert_profile FULL quoted-scheme-relative-css-url
+
+reset_fixture
+printf '.fixture { background: url(\\2f \\2f cdn.example.invalid/a.png); }\n' > "$fixture_root/css/admin.css"
+commit_case escaped-scheme-relative-css-url >/dev/null
+assert_profile FULL escaped-scheme-relative-css-url
+
+reset_fixture
+printf '.fixture { background: url(/assets/local.png); }\n' > "$fixture_root/css/admin.css"
+commit_case root-relative-local-css-url >/dev/null
+assert_profile DIRECT_CSS_FAST root-relative-local-css-url
+
+reset_fixture
 printf '.fixture { width: expression(alert(1)); }\n' > "$fixture_root/css/admin.css"
 commit_case executable-css >/dev/null
 assert_profile FULL executable-css

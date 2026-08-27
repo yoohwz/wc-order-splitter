@@ -101,7 +101,7 @@ while IFS= read -r -d '' status; do
     fallback css_import_present
   fi
 
-  if grep -Eiq 'url[[:space:]]*\([^)]*https?://' "$normalized_css"; then
+  if grep -Eiq "url[[:space:]]*\\([[:space:]]*['\\\"]?[[:space:]]*(https?:)?//" "$normalized_css"; then
     fallback remote_css_url_present
   fi
 
