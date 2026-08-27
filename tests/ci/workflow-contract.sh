@@ -69,13 +69,15 @@ assert_contains "$ci_workflow" 'name: Classify PR CI profile'
 assert_contains "$ci_workflow" 'git cat-file -e "$PR_BASE_SHA:.github/scripts/classify-pr-scope.sh"'
 assert_contains "$ci_workflow" 'reason=classifier_not_present_in_base'
 assert_contains "$ci_workflow" 'git show "$PR_BASE_SHA:.github/scripts/classify-pr-scope.sh" > "$base_classifier"'
-assert_contains "$ci_workflow" '"$base_classifier" "$EVENT_NAME" "$PR_BASE_SHA" "$PR_HEAD_SHA" "$GITHUB_OUTPUT"'
+assert_occurrences "$ci_workflow" 'PR_HEAD_REF: ${{ github.head_ref }}' 2
+assert_contains "$ci_workflow" '"$base_classifier" "$EVENT_NAME" "$PR_BASE_SHA" "$PR_HEAD_SHA" "$PR_HEAD_REF" "$GITHUB_OUTPUT"'
 assert_contains "$ci_workflow" "if: needs['classify-pr-scope'].outputs.profile == 'FULL'"
 assert_contains "$ci_workflow" 'direct-css-fast:'
 assert_contains "$ci_workflow" 'name: CODEX_DIRECT focused CSS contract'
 assert_contains "$ci_workflow" "if: needs['classify-pr-scope'].outputs.profile == 'DIRECT_CSS_FAST'"
 assert_contains "$ci_workflow" 'tests/ci/direct-css-fast-contract.sh'
 assert_contains "$ci_workflow" 'tests/ci/required-ci-profile-contract.sh'
+assert_contains "$ci_workflow" '.github/scripts/classify-pr-scope.sh pull_request "$PR_BASE_SHA" "$PR_HEAD_SHA" "$PR_HEAD_REF"'
 assert_contains "$ci_workflow" 'git cat-file -e "$PR_BASE_SHA:.github/scripts/verify-required-ci.sh"'
 assert_contains "$ci_workflow" 'git show "$PR_BASE_SHA:.github/scripts/verify-required-ci.sh" > "$aggregator"'
 assert_contains "$ci_workflow" 'cp .github/scripts/verify-required-ci.sh "$aggregator"'

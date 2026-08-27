@@ -5,7 +5,8 @@ set -euo pipefail
 event_name=${1:-}
 base_sha=${2:-}
 head_sha=${3:-}
-output_file=${4:-}
+head_ref=${4:-}
+output_file=${5:-}
 
 profile=FULL
 reason=fail_closed_default
@@ -31,6 +32,10 @@ if [[ "$event_name" != pull_request ]]; then
   fallback non_pull_request_event
 fi
 
+if [[ ! "$head_ref" =~ ^codex/direct/wos-direct-[0-9]{8}-[0-9]{6}$ ]]; then
+  fallback non_direct_head_ref
+fi
+
 if [[ ! "$base_sha" =~ ^[0-9a-fA-F]{40}$ || ! "$head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
   fallback invalid_pr_authority
 fi
@@ -42,8 +47,8 @@ git cat-file -e "$base_sha^{commit}" 2>/dev/null || fallback unresolved_base_com
 git cat-file -e "$head_sha^{commit}" 2>/dev/null || fallback unresolved_head_commit
 
 diff_records=$(mktemp)
-added_lines=$(mktemp)
-trap 'rm -f "$diff_records" "$added_lines"' EXIT
+normalized_css=$(mktemp)
+trap 'rm -f "$diff_records" "$normalized_css"' EXIT
 
 if ! git diff --name-status --no-renames --no-ext-diff -z "$base_sha" "$head_sha" > "$diff_records"; then
   fallback unresolved_pr_diff
@@ -86,25 +91,26 @@ while IFS= read -r -d '' status; do
     fallback lfs_pointer_css
   fi
 
-  if ! git diff --unified=0 --no-ext-diff --no-textconv "$base_sha" "$head_sha" -- "$path" \
-    | sed -n '/^+++ /d; /^+/p' >> "$added_lines"; then
-    fallback unresolved_css_patch
+  if ! git show "$head_sha:$path" \
+    | perl -0777 -pe 's{/\*.*?\*/}{}gs; s/\\\r?\n//g; s/\\([0-9a-fA-F]{1,6})[ \t\r\n\f]?/chr(hex($1))/ge; s/\\(.)/$1/gs' \
+    > "$normalized_css"; then
+    fallback css_semantic_normalization_failed
+  fi
+
+  if grep -Eiq '@import([[:space:]]|;|url|\()' "$normalized_css"; then
+    fallback css_import_present
+  fi
+
+  if grep -Eiq 'url[[:space:]]*\([^)]*https?://' "$normalized_css"; then
+    fallback remote_css_url_present
+  fi
+
+  if grep -Eiq 'expression[[:space:]]*\(' "$normalized_css"; then
+    fallback executable_css_expression_present
   fi
 done < "$diff_records"
 
 [[ "$changed_count" -gt 0 ]] || fallback malformed_pr_diff
-
-if grep -Eiq '^[+][[:space:]]*@import([[:space:]]|;|url|\()' "$added_lines"; then
-  fallback css_import_added
-fi
-
-if grep -Eiq '^[+].*url\([[:space:]]*["'"'"']?[[:space:]]*https?://' "$added_lines"; then
-  fallback remote_css_url_added
-fi
-
-if grep -Eiq '^[+].*expression[[:space:]]*\(' "$added_lines"; then
-  fallback executable_css_expression_added
-fi
 
 profile=DIRECT_CSS_FAST
 reason=strict_existing_css_modifications
