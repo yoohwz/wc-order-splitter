@@ -31,6 +31,18 @@ assert_absent() {
   fi
 }
 
+assert_occurrences() {
+  local file=$1
+  local text=$2
+  local expected=$3
+  local actual
+  actual=$(grep -Foc -- "$text" "$file" || true)
+  if [[ "$actual" -ne "$expected" ]]; then
+    echo "workflow-contract-error: expected '$text' exactly $expected times in $file, found $actual" >&2
+    exit 1
+  fi
+}
+
 ruby -e 'require "yaml"; ARGV.each { |file| Psych.parse_file(file) }' \
   "$ci_workflow" "$main_workflow" "$package_workflow"
 
@@ -57,8 +69,24 @@ assert_absent "$ci_workflow" 'actions/upload-artifact'
 assert_contains "$main_workflow" 'name: Main attestation'
 assert_contains "$main_workflow" '  push:'
 assert_contains "$main_workflow" '      - main'
+assert_contains "$main_workflow" '  workflow_dispatch:'
+assert_contains "$main_workflow" '      expected_sha:'
+assert_contains "$main_workflow" '      authority:'
+assert_occurrences "$main_workflow" '        required: true' 2
+assert_occurrences "$main_workflow" '        type: string' 2
+assert_contains "$main_workflow" 'group: main-attestation-${{ github.event_name }}-${{ github.sha }}'
+assert_contains "$main_workflow" "if: github.event_name == 'workflow_dispatch'"
+assert_occurrences "$main_workflow" "test \"\$GITHUB_REF\" = 'refs/heads/main'" 2
+assert_occurrences "$main_workflow" '[[ "$EXPECTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]]' 2
+assert_occurrences "$main_workflow" 'expected_sha="$(printf '\''%s'\'' "$EXPECTED_SHA" | tr '\''[:upper:]'\'' '\''[:lower:]'\'')"' 2
+assert_occurrences "$main_workflow" 'test "$GITHUB_SHA" = "$expected_sha"' 2
+assert_contains "$main_workflow" 'test "$checked_out_sha" = "$expected_sha"'
+assert_occurrences "$main_workflow" 'test -n "${ATTESTATION_AUTHORITY//[[:space:]]/}"' 2
 assert_contains "$main_workflow" 'git rev-parse HEAD^{tree}'
 assert_contains "$main_workflow" 'main_parent_shas=$(git show -s --format=%P HEAD)'
+assert_contains "$main_workflow" 'attestation_event_name=$GITHUB_EVENT_NAME'
+assert_contains "$main_workflow" 'attestation_run_attempt=$GITHUB_RUN_ATTEMPT'
+assert_contains "$main_workflow" 'attestation_authority=$ATTESTATION_AUTHORITY'
 assert_contains "$main_workflow" '.github/scripts/validate-distribution-contract.sh'
 assert_contains "$main_workflow" "grep -Fq 'self::BULK_RETURN => true' inc/domain/class-wcos-feature-gates.php"
 assert_absent "$main_workflow" "grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php"
