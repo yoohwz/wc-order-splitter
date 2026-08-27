@@ -53,7 +53,6 @@ final class WCOS_Merge_Admin_Controller {
 		add_action('wp_ajax_' . self::REVIEW_ACTION, array($this, 'ajax_review'));
 		add_action('wp_ajax_' . self::CONFIRM_ACTION, array($this, 'ajax_confirm'));
 		add_action('wp_ajax_' . self::EXECUTE_ACTION, array($this, 'ajax_execute'));
-		add_action('woocommerce_order_item_add_action_buttons', array($this, 'render_launcher'), 22, 1);
 		add_action('admin_footer', array($this, 'render_dialog'));
 		add_action('admin_enqueue_scripts', array($this, 'enqueue_assets'));
 		$this->registered = true;
@@ -65,7 +64,6 @@ final class WCOS_Merge_Admin_Controller {
 		remove_action('wp_ajax_' . self::REVIEW_ACTION, array($this, 'ajax_review'));
 		remove_action('wp_ajax_' . self::CONFIRM_ACTION, array($this, 'ajax_confirm'));
 		remove_action('wp_ajax_' . self::EXECUTE_ACTION, array($this, 'ajax_execute'));
-		remove_action('woocommerce_order_item_add_action_buttons', array($this, 'render_launcher'), 22);
 		remove_action('admin_footer', array($this, 'render_dialog'));
 		remove_action('admin_enqueue_scripts', array($this, 'enqueue_assets'));
 		$this->registered = false;
@@ -258,7 +256,7 @@ final class WCOS_Merge_Admin_Controller {
 		$dialog_id = 'wcos-merge-dialog-' . $order->get_id();
 		$description_id = 'wcos-merge-launcher-description-' . $order->get_id();
 		echo '<button type="button" class="button wcos-merge-launcher" aria-haspopup="dialog" aria-controls="' . esc_attr($dialog_id) . '" aria-describedby="' . esc_attr($description_id) . '">';
-		echo esc_html__('Merge into another order', 'wc-order-splitter');
+		echo esc_html__('Merge', 'wc-order-splitter');
 		echo '</button>';
 		echo '<span id="' . esc_attr($description_id) . '" class="description wcos-merge-launcher-description">';
 		echo esc_html__('Select a target order, then review the server-owned Merge plan.', 'wc-order-splitter');

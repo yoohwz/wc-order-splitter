@@ -39,13 +39,13 @@ $hook_contracts = array(
 	'wp_ajax_' . WCOS_Merge_Admin_Controller::REVIEW_ACTION => 'ajax_review',
 	'wp_ajax_' . WCOS_Merge_Admin_Controller::CONFIRM_ACTION => 'ajax_confirm',
 	'wp_ajax_' . WCOS_Merge_Admin_Controller::EXECUTE_ACTION => 'ajax_execute',
-	'woocommerce_order_item_add_action_buttons' => 'render_launcher',
 	'admin_footer' => 'render_dialog',
 	'admin_enqueue_scripts' => 'enqueue_assets',
 );
 foreach ($hook_contracts as $hook => $method) {
 	wcos_merge_ui_assert(false !== has_action($hook, array($controller, $method)), 'Enabled Merge hook is missing: ' . $hook);
 }
+wcos_merge_ui_assert(false === has_action('woocommerce_order_item_add_action_buttons', array($controller, 'render_launcher')), 'Merge launcher remained registered in the Order items action area.');
 
 wp_dequeue_script('wcos-merge-admin');
 wp_dequeue_style('wcos-merge-admin');
@@ -72,7 +72,7 @@ try {
 	ob_start();
 	$controller->render_launcher($source);
 	$enabled_launcher = (string) ob_get_clean();
-	wcos_merge_ui_assert(false !== strpos($enabled_launcher, 'Merge into another order'), 'Enabled Merge launcher did not render.');
+	wcos_merge_ui_assert(false !== strpos($enabled_launcher, '>Merge</button>'), 'Enabled Merge launcher did not use its compact Order actions label.');
 	wcos_merge_ui_assert(false === strpos($enabled_launcher, $email) && false === strpos($enabled_launcher, $address), 'Enabled Merge launcher exposed customer PII.');
 
 	$order_screen_id = function_exists('wc_get_page_screen_id') ? wc_get_page_screen_id('shop-order') : 'woocommerce_page_wc-orders';

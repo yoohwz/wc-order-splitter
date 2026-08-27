@@ -10,10 +10,6 @@
     border: 0 !important;
 }
 
-.wcos-duplicate-launcher {
-    margin-right: 6px;
-}
-
 /* Server-rendered source markup is a non-visible cloning source only. */
 .wcos-duplicate-dialog {
     display: none !important;
