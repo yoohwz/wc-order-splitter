@@ -5,9 +5,8 @@ defined('ABSPATH') || exit;
 /**
  * Immutable policy selector for one Split operation.
  *
- * Manual quantity Split keeps its current positive-residual rule. Future
- * server-built planners may opt into whole-line transfer only by supplying the
- * explicit internal policy value.
+ * Versioned Manual quantity authority and server-built planners may select the
+ * explicit whole-line policy. Browser input never supplies this value.
  */
 final class WCOS_Split_Execution_Policy {
 	const PARTIAL_LINES_ONLY = 'partial_lines_only';

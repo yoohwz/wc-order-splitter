@@ -77,7 +77,7 @@ final class WCOS_Split_Plan {
 			}
 			if ($split_units === $source_quantities[$item_id]) {
 				if (!$whole_line_allowed) {
-					throw new InvalidArgumentException(__('The manual quantity Split policy requires every affected source line to retain a positive quantity.', 'wc-order-splitter'));
+					throw new InvalidArgumentException(__('The partial-lines-only Split policy requires every affected source line to retain a positive quantity.', 'wc-order-splitter'));
 				}
 				$fully_moved_items[$item_id] = true;
 			}

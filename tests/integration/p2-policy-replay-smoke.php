@@ -29,7 +29,11 @@ wcos_p2_adapter_assert(
         $policy_source,
         $policy_operation,
         'split',
-		array('plan' => $policy_plan, 'manual_quantity_authority' => $policy_quantity_authority),
+		array(
+			'plan' => $policy_plan,
+			'execution_policy' => WCOS_Manual_Split_Quantity_Authority::execution_policy($policy_quantity_authority),
+			'manual_quantity_authority' => $policy_quantity_authority,
+		),
         $policy_fingerprint
     ),
     'Unable to start durable-policy journal fixture.'
@@ -94,6 +98,26 @@ try {
     $policy_changed = 'policy_changed' === $exception->get_reason();
 }
 wcos_p2_adapter_assert($policy_changed, 'Durable replay crossed a changed Split safety policy.');
+
+update_option($journal_key, $policy_record, false);
+wp_cache_delete($journal_key, 'options');
+
+$execution_policy_record = $policy_record;
+$execution_policy_record['context']['execution_policy'] = WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY;
+update_option($journal_key, $execution_policy_record, false);
+wp_cache_delete($journal_key, 'options');
+$execution_policy_rejected = false;
+try {
+	WCOS_Split_Confirmation_Store::verify(
+		wc_get_order($policy_source_id),
+		$policy_operation,
+		'',
+		$policy_user_id
+	);
+} catch (WCOS_Split_Confirmation_Exception $exception) {
+	$execution_policy_rejected = 'quantity_authority_incomplete' === $exception->get_reason();
+}
+wcos_p2_adapter_assert($execution_policy_rejected, 'Durable Manual replay accepted execution policy that disagreed with versioned authority.');
 
 update_option($journal_key, $policy_record, false);
 wp_cache_delete($journal_key, 'options');

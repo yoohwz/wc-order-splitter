@@ -265,7 +265,7 @@ final class WCOS_Split_Admin_Controller {
                 'reviewReady' => __('The plan passed server review. Confirm the acknowledgement to execute it.', 'wc-order-splitter'),
                 'executing' => __('Executing Split…', 'wc-order-splitter'),
                 'completed' => __('Split completed successfully.', 'wc-order-splitter'),
-                'invalidPlan' => __('Enter at least one quantity and keep a positive residual quantity on every affected source line.', 'wc-order-splitter'),
+				'invalidPlan' => __('Enter at least one valid quantity and leave positive product quantity on the source order.', 'wc-order-splitter'),
                 'requestFailed' => __('The Split request could not be completed.', 'wc-order-splitter'),
                 'childOrder' => __('Child order', 'wc-order-splitter'),
                 'reloadOrder' => __('Reload source order', 'wc-order-splitter'),
@@ -307,7 +307,7 @@ final class WCOS_Split_Admin_Controller {
                 <div class="wcos-split-dialog__header">
                     <div>
                         <h2 id="<?php echo esc_attr($title_id); ?>"><?php esc_html_e('Review quantity split', 'wc-order-splitter'); ?></h2>
-                        <p id="<?php echo esc_attr($description_id); ?>"><?php esc_html_e('Enter the quantity from each source line to move into each pending child order. Every affected source line must retain a positive quantity.', 'wc-order-splitter'); ?></p>
+						<p id="<?php echo esc_attr($description_id); ?>"><?php esc_html_e('Enter the quantity from each source line to move into each pending child order. The source order must retain positive product quantity after all allocations.', 'wc-order-splitter'); ?></p>
                     </div>
                     <button type="button" class="button-link wcos-split-close" aria-label="<?php esc_attr_e('Close Split dialog', 'wc-order-splitter'); ?>"><span aria-hidden="true">×</span></button>
                 </div>
@@ -334,14 +334,11 @@ final class WCOS_Split_Admin_Controller {
 									$inputmode = 0 === ((int) $line_authority['step_units'] % WCOS_Decimal::factor(6)) ? 'numeric' : 'decimal';
 									$can_partially_split = !empty($line_authority['can_partially_split']);
                                     ?>
-									<tr data-item-id="<?php echo esc_attr($item_id); ?>" data-source-quantity="<?php echo esc_attr($quantity); ?>" data-source-units="<?php echo esc_attr($line_authority['source_quantity_units']); ?>" data-step-units="<?php echo esc_attr($line_authority['step_units']); ?>" data-maximum-units="<?php echo esc_attr($line_authority['maximum_quantity_units']); ?>" data-splittable="<?php echo $can_partially_split ? '1' : '0'; ?>">
+									<tr data-item-id="<?php echo esc_attr($item_id); ?>" data-policy-version="<?php echo esc_attr($quantity_authority['policy_version']); ?>" data-source-quantity="<?php echo esc_attr($quantity); ?>" data-source-units="<?php echo esc_attr($line_authority['source_quantity_units']); ?>" data-step-units="<?php echo esc_attr($line_authority['step_units']); ?>" data-maximum-units="<?php echo esc_attr($line_authority['maximum_quantity_units']); ?>" data-splittable="<?php echo $can_partially_split ? '1' : '0'; ?>">
                                         <th scope="row"><?php echo esc_html($item->get_name()); ?></th>
 										<td>
 											<?php echo esc_html($display_quantity); ?>
 											<small class="wcos-split-step-hint"><?php echo esc_html(sprintf(__('Step: %s', 'wc-order-splitter'), $step)); ?></small>
-											<?php if (!$can_partially_split) : ?>
-												<small class="wcos-split-non-splittable"><?php esc_html_e('No partial quantity can move while retaining one step.', 'wc-order-splitter'); ?></small>
-											<?php endif; ?>
 										</td>
                                         <?php for ($child_index = 1; $child_index <= 10; $child_index++) :
                                             $child_key = 'child-' . $child_index;
@@ -368,6 +365,7 @@ final class WCOS_Split_Admin_Controller {
                             <li><?php esc_html_e('Coupons, refunds, negative fees, nested splits, and unclassified private line metadata are rejected before mutation.', 'wc-order-splitter'); ?></li>
                             <li><?php esc_html_e('Extensions that change stock directly in the database instead of WooCommerce stock APIs are unsupported unless they provide an explicit compatibility adapter.', 'wc-order-splitter'); ?></li>
 							<li><?php echo esc_html(sprintf(__('Manual allocation steps are enforced per line: %s.', 'wc-order-splitter'), implode(', ', $step_labels))); ?></li>
+							<li><?php esc_html_e('A complete source line may move, but the source order must retain positive product quantity.', 'wc-order-splitter'); ?></li>
                         </ul>
                     </div>
 

@@ -40,9 +40,10 @@ function row(attributes) {
 }
 
 const quarter = hooks.rowQuantityAuthority(row({
-    'data-source-units': '3500000',
-    'data-step-units': '250000',
-    'data-maximum-units': '3250000',
+	'data-policy-version': '2',
+	'data-source-units': '3500000',
+	'data-step-units': '250000',
+	'data-maximum-units': '3500000',
     'data-splittable': '1'
 }));
 assert.equal(quarter.source, 3500000n);
@@ -50,18 +51,44 @@ assert.equal(quarter.step, 250000n);
 assert.equal(hooks.decimalToUnits('1.75') % quarter.step, 0n);
 assert.notEqual(hooks.decimalToUnits('0.1') % quarter.step, 0n);
 assert.notEqual(hooks.decimalToUnits('0.000001') % quarter.step, 0n);
+assert.equal(hooks.lineResidual(quarter, 3500000n), 0n, 'current authority must allow one line to reach Remaining 0');
 
 const integer = hooks.rowQuantityAuthority(row({
-    'data-source-units': '4000000',
-    'data-step-units': '1000000',
-    'data-maximum-units': '3000000',
+	'data-policy-version': '2',
+	'data-source-units': '4000000',
+	'data-step-units': '1000000',
+	'data-maximum-units': '4000000',
     'data-splittable': '1'
 }));
 assert.notEqual(hooks.decimalToUnits('1.000001') % integer.step, 0n);
-assert.equal(integer.maximum, 3000000n);
+assert.equal(integer.maximum, 4000000n);
+assert.equal(hooks.lineResidual(integer, 4000000n), 0n);
+
+const singleStep = hooks.rowQuantityAuthority(row({
+	'data-policy-version': '2',
+	'data-source-units': '1000000',
+	'data-step-units': '1000000',
+	'data-maximum-units': '1000000',
+	'data-splittable': '1'
+}));
+assert.equal(singleStep.splittable, true, 'one-step rows must be allocatable under order-level residual policy');
+assert.equal(hooks.sourceOrderHasResidual([hooks.lineResidual(singleStep, 1000000n), 1000000n]), true);
+assert.equal(hooks.sourceOrderHasResidual([0n, 0n]), false, 'client must reject allocation that empties every source line');
+
+const legacy = hooks.rowQuantityAuthority(row({
+	'data-policy-version': '1',
+	'data-source-units': '4000000',
+	'data-step-units': '1000000',
+	'data-maximum-units': '3000000',
+	'data-splittable': '1'
+}));
+assert.equal(legacy.policyVersion, 1);
+assert.equal(legacy.maximum, 3000000n, 'legacy authority must retain one source step');
+assert.throws(() => hooks.lineResidual(legacy, 4000000n), undefined, 'legacy authority must reject whole-line replay reinterpretation');
 
 assert.throws(() => hooks.rowQuantityAuthority(row({
-    'data-source-units': '1000000',
+	'data-policy-version': '1',
+	'data-source-units': '1000000',
     'data-step-units': '250000',
     'data-maximum-units': '1000000',
     'data-splittable': '1'

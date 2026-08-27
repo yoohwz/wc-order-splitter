@@ -299,12 +299,14 @@ try {
         'scope="row"',
         'change stock directly in the database',
 		'data-step-units="1000000"',
-		'data-maximum-units="3000000"',
-		'max="3"',
+		'data-policy-version="2"',
+		'data-maximum-units="4000000"',
+		'max="4"',
 		'step="1"',
 		'inputmode="numeric"',
 		'Step: 1',
 		'Manual allocation steps are enforced per line: 1.',
+		'The source order must retain positive product quantity after all allocations.',
     ) as $needle) {
         wcos_p2_adapter_assert(false !== strpos($html, $needle), 'Accessible Split dialog is missing required markup: ' . $needle);
     }
@@ -314,8 +316,9 @@ try {
 
     /* The client delegates keyboard/focus lifecycle to WooCommerce Backbone modal. */
     $root = dirname(__DIR__, 2);
-    $js = file_get_contents($root . '/js/p2-split-admin.js');
-    wcos_p2_adapter_assert(is_string($js) && '' !== $js, 'Unable to read the Split admin client script.');
+	$js = file_get_contents($root . '/js/p2-split-admin.js');
+	wcos_p2_adapter_assert(is_string($js) && '' !== $js, 'Unable to read the Split admin client script.');
+	wcos_p2_adapter_assert(false === strpos($js, 'execution_policy'), 'Split admin client gained a browser-authored execution policy field.');
     wcos_p2_adapter_assert(false === strpos($js, 'innerHTML'), 'Split admin client uses innerHTML for mutation result/UI content.');
     wcos_p2_adapter_assert(false === strpos($js, 'alert('), 'Split admin client uses blocking alert() UI.');
     foreach (array('textContent', 'data-child-key', 'window.WCOSBackboneModal.open', "modalClass: 'wcos-split-backbone-modal'", 'removeExternalDescription') as $needle) {

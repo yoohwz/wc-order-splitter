@@ -46,12 +46,13 @@ final class WCOS_Mutation_Gateway {
 		} else {
 			throw new RuntimeException(__('A verified server Manual Split quantity authority is required.', 'wc-order-splitter'));
 		}
+		$execution_policy = WCOS_Manual_Split_Quantity_Authority::execution_policy($operation_context['manual_quantity_authority']);
 		return (new WCOS_Split_WooCommerce_Adapter())->split(
 			$source,
 			$canonical_plan,
 			$operation_id,
 			$precision,
-			WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY,
+			$execution_policy,
 			$operation_context
 		);
 	}

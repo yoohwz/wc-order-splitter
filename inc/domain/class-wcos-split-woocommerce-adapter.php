@@ -7,9 +7,9 @@ defined('ABSPATH') || exit;
  *
  * The production gateway owns authorization/gating; this adapter owns
  * WooCommerce compatibility preflight, operation-scoped price precision, and
- * request-local physical-stock side-effect evidence. Manual quantity Split uses
- * the default partial-line policy; reviewed server-built strategies may pass the
- * explicit whole-line policy through their dedicated strategy adapter.
+ * request-local physical-stock side-effect evidence. Manual quantity Split binds
+ * its execution policy to versioned server authority; reviewed server-built
+ * strategies pass their policy through the dedicated strategy adapter.
  */
 final class WCOS_Split_WooCommerce_Adapter {
 
@@ -140,6 +140,11 @@ final class WCOS_Split_WooCommerce_Adapter {
 			}
 			try {
 				$report['manual_quantity_authority'] = WCOS_Manual_Split_Quantity_Authority::create($source);
+				if (!WCOS_Manual_Split_Quantity_Authority::is_order_splittable($report['manual_quantity_authority'])) {
+					$report['supported'] = false;
+					$report['reason'] = 'manual_quantity_insufficient_allocatable_steps';
+					$report['message'] = __('Manual Split requires at least two allocatable quantity steps across the source order.', 'wc-order-splitter');
+				}
 			} catch (WCOS_Manual_Split_Quantity_Authority_Exception $exception) {
 				$report['supported'] = false;
 				$report['reason'] = 'manual_quantity_' . $exception->get_reason();

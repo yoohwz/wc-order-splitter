@@ -25,27 +25,51 @@
 	}
 
 	function rowQuantityAuthority(row) {
+		var policyRaw = row.getAttribute('data-policy-version') || '';
 		var sourceRaw = row.getAttribute('data-source-units') || '';
 		var stepRaw = row.getAttribute('data-step-units') || '';
 		var maximumRaw = row.getAttribute('data-maximum-units') || '';
-		if (!/^\d+$/.test(sourceRaw) || !/^\d+$/.test(stepRaw) || !/^\d+$/.test(maximumRaw)) {
+		if (!/^(?:1|2)$/.test(policyRaw) || !/^\d+$/.test(sourceRaw) || !/^\d+$/.test(stepRaw) || !/^\d+$/.test(maximumRaw)) {
 			throw new Error('invalid_row_authority');
 		}
+		var policyVersion = Number(policyRaw);
 		var source = BigInt(sourceRaw);
 		var step = BigInt(stepRaw);
 		var maximum = BigInt(maximumRaw);
-		var expectedMaximum = source > step ? source - step : BigInt(0);
+		var expectedMaximum = policyVersion === 1 ? (source > step ? source - step : BigInt(0)) : source;
 		var splittable = row.getAttribute('data-splittable') === '1';
 		if (source <= BigInt(0) || step <= BigInt(0) || source % step !== BigInt(0) || maximum !== expectedMaximum || splittable !== (maximum >= step)) {
 			throw new Error('invalid_row_authority');
 		}
-		return { source: source, step: step, maximum: maximum, splittable: splittable };
+		return { policyVersion: policyVersion, source: source, step: step, maximum: maximum, splittable: splittable };
+	}
+
+	function lineResidual(authority, moved) {
+		if (!authority || typeof moved !== 'bigint' || moved < BigInt(0)
+			|| moved > authority.maximum || moved > authority.source
+			|| moved % authority.step !== BigInt(0)) {
+			throw new Error('invalid_line_allocation');
+		}
+		var residual = authority.source - moved;
+		if (residual % authority.step !== BigInt(0)
+			|| (authority.policyVersion === 1 && moved > BigInt(0) && residual <= BigInt(0))) {
+			throw new Error('invalid_line_residual');
+		}
+		return residual;
+	}
+
+	function sourceOrderHasResidual(residuals) {
+		return residuals.some(function (residual) {
+			return typeof residual === 'bigint' && residual > BigInt(0);
+		});
 	}
 
 	if (window.wcosSplitAdminTestHooks && typeof window.wcosSplitAdminTestHooks === 'object') {
 		window.wcosSplitAdminTestHooks.decimalToUnits = decimalToUnits;
 		window.wcosSplitAdminTestHooks.unitsToDecimal = unitsToDecimal;
 		window.wcosSplitAdminTestHooks.rowQuantityAuthority = rowQuantityAuthority;
+		window.wcosSplitAdminTestHooks.lineResidual = lineResidual;
+		window.wcosSplitAdminTestHooks.sourceOrderHasResidual = sourceOrderHasResidual;
 	}
 
     var launcher = document.querySelector('.wcos-split-launcher');
@@ -321,10 +345,11 @@
             });
         }
 
-        function buildPlan() {
-            var plan = {};
-            var hasQuantity = false;
-            var invalid = false;
+		function buildPlan() {
+			var plan = {};
+			var hasQuantity = false;
+			var sourceResiduals = [];
+			var invalid = false;
 
             Array.prototype.forEach.call(dialog.querySelectorAll('tbody tr[data-item-id]'), function (row) {
                 var itemId = row.getAttribute('data-item-id');
@@ -373,10 +398,12 @@
                     hasQuantity = true;
                 });
 
-				if (movedForLine > authority.maximum) {
-                    invalid = true;
-                }
-            });
+				try {
+					sourceResiduals.push(lineResidual(authority, movedForLine));
+				} catch (error) {
+					invalid = true;
+				}
+			});
 
             Object.keys(plan).forEach(function (childKey) {
                 if (!Object.keys(plan[childKey]).length) {
@@ -384,8 +411,8 @@
                 }
             });
 
-            if (invalid || !hasQuantity) {
-                throw new Error(text('invalidPlan', 'Enter at least one quantity and keep a positive residual quantity on every affected source line.'));
+			if (invalid || !hasQuantity || !sourceOrderHasResidual(sourceResiduals)) {
+				throw new Error(text('invalidPlan', 'Enter at least one valid quantity and leave positive product quantity on the source order.'));
             }
             return plan;
         }
@@ -420,10 +447,15 @@
 					}
                 });
 				var remaining = authority.source > moved ? authority.source - moved : BigInt(0);
+				try {
+					remaining = lineResidual(authority, moved);
+				} catch (error) {
+					valid = false;
+				}
                 var output = row.querySelector('.wcos-split-remaining');
                 if (output) {
 					output.textContent = unitsToDecimal(remaining);
-					output.classList.toggle('is-invalid', !valid || remaining <= BigInt(0) || remaining % authority.step !== BigInt(0));
+					output.classList.toggle('is-invalid', !valid);
                 }
             });
         }
