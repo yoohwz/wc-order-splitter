@@ -139,6 +139,21 @@ commit_case comment-obfuscated-css-import >/dev/null
 assert_profile FULL comment-obfuscated-css-import
 
 reset_fixture
+printf '.fixture { color: navy; }\n@import"theme.css";\n' > "$fixture_root/css/admin.css"
+commit_case quoted-css-import >/dev/null
+assert_profile FULL quoted-css-import
+
+reset_fixture
+printf '.fixture { color: navy; }\n@im/**/port"theme.css";\n' > "$fixture_root/css/admin.css"
+commit_case comment-token-obfuscated-css-import >/dev/null
+assert_profile FULL comment-token-obfuscated-css-import
+
+reset_fixture
+printf '.fixture { color: navy; }\n@\\69mport"theme.css";\n' > "$fixture_root/css/admin.css"
+commit_case escaped-token-css-import >/dev/null
+assert_profile FULL escaped-token-css-import
+
+reset_fixture
 printf '.fixture { background: url(https://example.invalid/a.png); }\n' > "$fixture_root/css/admin.css"
 commit_case remote-css-url >/dev/null
 assert_profile FULL remote-css-url

@@ -97,7 +97,7 @@ while IFS= read -r -d '' status; do
     fallback css_semantic_normalization_failed
   fi
 
-  if grep -Eiq '@import([[:space:]]|;|url|\()' "$normalized_css"; then
+  if grep -Eiq '@import([^[:alnum:]_-]|$)' "$normalized_css"; then
     fallback css_import_present
   fi
 
