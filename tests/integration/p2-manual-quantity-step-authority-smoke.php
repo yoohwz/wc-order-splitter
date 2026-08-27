@@ -295,9 +295,21 @@ try {
 	$reported_record = WCOS_Operation_Journal::get($reported_source, $reported_review['operation_id']);
 	wcos_p2_adapter_assert(WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER === $reported_record['context']['execution_policy'], 'Reported Manual operation did not journal whole-line policy.');
 	$reported_children = wcos_p2_adapter_children($reported->get_id(), $reported_review['operation_id']);
-	$reported_lineage = WCOS_Return_Lineage_Authority::resolve(reset($reported_children));
+	$reported_child = reset($reported_children);
+	$reported_lineage = WCOS_Return_Lineage_Authority::resolve($reported_child);
 	wcos_p2_adapter_assert('manual_quantity' === $reported_lineage['strategy'], 'Whole-line Manual child lost Return strategy lineage.');
 	wcos_p2_adapter_assert(WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER === $reported_lineage['execution_policy'], 'Whole-line Manual child lost Return execution-policy lineage.');
+	$reported_return_plan = WCOS_Return_Plan::build($reported_lineage);
+	wcos_p2_adapter_assert(WCOS_Return_Plan::DESTINATION_FRESH_SOURCE_ITEM === $reported_return_plan['lines'][$reported_ids[0]]['destination'], 'Whole-line Manual Return plan did not require a fresh source item.');
+	wcos_p2_adapter_assert(0 === $reported_return_plan['lines'][$reported_ids[0]]['destination_source_item_id'], 'Whole-line Manual Return plan retained a removed destination source item.');
+	$reported_return_preflight = WCOS_Return_Preflight::report($reported_child, true);
+	wcos_p2_adapter_assert(!empty($reported_return_preflight['supported']), 'Whole-line Manual child failed hardened Return preflight.');
+	wcos_p2_adapter_assert($reported_return_plan['plan_fingerprint'] === $reported_return_preflight['return_plan']['plan_fingerprint'], 'Return preflight changed the whole-line Manual plan authority.');
+	$reported_bulk_plan = WCOS_Bulk_Return_Batch_Plan::build(array($reported_child->get_id()));
+	wcos_p2_adapter_assert(!empty($reported_bulk_plan['all_eligible']) && !empty($reported_bulk_plan['rows'][0]['eligible']), 'Whole-line Manual child failed Bulk Return Review consumption.');
+	$reported_bulk_authority = $reported_bulk_plan['rows'][0]['batch_child_intent']['return_authority'];
+	wcos_p2_adapter_assert('manual_quantity' === $reported_bulk_authority['plan']['strategy'], 'Bulk Return changed whole-line Manual strategy authority.');
+	wcos_p2_adapter_assert(WCOS_Return_Plan::DESTINATION_FRESH_SOURCE_ITEM === $reported_bulk_authority['plan']['lines'][$reported_ids[0]]['destination'], 'Bulk Return lost the fresh-source-item destination for a removed Manual line.');
 
 	$drift_preflight = (new WCOS_Mutation_Gateway())->manual_split_preflight($mixed);
 	$drift_confirmation = WCOS_Split_Confirmation_Store::create(

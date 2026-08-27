@@ -21,12 +21,19 @@ final class WCOS_Return_Plan {
 		$currency = isset($lineage_authority['currency']) ? $lineage_authority['currency'] : '';
 		$execution_policy = isset($lineage_authority['execution_policy']) ? $lineage_authority['execution_policy'] : '';
 		$strategy = isset($lineage_authority['strategy']) ? $lineage_authority['strategy'] : '';
+		$strategy_policy_supported = (
+			'manual_quantity' === $strategy
+			&& in_array($execution_policy, array('partial_lines_only', 'allow_whole_line_transfer'), true)
+		) || (
+			in_array($strategy, array('category', 'stock_status'), true)
+			&& 'allow_whole_line_transfer' === $execution_policy
+		);
 		if (!is_string($operation_id) || sanitize_key($operation_id) !== $operation_id
 			|| !is_string($child_key) || sanitize_key($child_key) !== $child_key
 			|| !is_string($currency) || 1 !== preg_match('/^[A-Z]{3}$/D', $currency)
 			|| !is_string($execution_policy) || !in_array($execution_policy, array('partial_lines_only', 'allow_whole_line_transfer'), true)
 			|| !is_string($strategy) || !in_array($strategy, array('manual_quantity', 'category', 'stock_status'), true)
-			|| ('partial_lines_only' === $execution_policy) !== ('manual_quantity' === $strategy)) {
+			|| !$strategy_policy_supported) {
 			throw new InvalidArgumentException(__('Return plan Split identifiers are not canonical.', 'wc-order-splitter'));
 		}
 

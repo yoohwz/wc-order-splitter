@@ -408,6 +408,21 @@ $tests['return plan canonicalization ignores incidental line ordering'] = static
 	$second_plan = WCOS_Return_Plan::build($second);
 	assert_same(array(11, 22), array_keys($first_plan['lines']));
 	assert_same($first_plan['plan_fingerprint'], $second_plan['plan_fingerprint']);
+
+	$manual_whole_line = $base;
+	$manual_whole_line['strategy'] = 'manual_quantity';
+	$manual_whole_line['lines'] = array(22 => $line_b);
+	$manual_whole_line_plan = WCOS_Return_Plan::build($manual_whole_line);
+	assert_same('manual_quantity', $manual_whole_line_plan['strategy']);
+	assert_same('allow_whole_line_transfer', $manual_whole_line_plan['execution_policy']);
+	assert_same(WCOS_Return_Plan::DESTINATION_FRESH_SOURCE_ITEM, $manual_whole_line_plan['lines'][22]['destination']);
+
+	$unsupported_strategy_policy = $base;
+	$unsupported_strategy_policy['execution_policy'] = 'partial_lines_only';
+	$unsupported_strategy_policy['lines'] = array(11 => $line_a);
+	assert_throws(static function() use ($unsupported_strategy_policy) {
+		WCOS_Return_Plan::build($unsupported_strategy_policy);
+	}, InvalidArgumentException::class);
 };
 
 $tests['return plan binds destination and historical ownership evidence'] = static function() {
