@@ -111,33 +111,60 @@
 }
 
 .wcos-split-table {
+    width: 100%;
+    min-width: 760px;
     border: 0;
+    border-collapse: separate;
+    border-spacing: 0;
     box-shadow: none;
 }
 
 .wcos-split-table th,
 .wcos-split-table td {
+    padding: 14px 16px;
     vertical-align: middle;
 }
 
 .wcos-split-table thead th {
     background: #f6f7f7;
+    font-weight: 600;
+    line-height: 1.3;
+    white-space: nowrap;
 }
 
-.wcos-split-table th:first-child {
-    min-width: 180px;
+.wcos-split-table th:first-child,
+.wcos-split-table td:first-child {
+    width: 30%;
+    min-width: 220px;
+    text-align: left;
 }
 
 .wcos-split-table th:nth-child(2),
 .wcos-split-table td:nth-child(2) {
-    width: 130px;
-    min-width: 130px;
+    width: 210px;
+    min-width: 210px;
+    text-align: left;
+}
+
+.wcos-split-table th:nth-child(n + 3),
+.wcos-split-table td:nth-child(n + 3) {
+    width: 150px;
+    min-width: 150px;
+    text-align: center;
+}
+
+.wcos-split-table tbody th {
+    font-weight: 500;
+    line-height: 1.4;
 }
 
 .wcos-split-table input[type="number"] {
+    display: block;
     width: 108px;
     min-width: 108px;
     max-width: 100%;
+    margin: 0 auto;
+    text-align: left;
 }
 
 .wcos-split-remaining-hint {
@@ -151,9 +178,11 @@
 .wcos-split-step-hint,
 .wcos-split-non-splittable {
     display: block;
-    margin-top: 3px;
+    max-width: 180px;
+    margin-top: 4px;
     color: #646970;
     font-size: 12px;
+    line-height: 1.45;
 }
 
 .wcos-split-non-splittable {
@@ -253,8 +282,30 @@
         text-align: center;
     }
 
-    .wcos-split-table th:first-child {
-        min-width: 140px;
+    .wcos-split-table {
+        min-width: 680px;
+    }
+
+    .wcos-split-table th,
+    .wcos-split-table td {
+        padding: 12px;
+    }
+
+    .wcos-split-table th:first-child,
+    .wcos-split-table td:first-child {
+        min-width: 180px;
+    }
+
+    .wcos-split-table th:nth-child(2),
+    .wcos-split-table td:nth-child(2) {
+        width: 180px;
+        min-width: 180px;
+    }
+
+    .wcos-split-table th:nth-child(n + 3),
+    .wcos-split-table td:nth-child(n + 3) {
+        width: 128px;
+        min-width: 128px;
     }
 
     .wcos-split-method-option {
