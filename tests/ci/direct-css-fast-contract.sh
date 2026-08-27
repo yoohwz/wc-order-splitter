@@ -67,7 +67,7 @@ assert_profile FULL ordinary-css pull_request "$base_sha" "$(git -C "$fixture_ro
 
 reset_fixture
 printf '.fixture { color: navy; }\n' > "$fixture_root/css/admin.css"
-printf '.second { margin: 1px; }\n' > "$fixture_root/css/second.css"
+printf '.second {\n\tmargin: 1px;\n}\n' > "$fixture_root/css/second.css"
 commit_case multiple-css >/dev/null
 assert_profile DIRECT_CSS_FAST multiple-css
 
@@ -139,6 +139,11 @@ commit_case comment-obfuscated-css-import >/dev/null
 assert_profile FULL comment-obfuscated-css-import
 
 reset_fixture
+printf '.fixture { color: navy; }\n/* presentation note */\n' > "$fixture_root/css/admin.css"
+commit_case benign-css-comment >/dev/null
+assert_profile FULL benign-css-comment
+
+reset_fixture
 printf '.fixture { color: navy; }\n@import"theme.css";\n' > "$fixture_root/css/admin.css"
 commit_case quoted-css-import >/dev/null
 assert_profile FULL quoted-css-import
@@ -152,6 +157,41 @@ reset_fixture
 printf '.fixture { color: navy; }\n@\\69mport"theme.css";\n' > "$fixture_root/css/admin.css"
 commit_case escaped-token-css-import >/dev/null
 assert_profile FULL escaped-token-css-import
+
+reset_fixture
+printf '.fixture { color: n\\\navy; }\n' > "$fixture_root/css/admin.css"
+commit_case escaped-lf-continuation >/dev/null
+assert_profile FULL escaped-lf-continuation
+
+reset_fixture
+printf '.fixture { color: n\\\r\navy; }\n' > "$fixture_root/css/admin.css"
+commit_case escaped-crlf-continuation >/dev/null
+assert_profile FULL escaped-crlf-continuation
+
+reset_fixture
+printf '.fixture { color: n\\\ravy; }\n' > "$fixture_root/css/admin.css"
+commit_case escaped-lone-cr-continuation >/dev/null
+assert_profile FULL escaped-lone-cr-continuation
+
+reset_fixture
+printf '.fixture { color: n\\\favy; }\n' > "$fixture_root/css/admin.css"
+commit_case escaped-form-feed-continuation >/dev/null
+assert_profile FULL escaped-form-feed-continuation
+
+reset_fixture
+printf '.fixture { color:\v navy; }\n' > "$fixture_root/css/admin.css"
+commit_case standalone-vertical-tab-control >/dev/null
+assert_profile FULL standalone-vertical-tab-control
+
+reset_fixture
+printf '.fixture { color: navy; }\177\n' > "$fixture_root/css/admin.css"
+commit_case standalone-del-control >/dev/null
+assert_profile FULL standalone-del-control
+
+reset_fixture
+printf '.fixture { color: navy; }\n@media screen { .fixture { color: blue; } }\n' > "$fixture_root/css/admin.css"
+commit_case css-at-rule >/dev/null
+assert_profile FULL css-at-rule
 
 reset_fixture
 printf '.fixture { background: url(https://example.invalid/a.png); }\n' > "$fixture_root/css/admin.css"
@@ -181,12 +221,32 @@ assert_profile FULL escaped-scheme-relative-css-url
 reset_fixture
 printf '.fixture { background: url(/assets/local.png); }\n' > "$fixture_root/css/admin.css"
 commit_case root-relative-local-css-url >/dev/null
-assert_profile DIRECT_CSS_FAST root-relative-local-css-url
+assert_profile FULL root-relative-local-css-url
+
+reset_fixture
+printf '.fixture { background: URL\t(/assets/local.png); }\n' > "$fixture_root/css/admin.css"
+commit_case tab-separated-local-css-url >/dev/null
+assert_profile FULL tab-separated-local-css-url
+
+reset_fixture
+printf '.fixture { background: image-set("https://example.invalid/a.png" 1x); }\n' > "$fixture_root/css/admin.css"
+commit_case network-marker-outside-url >/dev/null
+assert_profile FULL network-marker-outside-url
+
+reset_fixture
+printf '.fixture { background: image-set("//cdn.example.invalid/a.png" 1x); }\n' > "$fixture_root/css/admin.css"
+commit_case scheme-relative-marker-outside-url >/dev/null
+assert_profile FULL scheme-relative-marker-outside-url
 
 reset_fixture
 printf '.fixture { width: expression(alert(1)); }\n' > "$fixture_root/css/admin.css"
 commit_case executable-css >/dev/null
 assert_profile FULL executable-css
+
+reset_fixture
+printf '.fixture { width: EXPRESSION\t(alert(1)); }\n' > "$fixture_root/css/admin.css"
+commit_case tab-separated-executable-css >/dev/null
+assert_profile FULL tab-separated-executable-css
 
 reset_fixture
 printf '.fixture { width: expres\\73ion(alert(1)); }\n' > "$fixture_root/css/admin.css"

@@ -226,6 +226,8 @@ assert_contains "$direct_workflow_contract" '`CODEX_DIRECT_SCOPE_ESCALATION_REQU
 assert_contains "$direct_workflow_contract" 'protected-branch `Required CI` success with artifacts=`0`'
 assert_contains "$direct_workflow_contract" '`DIRECT_CSS_FAST`'
 assert_contains "$direct_workflow_contract" '`FULL`'
+assert_contains "$direct_workflow_contract" 'lexically simple presentation CSS'
+assert_contains "$direct_workflow_contract" 'without attempting CSS comment stripping, escape decoding, or line-continuation normalization'
 assert_contains "$direct_workflow_contract" 'Fresh Independent Codex Review remains mandatory'
 assert_contains "$direct_workflow_contract" '`TECHNICAL_ACCEPTED: <DIRECT_TASK_ID> / TRIVIAL / CODEX_DIRECT / PR #N / exact head <SHA> / direct eligibility confirmed / persisted authority <ID>`'
 assert_contains "$direct_workflow_contract" '`HUMAN_GATE_APPROVED_DIRECT: <DIRECT_TASK_ID> / PR #N / exact head <SHA> / derived from DIRECT_HUMAN_AUTHORIZED <ID>`'
@@ -241,6 +243,8 @@ assert_contains "$ci_contract" 'The sole `TRIVIAL / CODEX_DIRECT` exception omit
 assert_contains "$ci_contract" '`DIRECT_HUMAN_AUTHORIZED`, direct-eligibility-confirmed `TECHNICAL_ACCEPTED`, and `HUMAN_GATE_APPROVED_DIRECT`'
 assert_contains "$ci_contract" '`DIRECT_CSS_FAST`'
 assert_contains "$ci_contract" '`FULL`'
+assert_contains "$ci_contract" 'deliberately conservative lexical safe-subset'
+assert_contains "$ci_contract" 'Richer but legitimate CSS'
 assert_contains "$ci_contract" 'exact protected context name remains `Required CI`'
 
 echo 'workflow-contract-ok'

@@ -28,6 +28,32 @@ fallback() {
   exit 0
 }
 
+fallback_if_fixed_token() {
+  local token=$1
+  local hit_reason=$2
+  local scan_status
+
+  if LC_ALL=C grep -Fq -- "$token" "$resulting_css"; then
+    fallback "$hit_reason"
+  else
+    scan_status=$?
+    [[ "$scan_status" -eq 1 ]] || fallback css_lexical_scan_failed
+  fi
+}
+
+fallback_if_case_insensitive_pattern() {
+  local pattern=$1
+  local hit_reason=$2
+  local scan_status
+
+  if LC_ALL=C grep -Eiq -- "$pattern" "$resulting_css"; then
+    fallback "$hit_reason"
+  else
+    scan_status=$?
+    [[ "$scan_status" -eq 1 ]] || fallback css_lexical_scan_failed
+  fi
+}
+
 if [[ "$event_name" != pull_request ]]; then
   fallback non_pull_request_event
 fi
@@ -47,8 +73,8 @@ git cat-file -e "$base_sha^{commit}" 2>/dev/null || fallback unresolved_base_com
 git cat-file -e "$head_sha^{commit}" 2>/dev/null || fallback unresolved_head_commit
 
 diff_records=$(mktemp)
-normalized_css=$(mktemp)
-trap 'rm -f "$diff_records" "$normalized_css"' EXIT
+resulting_css=$(mktemp)
+trap 'rm -f "$diff_records" "$resulting_css"' EXIT
 
 if ! git diff --name-status --no-renames --no-ext-diff -z "$base_sha" "$head_sha" > "$diff_records"; then
   fallback unresolved_pr_diff
@@ -91,23 +117,26 @@ while IFS= read -r -d '' status; do
     fallback lfs_pointer_css
   fi
 
-  if ! git show "$head_sha:$path" \
-    | perl -0777 -pe 's{/\*.*?\*/}{}gs; s/\\\r?\n//g; s/\\([0-9a-fA-F]{1,6})[ \t\r\n\f]?/chr(hex($1))/ge; s/\\(.)/$1/gs' \
-    > "$normalized_css"; then
-    fallback css_semantic_normalization_failed
+  if ! git show "$head_sha:$path" > "$resulting_css"; then
+    fallback unresolved_css_blob
   fi
 
-  if grep -Eiq '@import([^[:alnum:]_-]|$)' "$normalized_css"; then
-    fallback css_import_present
+  fallback_if_fixed_token '\' css_escape_or_continuation_present
+  fallback_if_fixed_token '/*' css_comment_delimiter_present
+  fallback_if_fixed_token '*/' css_comment_delimiter_present
+
+  if perl -0777 -ne '$unsafe ||= /[\x00-\x08\x0b-\x1f\x7f]/; END { exit($unsafe ? 0 : 1) }' "$resulting_css"; then
+    fallback noncanonical_css_control_present
+  else
+    control_scan_status=$?
+    [[ "$control_scan_status" -eq 1 ]] || fallback css_control_scan_failed
   fi
 
-  if grep -Eiq "url[[:space:]]*\\([[:space:]]*['\\\"]?[[:space:]]*(https?:)?//" "$normalized_css"; then
-    fallback remote_css_url_present
-  fi
-
-  if grep -Eiq 'expression[[:space:]]*\(' "$normalized_css"; then
-    fallback executable_css_expression_present
-  fi
+  fallback_if_fixed_token '@' css_at_rule_marker_present
+  fallback_if_case_insensitive_pattern 'url[[:blank:]]*\(' css_url_function_present
+  fallback_if_fixed_token '://' css_network_marker_present
+  fallback_if_fixed_token '//' css_network_marker_present
+  fallback_if_case_insensitive_pattern 'expression[[:blank:]]*\(' executable_css_expression_present
 done < "$diff_records"
 
 [[ "$changed_count" -gt 0 ]] || fallback malformed_pr_diff
