@@ -14,8 +14,66 @@ permissions:
   contents: read
 
 jobs:
+  classify-pr-scope:
+    name: Classify PR CI profile
+    runs-on: ubuntu-latest
+    outputs:
+      profile: ${{ steps.classify.outputs.profile }}
+      reason: ${{ steps.classify.outputs.reason }}
+    steps:
+      - name: Checkout complete authority graph
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Classify exact base-to-head scope
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != pull_request ]]; then
+            printf 'profile=FULL\nreason=non_pull_request_event\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          test -n "$PR_BASE_SHA"
+          test -n "$PR_HEAD_SHA"
+          base_classifier="$RUNNER_TEMP/classify-pr-scope.sh"
+          if ! git cat-file -e "$PR_BASE_SHA:.github/scripts/classify-pr-scope.sh" 2>/dev/null; then
+            printf 'profile=FULL\nreason=classifier_not_present_in_base\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git show "$PR_BASE_SHA:.github/scripts/classify-pr-scope.sh" > "$base_classifier"
+          chmod +x "$base_classifier"
+          "$base_classifier" "$EVENT_NAME" "$PR_BASE_SHA" "$PR_HEAD_SHA" "$PR_HEAD_REF" "$GITHUB_OUTPUT"
+
+      - name: Log exact classifier authority
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PROFILE: ${{ steps.classify.outputs.profile }}
+          REASON: ${{ steps.classify.outputs.reason }}
+        run: |
+          set -euo pipefail
+          test "$PROFILE" = FULL || test "$PROFILE" = DIRECT_CSS_FAST
+          echo "event_name=$EVENT_NAME"
+          echo "pr_base_sha=$PR_BASE_SHA"
+          echo "pr_head_sha=$PR_HEAD_SHA"
+          echo "ci_profile=$PROFILE"
+          echo "ci_profile_reason=$REASON"
+
   php-syntax:
     name: PHP syntax and unit contracts (PHP ${{ matrix.php }})
+    needs: classify-pr-scope
+    if: needs['classify-pr-scope'].outputs.profile == 'FULL'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -44,6 +102,8 @@ jobs:
 
   foundation-contract:
     name: Architecture and approved production gate contract
+    needs: classify-pr-scope
+    if: needs['classify-pr-scope'].outputs.profile == 'FULL'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -71,6 +131,12 @@ jobs:
       - name: Verify CI and package workflow topology
         shell: bash
         run: tests/ci/workflow-contract.sh
+
+      - name: Run path-aware CI profile regressions
+        shell: bash
+        run: |
+          tests/ci/direct-css-fast-contract.sh
+          tests/ci/required-ci-profile-contract.sh
 
       - name: Reject removed telemetry integration
         shell: bash
@@ -220,6 +286,8 @@ jobs:
 
   package-check:
     name: Package safety contract
+    needs: classify-pr-scope
+    if: needs['classify-pr-scope'].outputs.profile == 'FULL'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -240,7 +308,8 @@ jobs:
         run: tests/ci/distribution-contract.sh
   integration-smoke:
     name: WooCommerce 11.0.1 / ${{ matrix.storage }} storage
-    needs: [php-syntax, foundation-contract]
+    needs: [classify-pr-scope, php-syntax, foundation-contract]
+    if: needs['classify-pr-scope'].outputs.profile == 'FULL'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -781,26 +850,113 @@ jobs:
         if: always()
         run: npx wp-env stop
 
+  direct-css-fast:
+    name: CODEX_DIRECT focused CSS contract
+    needs: classify-pr-scope
+    if: needs['classify-pr-scope'].outputs.profile == 'DIRECT_CSS_FAST'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout complete authority graph
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Record exact PR merge-candidate authority
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$PR_HEAD_SHA"
+          test -n "$PR_BASE_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          echo "pr_head_sha=$PR_HEAD_SHA"
+          echo "pr_base_sha=$PR_BASE_SHA"
+          echo "merge_candidate_sha=$(git rev-parse HEAD)"
+          echo "merge_candidate_tree_sha=$(git rev-parse HEAD^{tree})"
+          echo "merge_candidate_parent_shas=$(git show -s --format=%P HEAD)"
+
+      - name: Revalidate strict direct CSS scope and safety
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          profile=$(.github/scripts/classify-pr-scope.sh pull_request "$PR_BASE_SHA" "$PR_HEAD_SHA" "$PR_HEAD_REF" | sed -n 's/^ci_profile=//p')
+          test "$profile" = DIRECT_CSS_FAST
+          git diff --check "$PR_BASE_SHA" "$PR_HEAD_SHA"
+          tests/ci/direct-css-fast-contract.sh
+          tests/ci/required-ci-profile-contract.sh
+
+      - name: Prove runtime, gate, distribution, workflow, and version authority unchanged
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          for authority_path in \
+            wc-order-splitter.php \
+            readme.txt \
+            inc/domain/class-wcos-feature-gates.php \
+            inc/domain/class-wcos-split-strategy-gates.php \
+            .github/workflows/ci.yml \
+            .github/workflows/main-attestation.yml \
+            .github/scripts/classify-pr-scope.sh \
+            .github/scripts/validate-distribution-contract.sh \
+            docs/codex-direct-workflow.md; do
+            test "$(git rev-parse "$PR_BASE_SHA:$authority_path")" = "$(git rev-parse "$PR_HEAD_SHA:$authority_path")"
+          done
+          tests/ci/workflow-contract.sh
+          echo 'direct-css-fast-artifacts=0'
+
   required:
     name: Required CI
     if: always()
     needs:
+      - classify-pr-scope
       - php-syntax
       - foundation-contract
       - package-check
       - integration-smoke
+      - direct-css-fast
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout complete authority graph
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       - name: Verify all required jobs passed
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CLASSIFIER_RESULT: ${{ needs['classify-pr-scope'].result }}
+          CI_PROFILE: ${{ needs['classify-pr-scope'].outputs.profile }}
+          CI_PROFILE_REASON: ${{ needs['classify-pr-scope'].outputs.reason }}
           PHP_SYNTAX_RESULT: ${{ needs['php-syntax'].result }}
           FOUNDATION_RESULT: ${{ needs['foundation-contract'].result }}
           PACKAGE_RESULT: ${{ needs['package-check'].result }}
           INTEGRATION_RESULT: ${{ needs['integration-smoke'].result }}
+          DIRECT_CSS_FAST_RESULT: ${{ needs['direct-css-fast'].result }}
         run: |
           set -euo pipefail
-          test "$PHP_SYNTAX_RESULT" = success
-          test "$FOUNDATION_RESULT" = success
-          test "$PACKAGE_RESULT" = success
-          test "$INTEGRATION_RESULT" = success
-          echo "required-ci-ok"
+          aggregator="$RUNNER_TEMP/verify-required-ci.sh"
+          if [[ "$EVENT_NAME" == pull_request ]] && git cat-file -e "$PR_BASE_SHA:.github/scripts/verify-required-ci.sh" 2>/dev/null; then
+            git show "$PR_BASE_SHA:.github/scripts/verify-required-ci.sh" > "$aggregator"
+          else
+            cp .github/scripts/verify-required-ci.sh "$aggregator"
+          fi
+          chmod +x "$aggregator"
+          "$aggregator" \
+            "$CLASSIFIER_RESULT" \
+            "$CI_PROFILE" \
+            "$CI_PROFILE_REASON" \
+            "$PHP_SYNTAX_RESULT" \
+            "$FOUNDATION_RESULT" \
+            "$PACKAGE_RESULT" \
+            "$INTEGRATION_RESULT" \
+            "$DIRECT_CSS_FAST_RESULT"
