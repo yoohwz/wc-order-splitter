@@ -7,8 +7,8 @@ defined('ABSPATH') || exit;
  *
  * Safety policy:
  * - shipping, fees, and coupons are never duplicated;
- * - manual quantity Split keeps a positive residual on every affected line;
- * - explicit server-built strategy policy may transfer a whole line;
+ * - legacy Manual authority keeps a positive residual on every affected line;
+ * - current Manual and explicit server-built strategy authority may transfer a whole line;
  * - child orders are persisted as pending review;
  * - historical amounts/tax arrays are allocated at currency precision;
  * - reduced-stock markers are redistributed without touching physical stock;
@@ -300,12 +300,16 @@ final class WCOS_Split_Order_Service {
 		if ($has_strategy) {
 			return array('strategy_authority' => $operation_context['strategy_authority']);
 		}
-		if (WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY !== $execution_policy
-			|| !is_array($operation_context['manual_quantity_authority'])) {
-			throw new InvalidArgumentException(__('Manual quantity authority requires the partial-lines-only Split policy.', 'wc-order-splitter'));
+		if (!is_array($operation_context['manual_quantity_authority'])) {
+			throw new InvalidArgumentException(__('Manual quantity authority is malformed.', 'wc-order-splitter'));
+		}
+		$manual_authority = WCOS_Manual_Split_Quantity_Authority::assert_valid($operation_context['manual_quantity_authority']);
+		$expected_policy = WCOS_Manual_Split_Quantity_Authority::execution_policy($manual_authority);
+		if ($expected_policy !== $execution_policy) {
+			throw new InvalidArgumentException(__('Manual quantity authority does not match the requested Split execution policy.', 'wc-order-splitter'));
 		}
 		return array(
-			'manual_quantity_authority' => WCOS_Manual_Split_Quantity_Authority::assert_valid($operation_context['manual_quantity_authority']),
+			'manual_quantity_authority' => $manual_authority,
 		);
 	}
 

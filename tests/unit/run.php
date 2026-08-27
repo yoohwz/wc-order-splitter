@@ -28,6 +28,7 @@ require_once $root . 'class-wcos-line-identity.php';
 require_once $root . 'class-wcos-mutation-fingerprint.php';
 require_once $root . 'class-wcos-price-precision-scope.php';
 require_once $root . 'class-wcos-mutation-contract.php';
+require_once $root . 'class-wcos-split-execution-policy.php';
 require_once $root . 'class-wcos-split-plan.php';
 require_once $root . 'class-wcos-manual-split-quantity-authority.php';
 require_once $root . 'class-wcos-merge-retirement-policy.php';
@@ -40,10 +41,11 @@ require_once $root . 'class-wcos-return-recovery-state-graph.php';
 
 $tests = array();
 
-function manual_quantity_authority_fixture() {
+function manual_quantity_authority_fixture($policy_version = WCOS_Manual_Split_Quantity_Authority::POLICY_VERSION) {
+	$legacy = WCOS_Manual_Split_Quantity_Authority::LEGACY_POLICY_VERSION === $policy_version;
 	$authority = array(
 		'schema_version' => WCOS_Manual_Split_Quantity_Authority::SCHEMA_VERSION,
-		'policy_version' => WCOS_Manual_Split_Quantity_Authority::POLICY_VERSION,
+		'policy_version' => $policy_version,
 		'precision' => 6,
 		'source_order_id' => 42,
 		'source_signature' => str_repeat('a', 64),
@@ -57,8 +59,8 @@ function manual_quantity_authority_fixture() {
 				'source_quantity_units' => 4000000,
 				'quantity_step' => '1.000000',
 				'step_units' => 1000000,
-				'maximum_quantity' => '3.000000',
-				'maximum_quantity_units' => 3000000,
+				'maximum_quantity' => $legacy ? '3.000000' : '4.000000',
+				'maximum_quantity_units' => $legacy ? 3000000 : 4000000,
 				'can_partially_split' => true,
 			),
 			22 => array(
@@ -70,8 +72,8 @@ function manual_quantity_authority_fixture() {
 				'source_quantity_units' => 3500000,
 				'quantity_step' => '0.250000',
 				'step_units' => 250000,
-				'maximum_quantity' => '3.250000',
-				'maximum_quantity_units' => 3250000,
+				'maximum_quantity' => $legacy ? '3.250000' : '3.500000',
+				'maximum_quantity_units' => $legacy ? 3250000 : 3500000,
 				'can_partially_split' => true,
 			),
 		),
@@ -189,7 +191,7 @@ $tests['manual split authority accepts exact mixed-line step multiples'] = stati
 	assert_same('1.750000', $plan['child-2'][22]);
 };
 
-$tests['manual split authority rejects sub-step and aggregate residual violations'] = static function() {
+$tests['manual split authority rejects sub-step and empty-order aggregate violations'] = static function() {
 	$authority = manual_quantity_authority_fixture();
 	foreach (array('0.000001', '0.1', '0.30') as $quantity) {
 		assert_throws(static function() use ($authority, $quantity) {
@@ -198,9 +200,21 @@ $tests['manual split authority rejects sub-step and aggregate residual violation
 	}
 	assert_throws(static function() use ($authority) {
 		WCOS_Manual_Split_Quantity_Authority::assert_plan(array(
-			'child-1' => array(22 => '1.750000'),
+			'child-1' => array(11 => '4.000000', 22 => '1.750000'),
 			'child-2' => array(22 => '1.750000'),
 		), $authority);
+	}, WCOS_Manual_Split_Quantity_Authority_Exception::class);
+};
+
+$tests['manual split authority versions preserve replay and derive execution policy'] = static function() {
+	$current = manual_quantity_authority_fixture();
+	$legacy = manual_quantity_authority_fixture(WCOS_Manual_Split_Quantity_Authority::LEGACY_POLICY_VERSION);
+	assert_same(WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER, WCOS_Manual_Split_Quantity_Authority::execution_policy($current));
+	assert_same(WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY, WCOS_Manual_Split_Quantity_Authority::execution_policy($legacy));
+	assert_same(true, WCOS_Manual_Split_Quantity_Authority::is_order_splittable($current));
+	WCOS_Manual_Split_Quantity_Authority::assert_plan(array('child-1' => array(11 => '4.000000')), $current);
+	assert_throws(static function() use ($legacy) {
+		WCOS_Manual_Split_Quantity_Authority::assert_plan(array('child-1' => array(11 => '4.000000')), $legacy);
 	}, WCOS_Manual_Split_Quantity_Authority_Exception::class);
 };
 
@@ -394,6 +408,21 @@ $tests['return plan canonicalization ignores incidental line ordering'] = static
 	$second_plan = WCOS_Return_Plan::build($second);
 	assert_same(array(11, 22), array_keys($first_plan['lines']));
 	assert_same($first_plan['plan_fingerprint'], $second_plan['plan_fingerprint']);
+
+	$manual_whole_line = $base;
+	$manual_whole_line['strategy'] = 'manual_quantity';
+	$manual_whole_line['lines'] = array(22 => $line_b);
+	$manual_whole_line_plan = WCOS_Return_Plan::build($manual_whole_line);
+	assert_same('manual_quantity', $manual_whole_line_plan['strategy']);
+	assert_same('allow_whole_line_transfer', $manual_whole_line_plan['execution_policy']);
+	assert_same(WCOS_Return_Plan::DESTINATION_FRESH_SOURCE_ITEM, $manual_whole_line_plan['lines'][22]['destination']);
+
+	$unsupported_strategy_policy = $base;
+	$unsupported_strategy_policy['execution_policy'] = 'partial_lines_only';
+	$unsupported_strategy_policy['lines'] = array(11 => $line_a);
+	assert_throws(static function() use ($unsupported_strategy_policy) {
+		WCOS_Return_Plan::build($unsupported_strategy_policy);
+	}, InvalidArgumentException::class);
 };
 
 $tests['return plan binds destination and historical ownership evidence'] = static function() {

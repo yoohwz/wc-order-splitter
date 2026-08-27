@@ -17,7 +17,7 @@ $order = wc_get_order($order->get_id());
 
 wcos_p2_adapter_assert(
 	WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY === WCOS_Split_Execution_Policy::normalize(''),
-	'Whole-line policy default no longer preserves manual quantity Split semantics.'
+	'Whole-line policy default no longer preserves partial-only compatibility semantics.'
 );
 wcos_p2_adapter_assert(
 	WCOS_Split_Execution_Policy::allows_whole_line_transfer(WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER),

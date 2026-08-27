@@ -214,6 +214,7 @@ final class WCOS_Split_Confirmation_Store {
 				if (!hash_equals($manual_authority['authority_fingerprint'], $journal_authority['authority_fingerprint'])) {
 					throw new WCOS_Split_Confirmation_Exception('quantity_authority_incomplete', __('The durable Split quantity-step authority does not match its confirmation.', 'wc-order-splitter'));
 				}
+				self::assert_manual_execution_policy($journal_context, $journal_authority);
             }
 
             $record['operation_id'] = $operation_id;
@@ -291,11 +292,26 @@ final class WCOS_Split_Confirmation_Store {
 		try {
 			$result['manual_quantity_authority'] = WCOS_Manual_Split_Quantity_Authority::assert_valid($context['manual_quantity_authority']);
 			$result['plan'] = WCOS_Manual_Split_Quantity_Authority::assert_plan($result['plan'], $result['manual_quantity_authority']);
+			self::assert_manual_execution_policy($context, $result['manual_quantity_authority']);
 		} catch (WCOS_Manual_Split_Quantity_Authority_Exception $exception) {
 			throw new WCOS_Split_Confirmation_Exception('quantity_authority_incomplete', $exception->getMessage());
 		}
 		return $result;
-    }
+	}
+
+	private static function assert_manual_execution_policy(array $context, array $manual_authority) {
+		try {
+			$expected = WCOS_Manual_Split_Quantity_Authority::execution_policy($manual_authority);
+			$actual = WCOS_Split_Execution_Policy::normalize(
+				isset($context['execution_policy']) ? $context['execution_policy'] : ''
+			);
+		} catch (Throwable $throwable) {
+			throw new WCOS_Split_Confirmation_Exception('quantity_authority_incomplete', __('The durable Manual Split execution policy is invalid.', 'wc-order-splitter'));
+		}
+		if ($expected !== $actual) {
+			throw new WCOS_Split_Confirmation_Exception('quantity_authority_incomplete', __('The durable Manual Split execution policy does not match its versioned quantity authority.', 'wc-order-splitter'));
+		}
+	}
 
     private static function token_hash($token) {
         return hash_hmac('sha256', (string) $token, wp_salt('auth'));

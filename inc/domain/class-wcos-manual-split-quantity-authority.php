@@ -30,10 +30,19 @@ final class WCOS_Manual_Split_Quantity_Authority_Exception extends RuntimeExcept
  */
 final class WCOS_Manual_Split_Quantity_Authority {
 	const SCHEMA_VERSION = 1;
-	const POLICY_VERSION = 1;
+	const LEGACY_POLICY_VERSION = 1;
+	const POLICY_VERSION = 2;
 	const PRECISION = 6;
 
 	public static function create(WC_Order $source) {
+		return self::create_for_policy($source, self::POLICY_VERSION);
+	}
+
+	private static function create_for_policy(WC_Order $source, $policy_version) {
+		$policy_version = (int) $policy_version;
+		if (!in_array($policy_version, array(self::LEGACY_POLICY_VERSION, self::POLICY_VERSION), true)) {
+			self::reject('authority_policy_unsupported', __('Manual Split quantity authority uses an unsupported policy version.', 'wc-order-splitter'));
+		}
 		$source_id = absint($source->get_id());
 		if (!$source_id) {
 			self::reject('source_unpersisted', __('A persisted source order is required to derive Manual Split quantity authority.', 'wc-order-splitter'));
@@ -88,7 +97,9 @@ final class WCOS_Manual_Split_Quantity_Authority {
 				);
 			}
 
-			$maximum_units = $source_units > $step_units ? $source_units - $step_units : 0;
+			$maximum_units = self::LEGACY_POLICY_VERSION === $policy_version
+				? ($source_units > $step_units ? $source_units - $step_units : 0)
+				: $source_units;
 			$lines[$item_id] = array(
 				'source_order_id' => $source_id,
 				'source_item_id' => $item_id,
@@ -107,7 +118,7 @@ final class WCOS_Manual_Split_Quantity_Authority {
 
 		$authority = array(
 			'schema_version' => self::SCHEMA_VERSION,
-			'policy_version' => self::POLICY_VERSION,
+			'policy_version' => $policy_version,
 			'precision' => self::PRECISION,
 			'source_order_id' => $source_id,
 			'source_signature' => WCOS_Order_Contract_Snapshot::source_signature($source),
@@ -124,8 +135,9 @@ final class WCOS_Manual_Split_Quantity_Authority {
 				self::reject('authority_incomplete', __('Manual Split quantity authority is incomplete.', 'wc-order-splitter'));
 			}
 		}
+		$policy_version = (int) $authority['policy_version'];
 		if (self::SCHEMA_VERSION !== (int) $authority['schema_version']
-			|| self::POLICY_VERSION !== (int) $authority['policy_version']
+			|| !in_array($policy_version, array(self::LEGACY_POLICY_VERSION, self::POLICY_VERSION), true)
 			|| self::PRECISION !== (int) $authority['precision']
 			|| absint($authority['source_order_id']) <= 0
 			|| !self::is_fingerprint($authority['source_signature'])
@@ -154,7 +166,9 @@ final class WCOS_Manual_Split_Quantity_Authority {
 			$source_units = self::positive_integer($line['source_quantity_units']);
 			$step_units = self::positive_integer($line['step_units']);
 			$maximum_units = self::nonnegative_integer($line['maximum_quantity_units']);
-			$expected_maximum = $source_units > $step_units ? $source_units - $step_units : 0;
+			$expected_maximum = self::LEGACY_POLICY_VERSION === $policy_version
+				? ($source_units > $step_units ? $source_units - $step_units : 0)
+				: $source_units;
 			if (absint($line['source_order_id']) !== absint($authority['source_order_id'])
 				|| absint($line['source_item_id']) !== $item_id
 				|| (string) $line['source_quantity'] !== WCOS_Decimal::from_units($source_units, self::PRECISION)
@@ -183,7 +197,7 @@ final class WCOS_Manual_Split_Quantity_Authority {
 
 		$canonical = array(
 			'schema_version' => self::SCHEMA_VERSION,
-			'policy_version' => self::POLICY_VERSION,
+			'policy_version' => $policy_version,
 			'precision' => self::PRECISION,
 			'source_order_id' => absint($authority['source_order_id']),
 			'source_signature' => strtolower((string) $authority['source_signature']),
@@ -198,7 +212,7 @@ final class WCOS_Manual_Split_Quantity_Authority {
 
 	public static function assert_current(WC_Order $source, array $frozen) {
 		$frozen = self::assert_valid($frozen);
-		$current = self::create($source);
+		$current = self::create_for_policy($source, $frozen['policy_version']);
 		if (!hash_equals($frozen['authority_fingerprint'], $current['authority_fingerprint'])) {
 			self::reject('authority_changed', __('The WooCommerce quantity-step authority changed after Review. Review the Manual Split plan again.', 'wc-order-splitter'));
 		}
@@ -207,6 +221,7 @@ final class WCOS_Manual_Split_Quantity_Authority {
 
 	public static function assert_plan(array $plan, array $authority) {
 		$authority = self::assert_valid($authority);
+		$whole_line_policy = self::POLICY_VERSION === (int) $authority['policy_version'];
 		$canonical = WCOS_Split_Plan::canonicalize_request($plan);
 		$totals = array();
 		foreach ($canonical as $items) {
@@ -227,16 +242,56 @@ final class WCOS_Manual_Split_Quantity_Authority {
 			}
 		}
 
-		foreach ($totals as $item_id => $moved_units) {
-			$line = $authority['lines'][$item_id];
+		$source_has_residual = false;
+		foreach ($authority['lines'] as $item_id => $line) {
+			$moved_units = isset($totals[$item_id]) ? $totals[$item_id] : 0;
 			$residual_units = (int) $line['source_quantity_units'] - $moved_units;
 			if ($moved_units > (int) $line['maximum_quantity_units']
-				|| $residual_units <= 0
+				|| $residual_units < 0
+				|| (!$whole_line_policy && $moved_units > 0 && $residual_units <= 0)
 				|| 0 !== ($residual_units % (int) $line['step_units'])) {
-				self::reject('plan_residual_invalid', __('The Manual Split plan must retain a positive, step-aligned source quantity.', 'wc-order-splitter'));
+				self::reject('plan_residual_invalid', __('The Manual Split plan exceeds reviewed quantity authority or leaves an invalid source residual.', 'wc-order-splitter'));
+			}
+			if ($residual_units > 0) {
+				$source_has_residual = true;
 			}
 		}
+		if ($whole_line_policy && !$source_has_residual) {
+			self::reject('plan_source_order_empty', __('The Manual Split plan must leave positive product quantity on the source order.', 'wc-order-splitter'));
+		}
 		return $canonical;
+	}
+
+	public static function execution_policy(array $authority) {
+		$authority = self::assert_valid($authority);
+		return self::POLICY_VERSION === (int) $authority['policy_version']
+			? WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER
+			: WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY;
+	}
+
+	public static function is_order_splittable(array $authority) {
+		$authority = self::assert_valid($authority);
+		if (self::LEGACY_POLICY_VERSION === (int) $authority['policy_version']) {
+			foreach ($authority['lines'] as $line) {
+				if (!empty($line['can_partially_split'])) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		$step_count = 0;
+		foreach ($authority['lines'] as $line) {
+			$line_steps = intdiv((int) $line['source_quantity_units'], (int) $line['step_units']);
+			if ($line_steps > PHP_INT_MAX - $step_count) {
+				self::reject('authority_step_count_overflow', __('Manual Split quantity authority exceeds the supported step-count range.', 'wc-order-splitter'));
+			}
+			$step_count += $line_steps;
+			if ($step_count >= 2) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public static function display_decimal($value) {

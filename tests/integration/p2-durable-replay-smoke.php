@@ -37,12 +37,30 @@ try {
     $replay_nonce = wp_create_nonce('wcos_split_order_' . $replay_source_id);
     $replay_plan = array('child-1' => array($replay_item_id => '1.000000'));
 
-    $review = $replay_controller->review_request(array(
+	$review = $replay_controller->review_request(array(
         'order_id' => $replay_source_id,
         'nonce' => $replay_nonce,
         'plan' => wp_json_encode(array('child-1' => array((string) $replay_item_id => '1.000000'))),
-    ));
-    $replay_operation = $review['operation_id'];
+	));
+	$replay_operation = $review['operation_id'];
+	$legacy_manual_authority = $review['preflight']['manual_quantity_authority'];
+	$legacy_manual_authority['policy_version'] = WCOS_Manual_Split_Quantity_Authority::LEGACY_POLICY_VERSION;
+	foreach ($legacy_manual_authority['lines'] as &$legacy_line) {
+		$legacy_maximum_units = $legacy_line['source_quantity_units'] > $legacy_line['step_units']
+			? $legacy_line['source_quantity_units'] - $legacy_line['step_units']
+			: 0;
+		$legacy_line['maximum_quantity_units'] = $legacy_maximum_units;
+		$legacy_line['maximum_quantity'] = WCOS_Decimal::from_units($legacy_maximum_units, WCOS_Manual_Split_Quantity_Authority::PRECISION);
+		$legacy_line['can_partially_split'] = $legacy_maximum_units >= $legacy_line['step_units'];
+	}
+	unset($legacy_line, $legacy_manual_authority['authority_fingerprint']);
+	$legacy_manual_authority['authority_fingerprint'] = WCOS_Mutation_Fingerprint::create(
+		'manual_split_quantity_authority_v1',
+		$replay_source_id,
+		$legacy_manual_authority
+	);
+	$legacy_manual_authority = WCOS_Manual_Split_Quantity_Authority::assert_valid($legacy_manual_authority);
+	wcos_p2_adapter_assert(WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY === WCOS_Manual_Split_Quantity_Authority::execution_policy($legacy_manual_authority), 'Legacy Manual authority no longer derives partial-only replay policy.');
 
     $fail_once = true;
     $crash = static function($stage) use (&$fail_once) {
@@ -60,7 +78,7 @@ try {
             $replay_operation,
 			$review['preflight']['price_precision'],
 			WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY,
-			array('manual_quantity_authority' => $review['preflight']['manual_quantity_authority'])
+			array('manual_quantity_authority' => $legacy_manual_authority)
         );
     } catch (RuntimeException $exception) {
         $crashed = false !== strpos($exception->getMessage(), 'Injected durable replay crash.');
@@ -86,7 +104,8 @@ try {
     wcos_p2_adapter_assert('journal' === $durable['replay_authority'], 'Expired confirmation did not fall back to durable journal replay authority.');
     wcos_p2_adapter_assert($replay_operation === $durable['operation_id'], 'Durable replay returned the wrong operation ID.');
     wcos_p2_adapter_assert($journal['context']['plan'] === $durable['plan'], 'Durable replay did not return the journal plan exactly.');
-    wcos_p2_adapter_assert((int) $journal['context']['price_precision'] === (int) $durable['price_precision'], 'Durable replay did not return journal price precision.');
+	wcos_p2_adapter_assert((int) $journal['context']['price_precision'] === (int) $durable['price_precision'], 'Durable replay did not return journal price precision.');
+	wcos_p2_adapter_assert(WCOS_Manual_Split_Quantity_Authority::LEGACY_POLICY_VERSION === $durable['manual_quantity_authority']['policy_version'], 'Durable replay silently reinterpreted legacy Manual quantity policy.');
 
     $hard_off = wcos_p2_replay_expect_transport(
         'workflow_disabled',
