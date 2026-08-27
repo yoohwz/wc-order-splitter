@@ -42,8 +42,18 @@
 .wcos-duplicate-confirm-label {
     display: flex;
     align-items: flex-start;
-    gap: 8px;
+    gap: 10px;
     font-weight: 600;
+    line-height: 1.45;
+}
+
+.wcos-duplicate-confirm-label input[type="checkbox"] {
+    flex: 0 0 auto;
+    margin: 2px 0 0;
+}
+
+.wcos-duplicate-confirm-label span {
+    min-width: 0;
 }
 
 .wcos-duplicate-status,
