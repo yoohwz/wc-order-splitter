@@ -2,7 +2,13 @@
 
 ## Verification boundaries
 
-Normal implementation work uses the active WordPress Local plugin worktree and runs focused PHP, unit, integration, or browser evidence appropriate to the changed scope. The complete legacy, HPOS-only, and HPOS compatibility/sync matrix runs on pull requests targeting `main`; its `Required CI` job is the mechanical merge-authority status.
+Normal implementation work uses the active WordPress Local plugin worktree and runs focused PHP, unit, integration, or browser evidence appropriate to the changed scope. Pull requests targeting `main` first run the repository-owned exact-diff classifier and receive one of two profiles: `DIRECT_CSS_FAST` or `FULL`. The exact protected context name remains `Required CI` and is the mechanical merge-authority status for both profiles.
+
+`DIRECT_CSS_FAST` is available only for a non-empty `pull_request` diff that modifies existing Git-tracked regular-text mode-`100644` `*.css` files beneath `css/` and nothing else. Classification executes the classifier object from the exact PR base, so a PR cannot alter the classifier and use that altered copy to select its own fast path; the bootstrap case where the base has no classifier selects `FULL`. Every path must have exact status `M`; additions, deletions, renames, copies, type/mode changes, symlinks, binary/LFS replacements, malformed authority, and non-PR events select `FULL`. Added CSS `@import`, remote HTTP(S) `url(...)`, or legacy `expression(...)` constructs also select `FULL`. Branch names, labels, titles, bodies, task IDs, and actor claims are never classifier inputs.
+
+The focused profile revalidates exact base/head and merge-candidate/tree authority, reruns the strict classifier, runs `git diff --check`, deterministic classifier/aggregator regressions, workflow topology assertions, and proves runtime, gate, distribution, workflow, version, and direct-governance objects unchanged. It creates and uploads no artifact. Hands-on visual evidence and fresh Independent Codex Review remain mandatory outside CI.
+
+`FULL` remains the fail-closed default and retains PHP 7.4/8.1/8.3 syntax/unit contracts, architecture and production-gate contracts, package/distribution safety, and WooCommerce legacy/HPOS/HPOS-sync integration evidence. CI/governance/runtime/test/release/package changes—including changes to the classifier or workflow itself—therefore run the full matrix. `Required CI` succeeds only for the exact expected success/skipped combination for the machine-selected profile; a missing classifier output, failed/cancelled job, or impossible combination fails closed.
 
 `push/main` runs only the lightweight `Main attestation`. It records the exact commit and tree SHA, verifies the code-owned production gates and gateway smoke contract, runs representative PHP/unit checks, and validates the distributable tree. It does not create or upload an installable archive.
 
