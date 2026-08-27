@@ -356,7 +356,7 @@ jobs:
             ) as $merge_action) {
               if (false === has_action("wp_ajax_" . $merge_action)) { exit(1); }
             }
-            $has_controller_method = static function($hook, $method) {
+            $has_controller_method = static function($hook, $class, $method) {
               global $wp_filter;
               if (empty($wp_filter[$hook]) || empty($wp_filter[$hook]->callbacks)) { return false; }
               foreach ($wp_filter[$hook]->callbacks as $callbacks) {
@@ -364,7 +364,7 @@ jobs:
                   $function = isset($callback["function"]) ? $callback["function"] : null;
                   if (is_array($function)
                     && isset($function[0], $function[1])
-                    && $function[0] instanceof WCOS_Merge_Admin_Controller
+                    && $function[0] instanceof $class
                     && $method === $function[1]) { return true; }
                 }
               }
@@ -375,12 +375,14 @@ jobs:
               "wp_ajax_" . WCOS_Merge_Admin_Controller::REVIEW_ACTION => "ajax_review",
               "wp_ajax_" . WCOS_Merge_Admin_Controller::CONFIRM_ACTION => "ajax_confirm",
               "wp_ajax_" . WCOS_Merge_Admin_Controller::EXECUTE_ACTION => "ajax_execute",
-              "woocommerce_order_item_add_action_buttons" => "render_launcher",
               "admin_footer" => "render_dialog",
               "admin_enqueue_scripts" => "enqueue_assets"
             ) as $hook => $method) {
-              if (!$has_controller_method($hook, $method)) { exit(1); }
+              if (!$has_controller_method($hook, "WCOS_Merge_Admin_Controller", $method)) { exit(1); }
             }
+            if (!$has_controller_method("woocommerce_order_actions_end", "WCOS_Order_Actions_Launcher_Row", "render_launcher_row")) { exit(1); }
+            if ($has_controller_method("woocommerce_order_item_add_action_buttons", "WCOS_Duplicate_Admin_Controller", "render_launcher")) { exit(1); }
+            if ($has_controller_method("woocommerce_order_item_add_action_buttons", "WCOS_Merge_Admin_Controller", "render_launcher")) { exit(1); }
             foreach (array(
               "WC_ORDER_SPLITTER_MUTATIONS_ENABLED",
               "WC_ORDER_SPLITTER_SPLIT_ENABLED",
@@ -469,6 +471,9 @@ jobs:
 
       - name: Verify enabled Merge UI launcher foundation
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-ui-foundation-smoke.php
+
+      - name: Verify shared Duplicate and Merge Order actions launcher row
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/order-actions-launcher-row-smoke.php
 
       - name: Verify hardened Merge pre-retirement crash contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-service-adapter-smoke.php crash_pre

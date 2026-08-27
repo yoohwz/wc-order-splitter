@@ -37,7 +37,6 @@ final class WCOS_Duplicate_Admin_Controller {
     public function __construct() {
         add_action('wp_ajax_' . self::REVIEW_ACTION, array($this, 'ajax_review'));
         add_action('wp_ajax_' . self::EXECUTE_ACTION, array($this, 'ajax_execute'));
-        add_action('woocommerce_order_item_add_action_buttons', array($this, 'render_launcher'), 21, 1);
         add_action('admin_footer', array($this, 'render_dialog'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_assets'));
     }
@@ -212,7 +211,7 @@ final class WCOS_Duplicate_Admin_Controller {
         $disabled = !$this->current_surface_supported;
 
         echo '<button type="button" class="button wcos-duplicate-launcher" aria-haspopup="dialog"' . ($disabled ? '' : ' aria-controls="' . esc_attr($dialog_id) . '"') . ' aria-describedby="' . esc_attr($description_id) . '"' . disabled($disabled, true, false) . '>';
-        echo esc_html__('Duplicate order', 'wc-order-splitter');
+        echo esc_html__('Duplicate', 'wc-order-splitter');
         echo '</button>';
         echo '<span id="' . esc_attr($description_id) . '" class="description wcos-duplicate-launcher-description">';
         echo esc_html($disabled ? $preflight['message'] : __('Review the Duplicate safety policy before creating a new pending order.', 'wc-order-splitter'));

@@ -109,22 +109,32 @@ class WC_Order_Splitter_Script {
 
 		include_once $root . 'backend/class-wcos-duplicate-confirmation-store.php';
 		include_once $root . 'backend/class-wcos-duplicate-admin-controller.php';
-		new WCOS_Duplicate_Admin_Controller();
+		$duplicate_admin_controller = new WCOS_Duplicate_Admin_Controller();
 
 		include_once $root . 'backend/class-wcos-merge-review-store.php';
 		include_once $root . 'backend/class-wcos-merge-confirmation-store.php';
-			include_once $root . 'backend/class-wcos-merge-admin-controller.php';
-			WCOS_Merge_Admin_Controller::bootstrap();
+		include_once $root . 'backend/class-wcos-merge-admin-controller.php';
+		$merge_admin_controller = WCOS_Merge_Admin_Controller::bootstrap();
 
-			include_once $root . 'backend/class-wcos-return-review-store.php';
-			include_once $root . 'backend/class-wcos-return-confirmation-store.php';
-			include_once $root . 'backend/class-wcos-return-admin-controller.php';
-			WCOS_Return_Admin_Controller::bootstrap();
+		include_once $root . 'backend/class-wcos-order-actions-launcher-row.php';
+		$order_actions_launchers = array(
+			array($duplicate_admin_controller, 'render_launcher'),
+		);
+		if ($merge_admin_controller instanceof WCOS_Merge_Admin_Controller) {
+			$order_actions_launchers[] = array($merge_admin_controller, 'render_launcher');
+		}
+		$order_actions_launcher_row = new WCOS_Order_Actions_Launcher_Row($order_actions_launchers);
+		$order_actions_launcher_row->register_hooks();
 
-			include_once $root . 'backend/class-wcos-bulk-return-review-store.php';
-			include_once $root . 'backend/class-wcos-bulk-return-confirmation-store.php';
-			include_once $root . 'backend/class-wcos-bulk-return-admin-controller.php';
-			WCOS_Bulk_Return_Admin_Controller::bootstrap();
+		include_once $root . 'backend/class-wcos-return-review-store.php';
+		include_once $root . 'backend/class-wcos-return-confirmation-store.php';
+		include_once $root . 'backend/class-wcos-return-admin-controller.php';
+		WCOS_Return_Admin_Controller::bootstrap();
+
+		include_once $root . 'backend/class-wcos-bulk-return-review-store.php';
+		include_once $root . 'backend/class-wcos-bulk-return-confirmation-store.php';
+		include_once $root . 'backend/class-wcos-bulk-return-admin-controller.php';
+		WCOS_Bulk_Return_Admin_Controller::bootstrap();
 
 		include_once $root . 'backend/settings.php';
 		include_once $root . 'backend/orders.php';
