@@ -297,6 +297,13 @@
         recordSuccessfulOperation(action, payload.data.operation_id);
     }
 
+    if (window.wcosPremiumUpsellTestHooks && typeof window.wcosPremiumUpsellTestHooks === 'object') {
+        window.wcosPremiumUpsellTestHooks.readState = readState;
+        window.wcosPremiumUpsellTestHooks.recordSuccessfulOperation = recordSuccessfulOperation;
+        window.wcosPremiumUpsellTestHooks.nextPendingAction = nextPendingAction;
+        window.wcosPremiumUpsellTestHooks.observePayload = observePayload;
+    }
+
     function installFetchObserver() {
         if (typeof window.fetch !== 'function' || window.fetch.__wcosPremiumUpsellObserved) {
             return;
