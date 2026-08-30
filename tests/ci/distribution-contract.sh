@@ -46,6 +46,12 @@ expect_failure 'required hardened runtime path is missing: inc/domain/class-wcos
   "$missing_source/.github/scripts/validate-distribution-contract.sh" \
   "$missing_source" "$fixture_root/missing-required/distribution/wc-order-splitter"
 
+missing_upsell_source=$(make_source_fixture missing-upsell-runtime)
+rm "$missing_upsell_source/js/post-action-tip.js"
+expect_failure 'required hardened runtime path is missing: js/post-action-tip.js' \
+  "$missing_upsell_source/.github/scripts/validate-distribution-contract.sh" \
+  "$missing_upsell_source" "$fixture_root/missing-upsell-runtime/distribution/wc-order-splitter"
+
 symlink_source=$(make_source_fixture symlink)
 ln -s readme.txt "$symlink_source/unsafe-link"
 expect_failure 'symbolic links entered the distribution tree' \
