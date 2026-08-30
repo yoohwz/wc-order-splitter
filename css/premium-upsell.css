@@ -89,6 +89,17 @@
     white-space: nowrap;
 }
 
+.wcos-split-upgrade-hint-dismiss {
+    margin-left: 10px;
+    color: #646970;
+    white-space: nowrap;
+}
+
+.wcos-split-upgrade-hint-dismiss:hover,
+.wcos-split-upgrade-hint-dismiss:focus {
+    color: var(--wp-admin-theme-color, #2271b1);
+}
+
 .wcos-post-action-tip {
     position: relative;
     margin: 12px 0;

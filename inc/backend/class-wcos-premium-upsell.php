@@ -108,7 +108,7 @@ final class WCOS_Premium_Upsell {
 				'productUrl' => self::product_url(),
 				'ctaLabel' => __('Explore Advanced Order Actions', 'wc-order-splitter'),
 				'dismissLabel' => __('Dismiss', 'wc-order-splitter'),
-				'splitHint' => __('Need more routing options? Advanced Order Actions adds product group, tag, attribute, and conditional vendor or bundle routing.', 'wc-order-splitter'),
+				'splitHint' => __('Need more routing options? Advanced Order Actions adds product group, tag, attribute, and conditional routing. Vendor and bundle routing require compatible marketplace or bundle integrations.', 'wc-order-splitter'),
 				'splitHintCta' => __('See advanced split methods', 'wc-order-splitter'),
 				'thresholds' => array(
 					'split' => 3,

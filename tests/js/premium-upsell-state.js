@@ -92,6 +92,11 @@ function assert(condition, message) {
 async function run() {
     assert(typeof hooks.observePayload === 'function', 'observePayload test hook missing');
     assert(typeof hooks.readState === 'function', 'readState test hook missing');
+    assert(typeof hooks.dismissSplitHint === 'function', 'dismissSplitHint test hook missing');
+
+    assert(hooks.readState().hints.splitRoutingDismissed === false, 'Split hint must be visible until it is dismissed');
+    hooks.dismissSplitHint();
+    assert(hooks.readState().hints.splitRoutingDismissed === true, 'Split hint dismissal must persist in local state');
 
     hooks.observePayload('split', { success: true, data: { operation_id: 'split-1' } });
     hooks.observePayload('split', { success: true, data: { operation_id: 'split-2' } });

@@ -17,7 +17,8 @@
             seenOperations: [],
             pending: {},
             shown: {},
-            dismissed: {}
+            dismissed: {},
+            hints: { splitRoutingDismissed: false }
         };
     }
 
@@ -70,6 +71,8 @@
                 })
                 .slice(-seenLimit);
         }
+
+        normalized.hints.splitRoutingDismissed = !!(state.hints && state.hints.splitRoutingDismissed);
 
         return normalized;
     }
@@ -182,6 +185,12 @@
         saveState(markCampaignShown(state, action));
     }
 
+    function dismissSplitHint() {
+        var state = readState();
+        state.hints.splitRoutingDismissed = true;
+        saveState(state);
+    }
+
     function renderPendingTip() {
         if (!config.productUrl || !config.actionTips || $('.wcos-post-action-tip').length) {
             return;
@@ -235,6 +244,10 @@
             return;
         }
 
+        if (readState().hints.splitRoutingDismissed) {
+            return;
+        }
+
         var $launcherArea = $('.wcos-split-launcher-description, .wcos-strategy-launcher-description').last();
         if (!$launcherArea.length) {
             $launcherArea = $('.wcos-split-launcher, .wcos-strategy-launcher').last();
@@ -250,6 +263,15 @@
             target: '_blank',
             rel: 'noopener noreferrer',
             text: config.splitHintCta || 'See advanced split methods'
+        }).appendTo($hint);
+
+        $('<button>', {
+            type: 'button',
+            'class': 'button-link wcos-split-upgrade-hint-dismiss',
+            text: config.dismissLabel || 'Dismiss'
+        }).on('click', function() {
+            dismissSplitHint();
+            $hint.remove();
         }).appendTo($hint);
 
         $launcherArea.after($hint);
@@ -310,6 +332,7 @@
         window.wcosPremiumUpsellTestHooks.nextPendingAction = nextPendingAction;
         window.wcosPremiumUpsellTestHooks.markCampaignShown = markCampaignShown;
         window.wcosPremiumUpsellTestHooks.dismissCampaign = dismissCampaign;
+        window.wcosPremiumUpsellTestHooks.dismissSplitHint = dismissSplitHint;
         window.wcosPremiumUpsellTestHooks.observePayload = observePayload;
     }
 

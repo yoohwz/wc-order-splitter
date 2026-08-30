@@ -50,6 +50,7 @@ wcos_upsell_assert(false !== strpos($boundary, "'wcos_split_execute' => 'split'"
 wcos_upsell_assert(false !== strpos($boundary, "'wcos_split_strategy_execute' => 'split'"), 'Strategy Split execute mapping missing.');
 wcos_upsell_assert(false !== strpos($boundary, "'wcos_duplicate_execute' => 'duplicate'"), 'Duplicate execute mapping missing.');
 wcos_upsell_assert(false !== strpos($boundary, "'wcos_merge_execute' => 'merge'"), 'Merge execute mapping missing.');
+wcos_upsell_assert(false !== strpos($boundary, 'Vendor and bundle routing require compatible marketplace or bundle integrations.'), 'Contextual vendor and bundle claim must state its integration dependency.');
 
 wcos_upsell_assert(false !== strpos($settings, "\$sub_sub_tabs['premium'] = esc_html__('Upgrade'"), 'Historical premium section key must render Upgrade.');
 wcos_upsell_assert(false !== strpos($settings, 'standalone premium replacement for Order Splitter'), 'Standalone replacement positioning missing.');
@@ -64,6 +65,9 @@ wcos_upsell_assert(false !== strpos($bootstrap, 'WCOS_Premium_Upsell::bootstrap(
 wcos_upsell_assert(false !== strpos($client, 'payload.success !== true'), 'Success-only guard missing.');
 wcos_upsell_assert(false !== strpos($client, 'seenOperations'), 'Operation replay deduplication state missing.');
 wcos_upsell_assert(false !== strpos($client, 'renderPendingTip();'), 'Later-page pending promotion render missing.');
+wcos_upsell_assert(false !== strpos($client, 'hints: { splitRoutingDismissed: false }'), 'Split hint must have distinct browser-local dismissal state.');
+wcos_upsell_assert(false !== strpos($client, "'class': 'button-link wcos-split-upgrade-hint-dismiss'"), 'Split hint dismiss control missing.');
+wcos_upsell_assert(false !== strpos($client, 'dismissSplitHint();'), 'Split hint dismiss control must persist dismissal.');
 wcos_upsell_assert(false !== strpos($client, 'response.clone().json()'), 'Fetch observation must clone rather than consume the mutation response.');
 wcos_upsell_assert(false === strpos($client, 'navigator.sendBeacon'), 'Telemetry via sendBeacon is forbidden.');
 wcos_upsell_assert(false === strpos($client, 'XMLHttpRequest'), 'Upsell client must not create XHR telemetry.');
