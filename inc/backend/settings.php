@@ -5,10 +5,10 @@ defined('ABSPATH') || exit;
 class WooCommerce_Order_Splitter_Settings {
 
 	public function __construct() {
-			add_filter('woocommerce_settings_tabs_array', array($this, 'add_orders_settings_tab'), 30);
-			add_action('woocommerce_settings_tabs_orders', array($this, 'order_splitter_settings_tab'), 9);
-			add_action('woocommerce_update_options_orders', array($this, 'update_order_splitter_settings'));
-			add_action('admin_init', array($this, 'handle_settings_actions'));
+		add_filter('woocommerce_settings_tabs_array', array($this, 'add_orders_settings_tab'), 30);
+		add_action('woocommerce_settings_tabs_orders', array($this, 'order_splitter_settings_tab'), 9);
+		add_action('woocommerce_update_options_orders', array($this, 'update_order_splitter_settings'));
+		add_action('admin_init', array($this, 'handle_settings_actions'));
 
 		if (class_exists('WC_Order_Cancellation_Return_Premium_Settings')) {
 			$wc_order_cancel_return_settings = new WC_Order_Cancellation_Return_Premium_Settings();
@@ -70,10 +70,11 @@ class WooCommerce_Order_Splitter_Settings {
 			'automation_splitter' => esc_html__('Automation', 'wc-order-splitter'),
 		);
 
-		$sub_sub_tabs['premium'] = esc_html__('Premium', 'wc-order-splitter');
+		// Keep the historical section key for URL/backward compatibility.
+		$sub_sub_tabs['premium'] = esc_html__('Upgrade', 'wc-order-splitter');
 
 		// Free cancel/return plugin: add a single tab (optional)
-		if ( is_plugin_active('wc-order-cancellation-return/wc-order-cancellation-return.php') ) {
+		if (is_plugin_active('wc-order-cancellation-return/wc-order-cancellation-return.php')) {
 			$sub_sub_tabs['cancel_return'] = esc_html__('Cancel & Return', 'wc-order-splitter');
 		}
 
@@ -117,12 +118,12 @@ class WooCommerce_Order_Splitter_Settings {
 		woocommerce_admin_fields($this->get_split_order_settings());
 		woocommerce_admin_fields($this->get_advanced_settings());
 		$this->render_upgrade_card(
-			esc_html__('Need more order controls?', 'wc-order-splitter'),
-			esc_html__('Premium adds status controls after splitting, duplicate/merge restrictions, editable order status expansion, product groups, tags, attributes, bundles, vendors, and automated split rules.', 'wc-order-splitter'),
+			esc_html__('When manual order actions become repetitive', 'wc-order-splitter'),
+			esc_html__('Order Splitter keeps supported order operations on demand. Advanced Order Actions adds previews, configurable and bulk operations, automation, and operational visibility for stores handling these tasks repeatedly.', 'wc-order-splitter'),
 			array(
-				esc_html__('Set original and split order statuses after splitting.', 'wc-order-splitter'),
-				esc_html__('Control which orders can be duplicated or merged.', 'wc-order-splitter'),
-				esc_html__('Split by product group, tag, attribute, bundle, or vendor.', 'wc-order-splitter'),
+				esc_html__('Preview Split and Merge results before changing orders.', 'wc-order-splitter'),
+				esc_html__('Configure Duplicate behavior and process recoverable Bulk Duplicate batches.', 'wc-order-splitter'),
+				esc_html__('Track operations with Action Logs, automation queues, retry visibility, and guarded rollback.', 'wc-order-splitter'),
 			)
 		);
 	}
@@ -130,12 +131,12 @@ class WooCommerce_Order_Splitter_Settings {
 	public function output_automation_splitter_settings() {
 		woocommerce_admin_fields($this->get_automation_splitter_settings());
 		$this->render_upgrade_card(
-			esc_html__('Automate repeated split workflows', 'wc-order-splitter'),
-			esc_html__('Premium can schedule split actions after an order is created and apply rules based on quantity, product group, category, stock status, tag, attribute, bundle, or vendor.', 'wc-order-splitter'),
+			esc_html__('Automate repetitive order operations', 'wc-order-splitter'),
+			esc_html__('Advanced Order Actions can use prioritized rules to split, merge, or skip new orders, then track scheduled work through an automation queue.', 'wc-order-splitter'),
 			array(
-				esc_html__('Run split rules automatically after checkout.', 'wc-order-splitter'),
-				esc_html__('Add a delay timer for order processing workflows.', 'wc-order-splitter'),
-				esc_html__('Use WP-Cron based automation for repeatable operations.', 'wc-order-splitter'),
+				esc_html__('Build rules with ALL or ANY conditions.', 'wc-order-splitter'),
+				esc_html__('Match customer role, shipping zone, payment method, vendor, product meta, and compatible-integration signals.', 'wc-order-splitter'),
+				esc_html__('Inspect pending, failed, and skipped jobs, see reasons, and retry eligible failures.', 'wc-order-splitter'),
 			)
 		);
 	}
@@ -143,12 +144,12 @@ class WooCommerce_Order_Splitter_Settings {
 	public function output_notifications_settings() {
 		woocommerce_admin_fields($this->get_notifications_settings());
 		$this->render_upgrade_card(
-			esc_html__('Need split-order email controls?', 'wc-order-splitter'),
-			esc_html__('Premium adds customer and administrator email controls so split orders can be communicated without duplicate or confusing order emails.', 'wc-order-splitter'),
+			esc_html__('Control split-order communication before customers see it', 'wc-order-splitter'),
+			esc_html__('Advanced Order Actions adds customer and administrator split-order controls with configurable sending modes and live WooCommerce email previews.', 'wc-order-splitter'),
 			array(
-				esc_html__('Choose whether customers receive the original order email, split order emails, or both.', 'wc-order-splitter'),
-				esc_html__('Customize split-order email subject, heading, and message.', 'wc-order-splitter'),
-				esc_html__('Enable email rules per split method.', 'wc-order-splitter'),
+				esc_html__('Choose which original or split orders generate customer email.', 'wc-order-splitter'),
+				esc_html__('Customize subject, heading, and message per split method.', 'wc-order-splitter'),
+				esc_html__('Preview processing, on-hold, and completed customer emails before using the configuration.', 'wc-order-splitter'),
 			)
 		);
 	}
@@ -190,10 +191,19 @@ class WooCommerce_Order_Splitter_Settings {
 	}
 
 	private function get_premium_url() {
+		if (class_exists('WCOS_Premium_Upsell')) {
+			return WCOS_Premium_Upsell::product_url();
+		}
+
 		return 'https://yoohw.com/product/woocommerce-advanced-order-actions/';
 	}
 
 	private function render_upgrade_card($title, $description, $features = array()) {
+		if (class_exists('WCOS_Premium_Upsell')) {
+			WCOS_Premium_Upsell::render_settings_card($title, $description, $features);
+			return;
+		}
+
 		if (!current_user_can('manage_woocommerce')) {
 			return;
 		}
@@ -211,7 +221,7 @@ class WooCommerce_Order_Splitter_Settings {
 				<?php endif; ?>
 			</div>
 			<div class="wcos-card-actions">
-				<a class="button button-primary" href="<?php echo esc_url($this->get_premium_url()); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e('Compare Premium', 'wc-order-splitter'); ?></a>
+				<a class="button button-primary" href="<?php echo esc_url($this->get_premium_url()); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e('Explore Advanced Order Actions', 'wc-order-splitter'); ?></a>
 			</div>
 		</div>
 		<?php
@@ -262,44 +272,54 @@ class WooCommerce_Order_Splitter_Settings {
 	public function output_premium_settings() {
 		$features = array(
 			array(
-				'feature' => esc_html__('Manual split by product and quantity', 'wc-order-splitter'),
-				'free' => esc_html__('Included', 'wc-order-splitter'),
-				'premium' => esc_html__('Included', 'wc-order-splitter'),
+				'feature' => esc_html__('On-demand order operations', 'wc-order-splitter'),
+				'free' => esc_html__('Split, Duplicate, Merge, Return, and Bulk Return for supported orders.', 'wc-order-splitter'),
+				'premium' => esc_html__('Expanded Split, Duplicate, Merge, and Return controls for operational workflows.', 'wc-order-splitter'),
 			),
 			array(
-				'feature' => esc_html__('Split by category and stock status', 'wc-order-splitter'),
-				'free' => esc_html__('Included', 'wc-order-splitter'),
-				'premium' => esc_html__('Included', 'wc-order-splitter'),
+				'feature' => esc_html__('Split routing', 'wc-order-splitter'),
+				'free' => esc_html__('Manual quantity, category, and stock status.', 'wc-order-splitter'),
+				'premium' => esc_html__('Product group, tag, attribute, vendor, bundle, plus compatible-integration routing.', 'wc-order-splitter'),
 			),
 			array(
-				'feature' => esc_html__('Split by product group, tag, attribute, bundle, or vendor', 'wc-order-splitter'),
-				'free' => esc_html__('Locked', 'wc-order-splitter'),
-				'premium' => esc_html__('Included', 'wc-order-splitter'),
+				'feature' => esc_html__('Duplicate workflow', 'wc-order-splitter'),
+				'free' => esc_html__('Single reviewed Duplicate.', 'wc-order-splitter'),
+				'premium' => esc_html__('Configurable contents, status and payment behavior, preview, and recoverable Bulk Duplicate.', 'wc-order-splitter'),
 			),
 			array(
-				'feature' => esc_html__('Automated split rules after order creation', 'wc-order-splitter'),
-				'free' => esc_html__('Locked', 'wc-order-splitter'),
-				'premium' => esc_html__('Included', 'wc-order-splitter'),
+				'feature' => esc_html__('Merge workflow', 'wc-order-splitter'),
+				'free' => esc_html__('Single reviewed manual Merge.', 'wc-order-splitter'),
+				'premium' => esc_html__('Dry-run preview plus automatic same-customer merge within a configured time window.', 'wc-order-splitter'),
 			),
 			array(
-				'feature' => esc_html__('Order status controls after split, duplicate, and merge actions', 'wc-order-splitter'),
-				'free' => esc_html__('Locked', 'wc-order-splitter'),
-				'premium' => esc_html__('Included', 'wc-order-splitter'),
+				'feature' => esc_html__('Automation', 'wc-order-splitter'),
+				'free' => esc_html__('On-demand operations.', 'wc-order-splitter'),
+				'premium' => esc_html__('Rule Builder with priorities, ALL/ANY conditions, Split/Merge/Skip actions, queue visibility, and retry.', 'wc-order-splitter'),
 			),
 			array(
-				'feature' => esc_html__('Customer and admin split-order email controls', 'wc-order-splitter'),
-				'free' => esc_html__('Locked', 'wc-order-splitter'),
-				'premium' => esc_html__('Included', 'wc-order-splitter'),
+				'feature' => esc_html__('Before-action visibility', 'wc-order-splitter'),
+				'free' => esc_html__('Server review and confirmation for hardened workflows.', 'wc-order-splitter'),
+				'premium' => esc_html__('Rich dry-run previews for items, statuses, shipping, and email behavior; compatible integrations can add inventory/allocation context.', 'wc-order-splitter'),
+			),
+			array(
+				'feature' => esc_html__('Operational history', 'wc-order-splitter'),
+				'free' => esc_html__('Durable operation safety, replay, and recovery foundations.', 'wc-order-splitter'),
+				'premium' => esc_html__('User-facing Action Logs, guarded rollback, Automation Queue status, failure/skip reasons, and retry controls.', 'wc-order-splitter'),
+			),
+			array(
+				'feature' => esc_html__('Split-order notifications', 'wc-order-splitter'),
+				'free' => esc_html__('Standard on-demand workflow behavior.', 'wc-order-splitter'),
+				'premium' => esc_html__('Customer/admin sending modes, per-method subject/heading/message, and live WooCommerce email previews.', 'wc-order-splitter'),
 			),
 		);
 		?>
 		<div class="wcos-settings-card wcos-premium-intro">
 			<div>
-				<h2><?php esc_html_e('Premium options for high-volume order operations', 'wc-order-splitter'); ?></h2>
-				<p><?php esc_html_e('The free plugin keeps manual splitting available. Premium is best for stores that repeatedly split by rules, need automated workflows, or need tighter email/status controls.', 'wc-order-splitter'); ?></p>
+				<h2><?php esc_html_e('Upgrade to WooCommerce Advanced Order Actions', 'wc-order-splitter'); ?></h2>
+				<p><?php esc_html_e('Advanced Order Actions is a standalone premium replacement for Order Splitter. It is designed for stores that have outgrown on-demand manual operations and need automation, bulk workflows, previews, and deeper operational controls. When activated, it runs independently and Order Splitter is deactivated.', 'wc-order-splitter'); ?></p>
 			</div>
 			<div class="wcos-card-actions">
-				<a class="button button-primary" href="<?php echo esc_url($this->get_premium_url()); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e('Compare Premium', 'wc-order-splitter'); ?></a>
+				<a class="button button-primary" href="<?php echo esc_url($this->get_premium_url()); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e('Explore Advanced Order Actions', 'wc-order-splitter'); ?></a>
 			</div>
 		</div>
 
@@ -307,8 +327,8 @@ class WooCommerce_Order_Splitter_Settings {
 			<thead>
 				<tr>
 					<th><?php esc_html_e('Workflow', 'wc-order-splitter'); ?></th>
-					<th><?php esc_html_e('Free', 'wc-order-splitter'); ?></th>
-					<th><?php esc_html_e('Premium', 'wc-order-splitter'); ?></th>
+					<th><?php esc_html_e('Order Splitter', 'wc-order-splitter'); ?></th>
+					<th><?php esc_html_e('Advanced Order Actions', 'wc-order-splitter'); ?></th>
 				</tr>
 			</thead>
 			<tbody>
@@ -321,6 +341,7 @@ class WooCommerce_Order_Splitter_Settings {
 				<?php endforeach; ?>
 			</tbody>
 		</table>
+		<p class="description wcos-upgrade-qualification"><?php esc_html_e('Vendor and bundle routing require compatible marketplace or bundle plugins. Inventory readiness/location and reconciliation capabilities require a compatible Stock Manager integration.', 'wc-order-splitter'); ?></p>
 		<?php
 	}
 
@@ -392,9 +413,9 @@ class WooCommerce_Order_Splitter_Settings {
 	public function get_automation_splitter_settings() {
 		$settings = array(
 			'section_title' => array(
-				'name'     => esc_html__('Automation splitter', 'wc-order-splitter'),
+				'name'     => esc_html__('Automation', 'wc-order-splitter'),
 				'type'     => 'title',
-				'desc'     => esc_html__('Automation is available in Premium for stores that need repeatable split rules after checkout.', 'wc-order-splitter'),
+				'desc'     => esc_html__('Order Splitter keeps supported order operations on demand; no automation rule is configured on this screen.', 'wc-order-splitter'),
 				'id'       => 'automation_splitter_section_title',
 			),
 			'section_end' => array(
@@ -411,7 +432,7 @@ class WooCommerce_Order_Splitter_Settings {
 			'section_title' => array(
 				'name'     => esc_html__('Split order email', 'wc-order-splitter'),
 				'type'     => 'title',
-				'desc'     => esc_html__('Split-order email controls are available in Premium for stores that need customer or administrator notification rules.', 'wc-order-splitter'),
+				'desc'     => esc_html__('Order Splitter keeps its on-demand workflow notification behavior unchanged; this screen has no configurable split-order email rules.', 'wc-order-splitter'),
 				'id'       => 'notifications_order_splitter_section_title'
 			),
 			'section_end' => array(
