@@ -136,6 +136,8 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'backend/class-wcos-bulk-return-admin-controller.php';
 		WCOS_Bulk_Return_Admin_Controller::bootstrap();
 
+		include_once $root . 'backend/class-wcos-premium-upsell.php';
+		WCOS_Premium_Upsell::bootstrap();
 		include_once $root . 'backend/settings.php';
 		include_once $root . 'backend/orders.php';
 		include_once $root . 'backend/yoohw-woo-settings-tabs-reorder.php';

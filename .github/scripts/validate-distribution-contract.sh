@@ -102,7 +102,6 @@ for forbidden_path in \
   'inc/backend/order-merge-option.php' \
   'js/bulk-return-action.js' \
   'js/merge-action.js' \
-  'js/post-action-tip.js' \
   'js/split-table.js' \
   'inc/mutation-v2'; do
   if test -e "$distribution_root/$forbidden_path"; then
@@ -113,6 +112,9 @@ done
 for required_path in \
   'wc-order-splitter.php' \
   'readme.txt' \
+  'inc/backend/class-wcos-premium-upsell.php' \
+  'css/premium-upsell.css' \
+  'js/post-action-tip.js' \
   'inc/backend/class-wcos-split-admin-controller.php' \
   'inc/backend/class-wcos-split-confirmation-store.php' \
   'inc/backend/class-wcos-split-request-parser.php' \
