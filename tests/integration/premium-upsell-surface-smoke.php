@@ -30,13 +30,13 @@ wcos_upsell_assert(false !== strpos($boundary, "'wcos_split_strategy_execute' =>
 wcos_upsell_assert(false !== strpos($boundary, "'wcos_duplicate_execute' => 'duplicate'"), 'Duplicate execute mapping missing.');
 wcos_upsell_assert(false !== strpos($boundary, "'wcos_merge_execute' => 'merge'"), 'Merge execute mapping missing.');
 
-wcos_upsell_assert(false !== strpos($settings, "$sub_sub_tabs['premium'] = esc_html__('Upgrade'"), 'Historical premium section key must render Upgrade.');
+wcos_upsell_assert(false !== strpos($settings, "\$sub_sub_tabs['premium'] = esc_html__('Upgrade'"), 'Historical premium section key must render Upgrade.');
 wcos_upsell_assert(false !== strpos($settings, 'standalone premium replacement for Order Splitter'), 'Standalone replacement positioning missing.');
 wcos_upsell_assert(false !== strpos($settings, "esc_html_e('Order Splitter'"), 'Order Splitter comparison column missing.');
 wcos_upsell_assert(false !== strpos($settings, "esc_html_e('Advanced Order Actions'"), 'Advanced Order Actions comparison column missing.');
 wcos_upsell_assert(false === strpos($settings, "esc_html__('Locked'"), 'Upgrade matrix must not use Locked.');
 
-wcos_upsell_assert(false !== strpos($script, "include_once $root . 'backend/class-wcos-premium-upsell.php';"), 'Presentation boundary is not loaded.');
+wcos_upsell_assert(false !== strpos($script, "include_once \$root . 'backend/class-wcos-premium-upsell.php';"), 'Presentation boundary is not loaded.');
 wcos_upsell_assert(false !== strpos($script, 'WCOS_Premium_Upsell::bootstrap();'), 'Presentation boundary is not bootstrapped.');
 
 wcos_upsell_assert(false !== strpos($client, 'payload.success !== true'), 'Success-only guard missing.');
