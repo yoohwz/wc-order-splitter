@@ -124,18 +124,19 @@ try {
 	wcos_bulk_return_assert($duplicate_flood, 'Bulk Return did not cap the raw selection before graph work.');
 
 	$mixed = WCOS_Bulk_Return_Batch_Plan::build(array($children[0]->get_id(), $original->get_id()));
-	wcos_bulk_return_assert(!$mixed['all_eligible'], 'Mixed eligible/ineligible Bulk Return Review did not block Confirm.');
+	wcos_bulk_return_assert(!$mixed['all_eligible'] && $mixed['has_eligible'] && 1 === $mixed['eligible_count'] && 1 === $mixed['skipped_count'], 'Mixed Bulk Return Review did not separate Eligible and Skipped rows.');
 	wp_set_current_user(0);
 	$unauthorized = WCOS_Bulk_Return_Batch_Plan::build(array($children[0]->get_id()));
 	wcos_bulk_return_assert(!$unauthorized['all_eligible'], 'Bulk Return Review exposed eligible authority to an unauthorized operator.');
-	wcos_bulk_return_assert('preflight_authorization_failed' === $unauthorized['rows'][0]['reason'], 'Bulk Return unauthorized Review returned unexpected reason: ' . $unauthorized['rows'][0]['reason']);
+	wcos_bulk_return_assert('preflight_authorization_failed' === $unauthorized['selection_rows'][0]['reason'], 'Bulk Return unauthorized Review returned unexpected reason: ' . $unauthorized['selection_rows'][0]['reason']);
 	wp_set_current_user($operator_id);
 
 	$stored = WCOS_Bulk_Return_Review_Store::create($child_ids, $operator_id);
 	$plan = $stored['plan'];
+	$execution_rows = WCOS_Bulk_Return_Batch_Plan::execution_rows($plan);
 	wcos_bulk_return_assert(3 === $plan['selected_count'] && 2 === $plan['canonical_count'] && 1 === $plan['duplicate_count'], 'Bulk Return duplicate disclosure is incorrect.');
 	wcos_bulk_return_assert($plan['all_eligible'], 'Two same-original siblings did not pass Bulk Return Review.');
-	wcos_bulk_return_assert(array(0) === $plan['rows'][1]['batch_child_intent']['expected_predecessor_ordinals'], 'Same-original sibling predecessor order was not frozen.');
+	wcos_bulk_return_assert(array(0) === $execution_rows[1]['batch_child_intent']['expected_predecessor_ordinals'], 'Same-original sibling predecessor order was not frozen.');
 	wcos_bulk_return_assert(false === strpos(wp_json_encode($stored), '@example.test') && false === strpos(wp_json_encode($stored), 'Bulk Private Street'), 'Bulk Return Review exposed customer PII.');
 
 	$confirmed = WCOS_Bulk_Return_Confirmation_Store::create($stored['review_id'], $stored['review_token'], $operator_id);
@@ -151,7 +152,7 @@ try {
 	wcos_bulk_return_assert(false === strpos(wp_json_encode($coordinator), $confirmed['batch_token']), 'Raw Bulk Return token entered durable journal authority.');
 
 	/* Lost response before any row completed: Resume must be an exact, write-free replay. */
-	$participant_ids = array_merge(array($original->get_id()), array_column($plan['rows'], 'child_order_id'));
+	$participant_ids = array_merge(array($original->get_id()), array_column($execution_rows, 'child_order_id'));
 	$zero_response = (new WCOS_Bulk_Return_Orchestrator())->resume($confirmed['batch_id'], $confirmed['anchor_child_id'], $confirmed['batch_token'], $operator_id);
 	$zero_coordinator = WCOS_Operation_Journal::get(wc_get_order($confirmed['anchor_child_id']), $confirmed['batch_id']);
 	$zero_signatures = wcos_bulk_return_participant_signatures($participant_ids, $product->get_id());
@@ -163,20 +164,20 @@ try {
 	wcos_bulk_return_assert($zero_coordinator === $zero_coordinator_replay, 'Zero-completed response-loss replay rewrote the coordinator.');
 	wcos_bulk_return_assert($zero_signatures === wcos_bulk_return_participant_signatures($participant_ids, $product->get_id()), 'Zero-completed response-loss replay changed participant commercial or stock signatures.');
 	foreach ($uuids as $ordinal => $uuid) {
-		wcos_bulk_return_assert(null === WCOS_Operation_Journal::get(wc_get_order($plan['rows'][$ordinal]['child_order_id']), $uuid), 'Zero-completed response-loss replay started a child mutation.');
+		wcos_bulk_return_assert(null === WCOS_Operation_Journal::get(wc_get_order($execution_rows[$ordinal]['child_order_id']), $uuid), 'Zero-completed response-loss replay started a child mutation.');
 	}
 
 	$orchestrator = new WCOS_Bulk_Return_Orchestrator();
 	$first = (new WCOS_Mutation_Gateway())->bulk_return_advance($confirmed['batch_id'], $confirmed['anchor_child_id'], $confirmed['batch_token'], $operator_id, 0);
 	wcos_bulk_return_assert(1 === $first['cursor'] && $first['has_more'], 'First Bulk Return request did not advance exactly one child.');
-	$first_child_signature = WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($plan['rows'][0]['child_order_id']));
+	$first_child_signature = WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($execution_rows[0]['child_order_id']));
 	$coordinator_key = 'wcos_mutation_op_' . hash('sha256', absint($confirmed['anchor_child_id']) . '|' . sanitize_key((string) $confirmed['batch_id']));
 	$lost_checkpoint = get_option($coordinator_key, array());
 	$lost_checkpoint['context']['bulk_return_progress'] = $initial_coordinator_progress;
 	update_option($coordinator_key, $lost_checkpoint, false); wp_cache_delete($coordinator_key, 'options');
 	$reconstructed = $orchestrator->advance($confirmed['batch_id'], $confirmed['anchor_child_id'], $confirmed['batch_token'], $operator_id, 0);
 	wcos_bulk_return_assert(1 === $reconstructed['cursor'] && 1 === $reconstructed['counts']['completed'], 'Lost coordinator checkpoint was not reconstructed from the child journal.');
-	wcos_bulk_return_assert($first_child_signature === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($plan['rows'][0]['child_order_id'])), 'Coordinator reconstruction repeated child commercial writes.');
+	wcos_bulk_return_assert($first_child_signature === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($execution_rows[0]['child_order_id'])), 'Coordinator reconstruction repeated child commercial writes.');
 	$authentic_checkpoint = get_option($coordinator_key, array());
 	$tampered_checkpoint = $authentic_checkpoint;
 	$tampered_checkpoint['context']['bulk_return_progress']['cursor'] = 2;
@@ -185,7 +186,7 @@ try {
 	try { $orchestrator->advance($confirmed['batch_id'], $confirmed['anchor_child_id'], $confirmed['batch_token'], $operator_id, 1); }
 	catch (WCOS_Bulk_Return_Orchestrator_Exception $exception) { $corruption_rejected = 'coordinator_invalid' === $exception->get_reason(); }
 	wcos_bulk_return_assert($corruption_rejected, 'Tampered coordinator progress did not fail closed.');
-	wcos_bulk_return_assert(null === WCOS_Operation_Journal::get(wc_get_order($plan['rows'][1]['child_order_id']), $uuids[1]), 'Coordinator corruption started a new child row.');
+	wcos_bulk_return_assert(null === WCOS_Operation_Journal::get(wc_get_order($execution_rows[1]['child_order_id']), $uuids[1]), 'Coordinator corruption started a new child row.');
 	update_option($coordinator_key, $authentic_checkpoint, false); wp_cache_delete($coordinator_key, 'options');
 	$lost_response = $orchestrator->advance($confirmed['batch_id'], $confirmed['anchor_child_id'], $confirmed['batch_token'], $operator_id, 0);
 	wcos_bulk_return_assert($first === $lost_response, 'Bulk Return response-loss replay did not reconstruct exact durable progress.');
@@ -205,7 +206,7 @@ try {
 	wcos_bulk_return_assert($terminal_coordinator === $terminal_coordinator_replay, 'Multiple-completed response-loss replay rewrote the coordinator.');
 	wcos_bulk_return_assert($terminal_signatures === wcos_bulk_return_participant_signatures($participant_ids, $product->get_id()), 'Multiple-completed response-loss replay changed participant commercial or stock signatures.');
 
-	foreach ($plan['rows'] as $ordinal => $row) {
+	foreach ($execution_rows as $ordinal => $row) {
 		$child = wc_get_order($row['child_order_id']);
 		wcos_bulk_return_assert($child instanceof WC_Order && 'trash' === $child->get_status(), 'Bulk Return did not preserve retired child history.');
 		wcos_bulk_return_assert('0.000000' === wcos_bulk_return_reduced_total($child), 'Bulk Return child retained reduced-stock ownership.');
@@ -217,7 +218,7 @@ try {
 	wcos_bulk_return_assert($stock_before === WCOS_Decimal::normalize(wc_get_product($product->get_id())->get_stock_quantity(), 6), 'Bulk Return changed physical stock.');
 	$coordinator_after = WCOS_Operation_Journal::get(wc_get_order($confirmed['anchor_child_id']), $confirmed['batch_id']);
 	wcos_bulk_return_assert(is_array($coordinator_after) && 'completed' === $coordinator_after['status'] && 'bulk_return_batch' === $coordinator_after['type'], 'Coordinator became unavailable after anchor child retirement.');
-	wcos_bulk_return_assert(3 === count(array_filter(array($coordinator_after, WCOS_Operation_Journal::get(wc_get_order($plan['rows'][0]['child_order_id']), $uuids[0]), WCOS_Operation_Journal::get(wc_get_order($plan['rows'][1]['child_order_id']), $uuids[1])))), 'Bulk Return did not keep one coordinator plus ordinary child journals.');
+	wcos_bulk_return_assert(3 === count(array_filter(array($coordinator_after, WCOS_Operation_Journal::get(wc_get_order($execution_rows[0]['child_order_id']), $uuids[0]), WCOS_Operation_Journal::get(wc_get_order($execution_rows[1]['child_order_id']), $uuids[1])))), 'Bulk Return did not keep one coordinator plus ordinary child journals.');
 	$committed_window = $coordinator_after;
 	array_pop($committed_window['checkpoints']);
 	$committed_window['status'] = 'committed';

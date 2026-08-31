@@ -166,16 +166,18 @@ final class WCOS_Bulk_Return_Admin_Controller {
 			'execute' => __('Execute next child', 'wc-order-splitter'),
 			'retry' => __('Retry current child', 'wc-order-splitter'),
 			'failed' => __('The Bulk Return request could not be completed.', 'wc-order-splitter'),
-			'mixedBlocked' => __('Every selected row must be eligible. Close this dialog, change the selection, and Review again.', 'wc-order-splitter'),
+			'mixedReady' => __('Only Eligible rows will execute. Skipped rows remain unchanged and receive no operation authority.', 'wc-order-splitter'),
+			'nothingEligible' => __('No selected row is eligible. The Review is visible, but it cannot create a durable batch.', 'wc-order-splitter'),
 			'selectedLabel' => __('Selected', 'wc-order-splitter'),
 			'canonicalLabel' => __('Canonical', 'wc-order-splitter'),
 			'duplicatesLabel' => __('Duplicates', 'wc-order-splitter'),
+			'eligibleLabel' => __('Eligible', 'wc-order-splitter'),
+			'skippedLabel' => __('Skipped', 'wc-order-splitter'),
 			'maximumLabel' => __('Maximum', 'wc-order-splitter'),
 			'originalLabel' => __('Original', 'wc-order-splitter'),
 			'childrenLabel' => __('children', 'wc-order-splitter'),
 			'childLabel' => __('Child', 'wc-order-splitter'),
 			'linesLabel' => __('lines', 'wc-order-splitter'),
-			'ineligibleLabel' => __('Ineligible', 'wc-order-splitter'),
 			'completedLabel' => __('Completed', 'wc-order-splitter'),
 			'inProgressLabel' => __('In progress', 'wc-order-splitter'),
 			'blockedLabel' => __('Blocked', 'wc-order-splitter'),
@@ -203,8 +205,8 @@ final class WCOS_Bulk_Return_Admin_Controller {
 		?>
 		<div id="<?php echo esc_attr($dialog_id); ?>" class="wcos-bulk-return-dialog" role="dialog" aria-modal="true" aria-labelledby="wcos-bulk-return-title" aria-describedby="wcos-bulk-return-description" data-ajax-url="<?php echo esc_url(admin_url('admin-ajax.php')); ?>" data-nonce="<?php echo esc_attr(wp_create_nonce(self::NONCE_ACTION)); ?>" data-review-action="<?php echo esc_attr(self::REVIEW_ACTION); ?>" data-confirm-action="<?php echo esc_attr(self::CONFIRM_ACTION); ?>" data-execute-action="<?php echo esc_attr(self::EXECUTE_ACTION); ?>" data-resume-action="<?php echo esc_attr(self::RESUME_ACTION); ?>" hidden>
 			<div class="wcos-bulk-return-dialog__panel">
-				<header><h2 id="wcos-bulk-return-title"><?php esc_html_e('Return selected children to original orders', 'wc-order-splitter'); ?></h2><p id="wcos-bulk-return-description"><?php esc_html_e('Review all server-resolved originals and immutable historical values before confirming. Each request advances at most one child and stops after the first non-success.', 'wc-order-splitter'); ?></p></header>
-				<section class="wcos-bulk-return-review" hidden><h3><?php esc_html_e('Batch Review', 'wc-order-splitter'); ?></h3><div class="wcos-bulk-return-counts"></div><div class="wcos-bulk-return-groups"></div><div class="wcos-bulk-return-rows"></div><label class="wcos-bulk-return-ack"><input type="checkbox" class="wcos-bulk-return-acknowledge" /> <span><?php esc_html_e('I understand completed children remain completed if a later row fails, and later rows will not run after the first non-success.', 'wc-order-splitter'); ?></span></label></section>
+				<header><h2 id="wcos-bulk-return-title"><?php esc_html_e('Return selected children to original orders', 'wc-order-splitter'); ?></h2><p id="wcos-bulk-return-description"><?php esc_html_e('Review the server-classified Eligible and Skipped rows before confirming. Each request advances at most one Eligible child and stops after the first runtime non-success.', 'wc-order-splitter'); ?></p></header>
+				<section class="wcos-bulk-return-review" hidden><h3><?php esc_html_e('Batch Review', 'wc-order-splitter'); ?></h3><div class="wcos-bulk-return-counts"></div><div class="wcos-bulk-return-groups"></div><div class="wcos-bulk-return-rows"></div><label class="wcos-bulk-return-ack"><input type="checkbox" class="wcos-bulk-return-acknowledge" /> <span><?php esc_html_e('I understand only Eligible rows will execute; Skipped rows remain unchanged. Completed children remain completed if a later Eligible row fails, and later Eligible rows will not run after the first non-success.', 'wc-order-splitter'); ?></span></label></section>
 				<div class="wcos-bulk-return-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></div>
 				<div class="wcos-bulk-return-error notice notice-error inline" role="alert" tabindex="-1" hidden></div>
 				<div class="wcos-bulk-return-results" role="status" aria-live="polite"></div>
@@ -218,14 +220,14 @@ final class WCOS_Bulk_Return_Admin_Controller {
 	private function review_summary(array $plan) {
 		$rows = array();
 		$groups = array();
-		foreach ($plan['rows'] as $ordinal => $row) {
+		foreach (WCOS_Bulk_Return_Batch_Plan::selection_rows($plan) as $ordinal => $row) {
 			$summary = isset($row['summary']) && is_array($row['summary']) ? $row['summary'] : array();
-			$summary['ordinal'] = (int) $ordinal;
+			$summary['ordinal'] = isset($row['selection_ordinal']) ? (int) $row['selection_ordinal'] : (int) $ordinal;
 			$summary['eligible'] = !empty($row['eligible']);
 			$summary['reason'] = sanitize_key((string) $row['reason']);
 			$summary['message'] = (string) $row['message'];
 			$rows[] = $summary;
-			$original_id = absint($row['original_order_id']);
+			$original_id = !empty($row['eligible']) && isset($summary['original']['id']) ? absint($summary['original']['id']) : 0;
 			if ($original_id) { $groups[$original_id][] = absint($row['child_order_id']); }
 		}
 		ksort($groups, SORT_NUMERIC);
@@ -233,7 +235,10 @@ final class WCOS_Bulk_Return_Admin_Controller {
 			'selected_count' => (int) $plan['selected_count'],
 			'canonical_count' => (int) $plan['canonical_count'],
 			'duplicate_count' => (int) $plan['duplicate_count'],
+			'eligible_count' => WCOS_Bulk_Return_Batch_Plan::execution_count($plan),
+			'skipped_count' => WCOS_Bulk_Return_Batch_Plan::is_v2($plan) ? (int) $plan['skipped_count'] : 0,
 			'max_children' => (int) $plan['max_children'],
+			'has_eligible' => WCOS_Bulk_Return_Batch_Plan::execution_count($plan) > 0,
 			'all_eligible' => !empty($plan['all_eligible']),
 			'groups' => $groups,
 			'rows' => $rows,

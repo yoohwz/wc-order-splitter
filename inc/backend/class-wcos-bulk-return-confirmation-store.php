@@ -29,11 +29,15 @@ final class WCOS_Bulk_Return_Confirmation_Store {
 		$batch_id = wp_generate_uuid4();
 		$raw_token = wp_generate_password(48, false, false);
 		$operation_map = array();
-		foreach ($plan['rows'] as $ordinal => $row) {
+		foreach (WCOS_Bulk_Return_Batch_Plan::execution_rows($plan) as $ordinal => $row) {
 			$operation_map[$ordinal] = wp_generate_uuid4();
 		}
-		$context = WCOS_Bulk_Return_Journal_Context::create($plan, $batch_id, $user_id, $raw_token, $operation_map);
-		$anchor = wc_get_order(absint($plan['canonical_child_ids'][0]));
+		try {
+			$context = WCOS_Bulk_Return_Journal_Context::create($plan, $batch_id, $user_id, $raw_token, $operation_map);
+		} catch (Throwable $throwable) {
+			throw new WCOS_Bulk_Return_Confirmation_Exception('coordinator_invalid', __('The reviewed Bulk Return execution set could not create a durable coordinator.', 'wc-order-splitter'));
+		}
+		$anchor = wc_get_order(WCOS_Bulk_Return_Batch_Plan::anchor_child_id($plan));
 		if (!$anchor instanceof WC_Order || !WCOS_Operation_Journal::start(
 			$anchor,
 			$batch_id,
@@ -80,18 +84,12 @@ final class WCOS_Bulk_Return_Confirmation_Store {
 			|| absint($verified['authority']['anchor_child_id']) !== $anchor->get_id()) {
 			throw new WCOS_Bulk_Return_Confirmation_Exception('coordinator_mismatch', __('The Bulk Return coordinator identity does not match this request.', 'wc-order-splitter'));
 		}
-		try {
-			foreach ($verified['authority']['plan']['rows'] as $row) {
-				$child = wc_get_order(absint($row['child_order_id']));
-				$original = wc_get_order(absint($row['original_order_id']));
-				if (!$child instanceof WC_Order || !$original instanceof WC_Order) {
-					throw new RuntimeException(__('A Bulk Return participant is unavailable.', 'wc-order-splitter'));
-				}
-				WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::BULK_RETURN, $child, $original);
-			}
-		} catch (Throwable $throwable) {
-			throw new WCOS_Bulk_Return_Confirmation_Exception('authorization_failed', __('The operator is no longer authorized for every Bulk Return participant.', 'wc-order-splitter'));
-		}
+		/*
+		 * Participant authorization is intentionally revalidated by the ordinary
+		 * Return preflight when the durable current row starts. This preserves the
+		 * fail-stop contract for post-Confirm drift without granting Skipped rows
+		 * any operation authority.
+		 */
 		return array('anchor' => $anchor, 'record' => $record, 'verified' => $verified);
 	}
 }

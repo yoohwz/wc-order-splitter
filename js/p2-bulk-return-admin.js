@@ -13,7 +13,8 @@
 			in_progress: message('inProgressLabel', 'In progress'),
 			blocked: message('blockedLabel', 'Blocked'),
 			manual_reconciliation: message('manualLabel', 'Manual reconciliation'),
-			not_run_blocked: message('notRunLabel', 'Not run')
+			not_run_blocked: message('notRunLabel', 'Not run'),
+			skipped: message('skippedLabel', 'Skipped')
 		};
 		return labels[status] || status || '';
 	}
@@ -83,7 +84,7 @@
 
 		function renderReview(summary) {
 			reviewBox.hidden = false;
-			countsBox.textContent = message('selectedLabel', 'Selected') + ': ' + String(summary.selected_count || 0) + ' · ' + message('canonicalLabel', 'Canonical') + ': ' + String(summary.canonical_count || 0) + ' · ' + message('duplicatesLabel', 'Duplicates') + ': ' + String(summary.duplicate_count || 0) + ' · ' + message('maximumLabel', 'Maximum') + ': ' + String(summary.max_children || 20);
+			countsBox.textContent = message('selectedLabel', 'Selected') + ': ' + String(summary.selected_count || 0) + ' · ' + message('canonicalLabel', 'Canonical') + ': ' + String(summary.canonical_count || 0) + ' · ' + message('duplicatesLabel', 'Duplicates') + ': ' + String(summary.duplicate_count || 0) + ' · ' + message('eligibleLabel', 'Eligible') + ': ' + String(summary.eligible_count || 0) + ' · ' + message('skippedLabel', 'Skipped') + ': ' + String(summary.skipped_count || 0) + ' · ' + message('maximumLabel', 'Maximum') + ': ' + String(summary.max_children || 20);
 			groupsBox.textContent = '';
 			Object.keys(summary.groups || {}).forEach(function (originalId) {
 				var group = document.createElement('p');
@@ -93,19 +94,21 @@
 			rowsBox.textContent = '';
 			(summary.rows || []).forEach(function (row) {
 				var item = document.createElement('article');
-				item.className = 'wcos-bulk-return-row ' + (row.eligible ? 'is-eligible' : 'is-ineligible');
+				item.className = 'wcos-bulk-return-row ' + (row.eligible ? 'is-eligible' : 'is-skipped');
 				var heading = document.createElement('h4');
 				var child = row.child || {};
 				var original = row.original || {};
-				heading.textContent = message('childLabel', 'Child') + ' #' + String(child.number || child.id || '') + (original.id ? ' → ' + message('originalLabel', 'Original') + ' #' + String(original.number || original.id) : '');
+				heading.textContent = message('childLabel', 'Child') + ' #' + String(child.number || child.id || '') + ' — ' + (row.eligible ? message('eligibleLabel', 'Eligible') : message('skippedLabel', 'Skipped')) + (original.id ? ' → ' + message('originalLabel', 'Original') + ' #' + String(original.number || original.id) : '');
 				var detail = document.createElement('p');
 				detail.textContent = row.eligible
 					? String(row.strategy || '') + ' · ' + String(row.line_count || 0) + ' ' + message('linesLabel', 'lines') + ' / ' + String(row.quantity || '0') + ' · ' + String(row.historical_total || '0') + ' ' + String(row.currency || '')
-					: String(row.message || row.reason || message('ineligibleLabel', 'Ineligible'));
+					: String(row.message || row.reason || message('skippedLabel', 'Skipped'));
 				item.appendChild(heading); item.appendChild(detail); rowsBox.appendChild(item);
 			});
-			reviewEligible = !!summary.all_eligible;
-			if (!reviewEligible) { setStatus(message('mixedBlocked', 'Every selected row must be eligible.')); }
+			reviewEligible = !!summary.has_eligible;
+			setStatus(reviewEligible
+				? message('mixedReady', 'Only Eligible rows will execute. Skipped rows remain unchanged and receive no operation authority.')
+				: message('nothingEligible', 'No selected row is eligible. The Review is visible, but it cannot create a durable batch.'));
 		}
 
 		function renderProgress(summary) {
@@ -115,8 +118,13 @@
 			resultsBox.appendChild(heading);
 			var aggregate = document.createElement('p');
 			var counts = summary.counts || {};
-			aggregate.textContent = message('completedLabel', 'Completed') + ': ' + String(counts.completed || 0) + ' · ' + message('blockedLabel', 'Blocked') + ': ' + String(counts.blocked || 0) + ' · ' + message('manualLabel', 'Manual reconciliation') + ': ' + String(counts.manual_reconciliation || 0) + ' · ' + message('notRunLabel', 'Not run') + ': ' + String(counts.not_run_blocked || 0);
+			aggregate.textContent = message('completedLabel', 'Completed') + ': ' + String(counts.completed || 0) + ' · ' + message('skippedLabel', 'Skipped') + ': ' + String(counts.skipped || 0) + ' · ' + message('blockedLabel', 'Blocked') + ': ' + String(counts.blocked || 0) + ' · ' + message('manualLabel', 'Manual reconciliation') + ': ' + String(counts.manual_reconciliation || 0) + ' · ' + message('notRunLabel', 'Not run') + ': ' + String(counts.not_run_blocked || 0);
 			resultsBox.appendChild(aggregate);
+			(summary.skipped_results || []).forEach(function (result) {
+				var line = document.createElement('p');
+				line.textContent = message('childLabel', 'Child') + ' #' + String(result.child_order_id || '') + ': ' + statusLabel('skipped') + (result.message ? ' — ' + String(result.message) : '');
+				resultsBox.appendChild(line);
+			});
 			(summary.results || []).forEach(function (result) {
 				var line = document.createElement('p');
 				line.textContent = message('childLabel', 'Child') + ' #' + String(result.child_order_id || '') + ': ' + statusLabel(result.status) + (result.message ? ' — ' + String(result.message) : '');

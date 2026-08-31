@@ -35,7 +35,7 @@
 }
 
 .wcos-bulk-return-row.is-eligible { border-left-color: #008a20; }
-.wcos-bulk-return-row.is-ineligible { border-left-color: #d63638; }
+.wcos-bulk-return-row.is-skipped { border-left-color: #dba617; }
 .wcos-bulk-return-row h4 { margin: 0 0 4px; }
 .wcos-bulk-return-row p { margin: 0; }
 

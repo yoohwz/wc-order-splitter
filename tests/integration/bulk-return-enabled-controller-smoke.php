@@ -108,16 +108,32 @@ try {
 	wcos_bulk_enabled_assert('completed' === $second['status'] && 2 === $second['counts']['completed'], 'Enabled same-original controller batch did not complete.');
 	foreach ($operation_ids as $operation_id) { wcos_bulk_enabled_assert(false === strpos(wp_json_encode($second), $operation_id), 'Enabled Bulk Return response exposed a child operation UUID.'); }
 
+	$fixtures[] = wcos_bulk_enabled_fixture('mixed-category', 'category'); $mixed_index = count($fixtures) - 1;
+	$mixed_fixture = $fixtures[$mixed_index];
+	$mixed = $controller->review_request(array('nonce' => $nonce, 'child_order_ids' => array($mixed_fixture['child_ids'][0], $mixed_fixture['original_id'])));
+	$fixtures[$mixed_index]['review_ids'][] = $mixed['review_id'];
+	wcos_bulk_enabled_assert(empty($mixed['summary']['all_eligible']) && !empty($mixed['summary']['has_eligible']) && 1 === $mixed['summary']['eligible_count'] && 1 === $mixed['summary']['skipped_count'], 'Enabled Bulk Return mixed Review did not disclose exact Eligible and Skipped counts.');
+	$mixed_confirm = $controller->confirm_request(array('nonce' => $nonce, 'review_id' => $mixed['review_id'], 'review_token' => $mixed['review_token']));
+	$mixed_record = WCOS_Operation_Journal::get(wc_get_order($mixed_confirm['anchor_child_id']), $mixed_confirm['batch_id']);
+	$mixed_verified = WCOS_Bulk_Return_Journal_Context::verify_request($mixed_record, $mixed_confirm['batch_token'], $operator_id);
+	wcos_bulk_enabled_assert(1 === count($mixed_verified['authority']['operation_map']) && 1 === $mixed_confirm['summary']['counts']['skipped'] && 1 === count($mixed_confirm['summary']['skipped_results']), 'Mixed Confirm granted authority beyond the exact Eligible execution set.');
+	wcos_bulk_enabled_assert(null === WCOS_Operation_Journal::get(wc_get_order($mixed_fixture['original_id']), $mixed_confirm['batch_id']), 'Mixed Confirm created coordinator authority on a Skipped row.');
+	$mixed_done = $controller->execute_request(array('nonce' => $nonce, 'batch_id' => $mixed_confirm['batch_id'], 'batch_token' => $mixed_confirm['batch_token'], 'anchor_child_id' => $mixed_confirm['anchor_child_id'], 'cursor' => 0));
+	wcos_bulk_enabled_assert('completed' === $mixed_done['status'] && 1 === $mixed_done['counts']['completed'] && 1 === $mixed_done['counts']['skipped'], 'Mixed Bulk Return did not execute only the Eligible row.');
+
 	$fixtures[] = wcos_bulk_enabled_fixture('category', 'category'); $category_index = count($fixtures) - 1;
 	$fixtures[] = wcos_bulk_enabled_fixture('stock', 'stock_status'); $stock_index = count($fixtures) - 1;
 	$category = $fixtures[$category_index]; $stock = $fixtures[$stock_index];
-	$mixed = $controller->review_request(array('nonce' => $nonce, 'child_order_ids' => array($category['child_ids'][0], $category['original_id'])));
-	$fixtures[$category_index]['review_ids'][] = $mixed['review_id'];
-	wcos_bulk_enabled_assert(empty($mixed['summary']['all_eligible']), 'Enabled Bulk Return mixed Review did not block the entire batch.');
-	$mixed_confirm_rejected = false;
-	try { $controller->confirm_request(array('nonce' => $nonce, 'review_id' => $mixed['review_id'], 'review_token' => $mixed['review_token'])); }
-	catch (WCOS_Bulk_Return_Transport_Exception $exception) { $mixed_confirm_rejected = 'confirmation_batch_ineligible' === $exception->get_error_code(); }
-	wcos_bulk_enabled_assert($mixed_confirm_rejected, 'Enabled Bulk Return confirmed a mixed eligible/ineligible selection.');
+	$all_skipped = $controller->review_request(array('nonce' => $nonce, 'child_order_ids' => array($category['original_id'], $stock['original_id'])));
+	$fixtures[$category_index]['review_ids'][] = $all_skipped['review_id'];
+	wcos_bulk_enabled_assert(empty($all_skipped['summary']['has_eligible']) && 0 === $all_skipped['summary']['eligible_count'] && 2 === $all_skipped['summary']['skipped_count'], 'All-Skipped Review did not remain visible with zero Eligible rows.');
+	global $wpdb;
+	$all_skipped_journals_before = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name LIKE 'wcos_mutation_op_%'");
+	$all_skipped_confirm_rejected = false;
+	try { $controller->confirm_request(array('nonce' => $nonce, 'review_id' => $all_skipped['review_id'], 'review_token' => $all_skipped['review_token'])); }
+	catch (WCOS_Bulk_Return_Transport_Exception $exception) { $all_skipped_confirm_rejected = 'confirmation_nothing_eligible' === $exception->get_error_code(); }
+	$all_skipped_journals_after = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name LIKE 'wcos_mutation_op_%'");
+	wcos_bulk_enabled_assert($all_skipped_confirm_rejected && $all_skipped_journals_before === $all_skipped_journals_after, 'All-Skipped Review created durable operation authority.');
 
 	$different = $controller->review_request(array('nonce' => $nonce, 'child_order_ids' => array($category['child_ids'][0], $stock['child_ids'][0])));
 	$fixtures[$category_index]['review_ids'][] = $different['review_id'];
@@ -133,7 +149,7 @@ try {
 		foreach ($fixture['child_ids'] as $child_id) { $child = wc_get_order($child_id); wcos_bulk_enabled_assert($child instanceof WC_Order && 'trash' === $child->get_status(), 'Enabled Bulk Return did not retire a completed child.'); }
 		$original = wc_get_order($fixture['original_id']); wcos_bulk_enabled_assert($original instanceof WC_Order && 'trash' !== $original->get_status(), 'Enabled Bulk Return retired an original order.');
 	}
-	echo "bulk-return-enabled-controller-ok same_original=2 different_original=2 strategies=3 duplicates=1 mixed=blocked replay=exact gateway=1\n";
+	echo "bulk-return-enabled-controller-ok same_original=2 different_original=2 strategies=3 duplicates=1 mixed=eligible-only all_skipped=non-durable replay=exact gateway=1\n";
 } finally {
 	wcos_bulk_enabled_cleanup($fixtures);
 }

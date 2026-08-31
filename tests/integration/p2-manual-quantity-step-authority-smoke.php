@@ -306,8 +306,9 @@ try {
 	wcos_p2_adapter_assert(!empty($reported_return_preflight['supported']), 'Whole-line Manual child failed hardened Return preflight.');
 	wcos_p2_adapter_assert($reported_return_plan['plan_fingerprint'] === $reported_return_preflight['return_plan']['plan_fingerprint'], 'Return preflight changed the whole-line Manual plan authority.');
 	$reported_bulk_plan = WCOS_Bulk_Return_Batch_Plan::build(array($reported_child->get_id()));
-	wcos_p2_adapter_assert(!empty($reported_bulk_plan['all_eligible']) && !empty($reported_bulk_plan['rows'][0]['eligible']), 'Whole-line Manual child failed Bulk Return Review consumption.');
-	$reported_bulk_authority = $reported_bulk_plan['rows'][0]['batch_child_intent']['return_authority'];
+	$reported_bulk_rows = WCOS_Bulk_Return_Batch_Plan::execution_rows($reported_bulk_plan);
+	wcos_p2_adapter_assert(!empty($reported_bulk_plan['all_eligible']) && !empty($reported_bulk_rows[0]['eligible']), 'Whole-line Manual child failed Bulk Return Review consumption.');
+	$reported_bulk_authority = $reported_bulk_rows[0]['batch_child_intent']['return_authority'];
 	wcos_p2_adapter_assert('manual_quantity' === $reported_bulk_authority['plan']['strategy'], 'Bulk Return changed whole-line Manual strategy authority.');
 	wcos_p2_adapter_assert(WCOS_Return_Plan::DESTINATION_FRESH_SOURCE_ITEM === $reported_bulk_authority['plan']['lines'][$reported_ids[0]]['destination'], 'Bulk Return lost the fresh-source-item destination for a removed Manual line.');
 
