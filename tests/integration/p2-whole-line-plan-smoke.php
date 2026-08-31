@@ -85,12 +85,18 @@ wp_delete_post($product_b->get_id(), true);
 
 echo "p2-whole-line-plan-ok\n";
 
-require __DIR__ . '/p2-whole-line-runtime-smoke.php';
-require __DIR__ . '/p2-whole-line-blocker-fallback-smoke.php';
-require __DIR__ . '/p2-whole-line-stock-ownership-smoke.php';
-require __DIR__ . '/p2-strategy-planners-smoke.php';
-require __DIR__ . '/p2-strategy-adapter-smoke.php';
-require __DIR__ . '/p2-strategy-confirmation-smoke.php';
-require __DIR__ . '/p2-strategy-transport-smoke.php';
-require __DIR__ . '/p2-strategy-ui-readiness-smoke.php';
-require __DIR__ . '/p2-strategy-modal-feedback-smoke.php';
+$whole_line_previous_allowed_statuses = get_option('order_splitter_status_allowed', array('wc-processing'));
+update_option('order_splitter_status_allowed', array('wc-pending', 'wc-processing'));
+try {
+	require __DIR__ . '/p2-whole-line-runtime-smoke.php';
+	require __DIR__ . '/p2-whole-line-blocker-fallback-smoke.php';
+	require __DIR__ . '/p2-whole-line-stock-ownership-smoke.php';
+	require __DIR__ . '/p2-strategy-planners-smoke.php';
+	require __DIR__ . '/p2-strategy-adapter-smoke.php';
+	require __DIR__ . '/p2-strategy-confirmation-smoke.php';
+	require __DIR__ . '/p2-strategy-transport-smoke.php';
+	require __DIR__ . '/p2-strategy-ui-readiness-smoke.php';
+	require __DIR__ . '/p2-strategy-modal-feedback-smoke.php';
+} finally {
+	update_option('order_splitter_status_allowed', $whole_line_previous_allowed_statuses);
+}
