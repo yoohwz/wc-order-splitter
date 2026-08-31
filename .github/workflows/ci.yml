@@ -490,6 +490,9 @@ jobs:
       - name: Verify governance, authorization, and metadata policy
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/governance-smoke.php
 
+      - name: Verify 1.4.11 compatibility settings and access matrix
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/compat-settings-access-smoke.php
+
       - name: Verify enabled Return domain and hardened Split lineage authority
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/return-domain-lineage-smoke.php
 
