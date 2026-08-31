@@ -146,6 +146,22 @@ function wcos_legacy_return_execute(array &$fixture, WCOS_Return_Admin_Controlle
 	return array($review, $confirm, $result);
 }
 
+function wcos_legacy_return_bulk_execute(array &$fixture, array $child_ids) {
+	$operator_id = get_current_user_id();
+	$review = WCOS_Bulk_Return_Review_Store::create($child_ids, $operator_id);
+	$fixture['bulk_review_ids'][] = $review['review_id'];
+	$confirm = WCOS_Bulk_Return_Confirmation_Store::create($review['review_id'], $review['review_token'], $operator_id);
+	$rows = WCOS_Bulk_Return_Batch_Plan::execution_rows($review['plan']);
+	$result = null;
+	foreach ($rows as $ordinal => $row) {
+		$result = (new WCOS_Bulk_Return_Orchestrator())->advance(
+			$confirm['batch_id'], $confirm['anchor_child_id'], $confirm['batch_token'], $operator_id, $ordinal
+		);
+		wcos_legacy_return_assert((int) $result['cursor'] === $ordinal + 1, 'Mixed-lineage Bulk Return did not advance exactly one child per request.');
+	}
+	return array($review, $confirm, $result);
+}
+
 function wcos_legacy_return_capture_settings() {
 	$missing = '__wcos_compat_003_missing_option__';
 	$settings = array();
@@ -180,6 +196,7 @@ function wcos_legacy_return_cleanup(array $fixture) {
 		delete_option('wcos_compat_003_genuine_1_4_11_fixture');
 	}
 	foreach (isset($fixture['review_ids']) ? $fixture['review_ids'] : array() as $review_id) { WCOS_Return_Review_Store::delete($review_id); }
+	foreach (isset($fixture['bulk_review_ids']) ? $fixture['bulk_review_ids'] : array() as $review_id) { WCOS_Bulk_Return_Review_Store::delete($review_id); }
 	foreach (isset($fixture['split_confirmation_ids']) ? $fixture['split_confirmation_ids'] : array() as $operation_id) { WCOS_Split_Confirmation_Store::delete($operation_id); }
 	foreach (isset($fixture['operation_ids']) ? $fixture['operation_ids'] : array() as $operation_id) {
 		WCOS_Return_Confirmation_Store::delete($operation_id);
@@ -263,6 +280,27 @@ function wcos_legacy_return_add_hardened_sibling(array &$fixture, $label) {
 	$fixture['extra_order_ids'][] = $child->get_id();
 	$fixture['split_confirmation_ids'][] = $created['operation_id'];
 	return $child->get_id();
+}
+
+function wcos_legacy_return_add_hardened_siblings_direct(array &$fixture, $label, $operation_id, $count) {
+	$count = absint($count);
+	wcos_legacy_return_assert($count > 0, 'Mixed-lineage Bulk fixture requires at least one hardened sibling.');
+	$source = wc_get_order($fixture['source_id']);
+	$keep = $source->get_item($fixture['keep_item_id']);
+	$keep->set_quantity(WCOS_Decimal::from_units(($count + 1) * 1000000, 6));
+	$keep->set_subtotal(WCOS_Decimal::from_units(($count + 1) * 200, 2));
+	$keep->set_total(WCOS_Decimal::from_units(($count + 1) * 200, 2));
+	$keep->save();
+	$source = wcos_legacy_return_rebuild(wc_get_order($source->get_id()));
+	update_option('order_splitter_status_allowed', array('wc-pending'));
+	update_option('order_splitter_exclude_shipping_fee', 'yes');
+	$plan = array();
+	for ($index = 0; $index < $count; $index++) { $plan[$label . '-' . $index] = array($fixture['keep_item_id'] => '1.000000'); }
+	$children = (new WCOS_Mutation_Gateway())->split($source, $plan, sanitize_key((string) $operation_id), 2);
+	wcos_legacy_return_assert($count === count($children), 'Mixed-lineage Bulk fixture did not create the exact hardened sibling count.');
+	$ids = array_values(array_map(static function($child) { return absint($child->get_id()); }, $children));
+	$fixture['extra_order_ids'] = array_values(array_unique(array_merge(isset($fixture['extra_order_ids']) ? $fixture['extra_order_ids'] : array(), $ids)));
+	return $ids;
 }
 
 function wcos_legacy_return_expect_confirm_drift(WCOS_Return_Admin_Controller $controller, array &$fixture, callable $drift, $label) {
@@ -680,6 +718,46 @@ try {
 	$mixed_hardened_first['extra_order_ids'] = array($mixed_legacy_id);
 	wcos_legacy_return_execute($mixed_hardened_first, $controller);
 	wcos_legacy_return_assert('supported' === wcos_legacy_return_reason(wc_get_order($mixed_legacy_id)), 'Returning current hardened first invalidated the remaining legacy sibling.');
+
+	$bulk_legacy_first = wcos_legacy_return_fixture('bulk-mixed-legacy-first', false, true, false);
+	$fixtures[] =& $bulk_legacy_first;
+	$bulk_legacy_first_id = $bulk_legacy_first['child_id'];
+	$bulk_legacy_first_hardened_ids = wcos_legacy_return_add_hardened_siblings_direct($bulk_legacy_first, 'bulk-current-after-legacy', 'zz-bulk-current-after-legacy-' . wp_generate_uuid4(), 1);
+	$bulk_legacy_first_hardened_id = reset($bulk_legacy_first_hardened_ids);
+	$bulk_legacy_shipping_before = wcos_legacy_return_shipping_state(wc_get_order($bulk_legacy_first_id));
+	list($bulk_legacy_review, $bulk_legacy_confirm, $bulk_legacy_result) = wcos_legacy_return_bulk_execute(
+		$bulk_legacy_first,
+		array($bulk_legacy_first_hardened_id, $bulk_legacy_first_id)
+	);
+	$bulk_legacy_execution_ids = array_values(array_map(static function($row) { return absint($row['child_order_id']); }, WCOS_Bulk_Return_Batch_Plan::execution_rows($bulk_legacy_review['plan'])));
+	wcos_legacy_return_assert(array($bulk_legacy_first_id, $bulk_legacy_first_hardened_id) === $bulk_legacy_execution_ids, 'Mixed-lineage Bulk Return did not derive the deterministic legacy-first order.');
+	wcos_legacy_return_assert('completed' === $bulk_legacy_result['status'] && 2 === $bulk_legacy_result['counts']['completed'] && 0 === $bulk_legacy_result['counts']['skipped'], 'Legacy-first mixed-lineage Bulk Return did not complete both Eligible rows.');
+	wcos_legacy_return_assert('trash' === wc_get_order($bulk_legacy_first_id)->get_status() && 'trash' === wc_get_order($bulk_legacy_first_hardened_id)->get_status(), 'Legacy-first mixed-lineage Bulk Return did not retire exactly both children.');
+	wcos_legacy_return_assert($bulk_legacy_shipping_before === wcos_legacy_return_shipping_state(wc_get_order($bulk_legacy_first_id)), 'Legacy-first mixed-lineage Bulk Return changed retired child shipping ownership.');
+	$bulk_legacy_source = wc_get_order($bulk_legacy_first['source_id']);
+	wcos_legacy_return_assert(empty($bulk_legacy_source->get_meta(WCOS_Split_Order_Service::RELATION_CHILDREN_META, true)), 'Legacy-first mixed-lineage Bulk Return left hardened relation ownership active.');
+
+	$bulk_hardened_first = wcos_legacy_return_fixture('bulk-mixed-hardened-first', false, true, false);
+	$fixtures[] =& $bulk_hardened_first;
+	$bulk_hardened_legacy_id = $bulk_hardened_first['child_id'];
+	$bulk_hardened_ids = wcos_legacy_return_add_hardened_siblings_direct($bulk_hardened_first, 'bulk-current-before-legacy', 'aa-bulk-current-before-legacy-' . wp_generate_uuid4(), 2);
+	$bulk_hardened_first_id = $bulk_hardened_ids[0]; $bulk_skipped_hardened_id = $bulk_hardened_ids[1];
+	$bulk_skipped_hardened = wc_get_order($bulk_skipped_hardened_id); $bulk_skipped_hardened->set_status('cancelled'); $bulk_skipped_hardened->save();
+	$bulk_skipped_hardened_before = WCOS_Order_Contract_Snapshot::source_signature($bulk_skipped_hardened);
+	$bulk_hardened_legacy_shipping_before = wcos_legacy_return_shipping_state(wc_get_order($bulk_hardened_legacy_id));
+	list($bulk_hardened_review, $bulk_hardened_confirm, $bulk_hardened_result) = wcos_legacy_return_bulk_execute(
+		$bulk_hardened_first,
+		array($bulk_hardened_legacy_id, $bulk_skipped_hardened_id, $bulk_hardened_first_id)
+	);
+	$bulk_hardened_execution_ids = array_values(array_map(static function($row) { return absint($row['child_order_id']); }, WCOS_Bulk_Return_Batch_Plan::execution_rows($bulk_hardened_review['plan'])));
+	wcos_legacy_return_assert(array($bulk_hardened_first_id, $bulk_hardened_legacy_id) === $bulk_hardened_execution_ids, 'Mixed-lineage Bulk Return did not derive the deterministic hardened-first order: ' . wp_json_encode(array('expected' => array($bulk_hardened_first_id, $bulk_hardened_legacy_id), 'actual' => $bulk_hardened_execution_ids)));
+	wcos_legacy_return_assert('completed' === $bulk_hardened_result['status'] && 2 === $bulk_hardened_result['counts']['completed'] && 1 === $bulk_hardened_result['counts']['skipped'], 'Hardened-first mixed-lineage Bulk Return lost Eligible/Skipped terminal outcomes.');
+	wcos_legacy_return_assert('trash' === wc_get_order($bulk_hardened_first_id)->get_status() && 'trash' === wc_get_order($bulk_hardened_legacy_id)->get_status(), 'Hardened-first mixed-lineage Bulk Return did not retire exactly its Eligible rows.');
+	wcos_legacy_return_assert($bulk_hardened_legacy_shipping_before === wcos_legacy_return_shipping_state(wc_get_order($bulk_hardened_legacy_id)), 'Hardened-first mixed-lineage Bulk Return changed retired legacy child shipping ownership.');
+	$bulk_skipped_hardened = wc_get_order($bulk_skipped_hardened_id);
+	wcos_legacy_return_assert('cancelled' === $bulk_skipped_hardened->get_status() && $bulk_skipped_hardened_before === WCOS_Order_Contract_Snapshot::source_signature($bulk_skipped_hardened), 'Hardened-first mixed-lineage Bulk Return mutated the pre-existing Skipped hardened sibling.');
+	$bulk_hardened_source = wc_get_order($bulk_hardened_first['source_id']);
+	wcos_legacy_return_assert(array($bulk_skipped_hardened_id) === array_values(array_map('absint', (array) $bulk_hardened_source->get_meta(WCOS_Split_Order_Service::RELATION_CHILDREN_META, true))), 'Hardened-first mixed-lineage Bulk Return did not preserve the Skipped hardened relation.');
 
 	$relation_drift = wcos_legacy_return_fixture('relation-drift');
 	$fixtures[] =& $relation_drift;

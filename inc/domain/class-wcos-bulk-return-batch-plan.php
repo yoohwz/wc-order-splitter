@@ -371,7 +371,7 @@ final class WCOS_Bulk_Return_Batch_Plan {
 	private static function bind_predecessors(array &$rows) {
 		$groups = array();
 		foreach ($rows as $ordinal => &$row) {
-			$key = absint($row['original_order_id']) . '|' . sanitize_key((string) $row['split_operation_id']);
+			$key = absint($row['original_order_id']);
 			$predecessors = isset($groups[$key]) ? $groups[$key] : array();
 			$row['batch_child_intent']['expected_predecessor_ordinals'] = array_keys($predecessors);
 			$row['batch_child_intent']['expected_predecessor_child_ids'] = array_values($predecessors);
@@ -381,13 +381,21 @@ final class WCOS_Bulk_Return_Batch_Plan {
 	}
 
 	private static function reject_ambiguous_graphs(array $rows) {
-		$original_operations = array(); $child_ids = array(); $original_ids = array();
+		$original_rows = array(); $child_ids = array(); $original_ids = array();
 		foreach ($rows as $row) {
-			$original = absint($row['original_order_id']); $operation = sanitize_key((string) $row['split_operation_id']);
-			$original_operations[$original][$operation] = true; $child_ids[absint($row['child_order_id'])] = true; $original_ids[$original] = true;
+			$original = absint($row['original_order_id']);
+			$original_rows[$original][] = $row; $child_ids[absint($row['child_order_id'])] = true; $original_ids[$original] = true;
 		}
-		foreach ($original_operations as $operations) {
-			if (count($operations) > 1) { throw new WCOS_Bulk_Return_Batch_Exception('ambiguous_participant_graph', __('The selected rows form an ambiguous cross-operation Return graph.', 'wc-order-splitter')); }
+		foreach ($original_rows as $group) {
+			$operations = array(); $legacy_count = 0; $hardened_operations = array();
+			foreach ($group as $row) {
+				$operation = sanitize_key((string) $row['split_operation_id']); $operations[$operation] = true;
+				if (self::is_legacy_execution_row($row)) { $legacy_count++; }
+				else { $hardened_operations[$operation] = true; }
+			}
+			if (count($operations) > 1 && (1 !== $legacy_count || 1 !== count($hardened_operations))) {
+				throw new WCOS_Bulk_Return_Batch_Exception('ambiguous_participant_graph', __('The selected rows form an ambiguous cross-operation Return graph.', 'wc-order-splitter'));
+			}
 		}
 		if (!empty(array_intersect_key($child_ids, $original_ids))) { throw new WCOS_Bulk_Return_Batch_Exception('ambiguous_participant_graph', __('The selected rows form an overlapping Return participant graph.', 'wc-order-splitter')); }
 	}
@@ -397,17 +405,19 @@ final class WCOS_Bulk_Return_Batch_Plan {
 		foreach (array('child_order_id', 'original_order_id', 'split_operation_id', 'split_child_key', 'price_precision', 'currency', 'prices_include_tax', 'return_service_policy_version', 'preflight_policy_version', 'plan_schema_version', 'plan_policy_version', 'lineage_schema_version', 'lineage_policy_version', 'journal_context_schema_version', 'retirement_policy_schema_version', 'retirement_policy_identifier', 'stock_ownership_policy', 'order_stock_flag_policy') as $field) {
 			if (!array_key_exists($field, $current) || (string) $current[$field] !== (string) $frozen[$field]) { throw new WCOS_Bulk_Return_Batch_Exception('authority_changed', __('Bulk Return immutable child or policy authority changed.', 'wc-order-splitter')); }
 		}
+		$is_legacy_current = self::is_legacy_return_authority($frozen);
 		$frozen_plan = $frozen['plan']; $current_plan = $current['plan'];
 		foreach (array('plan_fingerprint', 'lineage_authority_fingerprint', 'source_commercial_authority', 'source_relation_authority') as $field) { unset($frozen_plan[$field], $current_plan[$field]); }
+		if ($is_legacy_current) { unset($frozen_plan['legacy_relation_authority_fingerprint'], $current_plan['legacy_relation_authority_fingerprint']); }
 		if ($frozen_plan !== $current_plan) { throw new WCOS_Bulk_Return_Batch_Exception('child_intent_changed', __('Bulk Return historical line authority changed after Review.', 'wc-order-splitter')); }
 		$frozen_pair = $frozen['pair_authority']; $current_pair = $current['pair_authority'];
 		if ((string) $frozen_pair['child_signature_before'] !== (string) $current_pair['child_signature_before']) { throw new WCOS_Bulk_Return_Batch_Exception('child_intent_changed', __('Bulk Return child commercial authority changed after Review.', 'wc-order-splitter')); }
 		$base = $frozen_pair['source_evolution_authority']; $now = $current_pair['source_evolution_authority'];
 		WCOS_Return_Source_Evolution_Authority::assert_valid($base, $intent['original_order_id'], $intent['split_operation_id']);
 		WCOS_Return_Source_Evolution_Authority::assert_valid($now, $intent['original_order_id'], $intent['split_operation_id']);
-		$expected_ids = array_values(array_map('absint', $intent['expected_predecessor_child_ids']));
-		$expected_returned = array_values(array_unique(array_merge($base['returned_child_ids'], $expected_ids))); sort($expected_returned, SORT_NUMERIC);
-		$expected_pairs = $base['completed_pair_fingerprints']; $execution_rows = self::execution_rows($plan);
+		$hardened_predecessor_ids = array(); $hardened_predecessor_pairs = array(); $last_hardened_after = null;
+		$expected_commercial = (string) $base['original_commercial_signature']; $expected_relation = (string) $base['original_relation_signature'];
+		$execution_rows = self::execution_rows($plan);
 		foreach ($intent['expected_predecessor_ordinals'] as $predecessor_ordinal) {
 			$predecessor_ordinal = absint($predecessor_ordinal);
 			if (!isset($execution_rows[$predecessor_ordinal], $operation_map[$predecessor_ordinal])) { throw new WCOS_Bulk_Return_Batch_Exception('predecessor_missing', __('Bulk Return predecessor operation authority is incomplete.', 'wc-order-splitter')); }
@@ -415,12 +425,65 @@ final class WCOS_Bulk_Return_Batch_Plan {
 			$predecessor_child = wc_get_order(absint($predecessor['child_order_id']));
 			$journal = $predecessor_child instanceof WC_Order ? WCOS_Operation_Journal::get($predecessor_child, $operation_id) : null;
 			if (!is_array($journal) || 'completed' !== sanitize_key(isset($journal['status']) ? (string) $journal['status'] : '')) { throw new WCOS_Bulk_Return_Batch_Exception('predecessor_incomplete', __('Bulk Return predecessor is not durably completed.', 'wc-order-splitter')); }
+			$predecessor_pair = WCOS_Return_Journal_Context::pair_from_record($journal);
 			$result = WCOS_Return_Journal_Context::terminal_result_from_record($journal);
-			if (absint($result['child_order_id']) !== absint($predecessor['child_order_id']) || absint($result['original_order_id']) !== absint($intent['original_order_id'])) { throw new WCOS_Bulk_Return_Batch_Exception('predecessor_mismatch', __('Bulk Return predecessor journal does not match the frozen sibling chain.', 'wc-order-splitter')); }
-			$expected_pairs[] = sanitize_key((string) $result['pair_fingerprint']);
+			if (!is_array($predecessor_pair) || absint($result['child_order_id']) !== absint($predecessor['child_order_id']) || absint($result['original_order_id']) !== absint($intent['original_order_id'])) { throw new WCOS_Bulk_Return_Batch_Exception('predecessor_mismatch', __('Bulk Return predecessor journal does not match the frozen sibling chain.', 'wc-order-splitter')); }
+			$evolution = isset($result['source_evolution']) && is_array($result['source_evolution']) ? $result['source_evolution'] : array();
+			try { WCOS_Return_Source_Evolution_Authority::assert_terminal_evolution($evolution, $predecessor_pair); }
+			catch (Throwable $throwable) { throw new WCOS_Bulk_Return_Batch_Exception('predecessor_mismatch', __('Bulk Return predecessor source evolution is not authoritative.', 'wc-order-splitter')); }
+			$before = $evolution['authority_before']; $after = $evolution['authority_after'];
+			if (!hash_equals($expected_commercial, (string) $before['original_commercial_signature']) || !hash_equals($expected_relation, (string) $before['original_relation_signature'])) {
+				throw new WCOS_Bulk_Return_Batch_Exception('unexpected_source_evolution', __('The original changed outside the exact frozen Bulk Return predecessor chain.', 'wc-order-splitter'));
+			}
+			$expected_commercial = (string) $after['original_commercial_signature']; $expected_relation = (string) $after['original_relation_signature'];
+			if (self::is_legacy_execution_row($predecessor)) {
+				if ($is_legacy_current) { throw new WCOS_Bulk_Return_Batch_Exception('unexpected_source_evolution', __('Bulk Return cannot derive multiple legacy compatibility predecessors for one source.', 'wc-order-splitter')); }
+				continue;
+			}
+			if (!$is_legacy_current && sanitize_key((string) $predecessor['split_operation_id']) !== sanitize_key((string) $intent['split_operation_id'])) {
+				throw new WCOS_Bulk_Return_Batch_Exception('unexpected_source_evolution', __('Bulk Return hardened predecessors do not share one Split operation.', 'wc-order-splitter'));
+			}
+			$hardened_predecessor_ids[] = absint($predecessor['child_order_id']);
+			$hardened_predecessor_pairs[] = sanitize_key((string) $result['pair_fingerprint']);
+			$last_hardened_after = $after;
 		}
-		$expected_pairs = array_values(array_unique($expected_pairs)); sort($expected_pairs, SORT_STRING);
-		if ((int) $now['sequence'] !== (int) $base['sequence'] + count($expected_ids) || $now['returned_child_ids'] !== $expected_returned || $now['completed_pair_fingerprints'] !== $expected_pairs) { throw new WCOS_Bulk_Return_Batch_Exception('unexpected_source_evolution', __('The original changed outside the exact frozen Bulk Return predecessor chain.', 'wc-order-splitter')); }
+		if (!hash_equals($expected_commercial, (string) $now['original_commercial_signature']) || !hash_equals($expected_relation, (string) $now['original_relation_signature'])) {
+			throw new WCOS_Bulk_Return_Batch_Exception('unexpected_source_evolution', __('The original changed outside the exact frozen Bulk Return predecessor chain.', 'wc-order-splitter'));
+		}
+		if ($is_legacy_current) {
+			$base_static = $base; $now_static = $now;
+			foreach (array('authority_fingerprint', 'original_commercial_signature', 'original_relation_signature', 'hardened_active_child_ids') as $field) { unset($base_static[$field], $now_static[$field]); }
+			$expected_hardened_active = array_values(array_diff($base['hardened_active_child_ids'], $hardened_predecessor_ids)); sort($expected_hardened_active, SORT_NUMERIC);
+			if (count(array_intersect($base['hardened_active_child_ids'], $hardened_predecessor_ids)) !== count($hardened_predecessor_ids)
+				|| $base_static !== $now_static || $now['hardened_active_child_ids'] !== $expected_hardened_active) {
+				throw new WCOS_Bulk_Return_Batch_Exception('unexpected_source_evolution', __('The legacy compatibility row changed outside exact hardened predecessor Returns.', 'wc-order-splitter'));
+			}
+			return;
+		}
+		$expected_returned = array_values(array_unique(array_merge($base['returned_child_ids'], $hardened_predecessor_ids))); sort($expected_returned, SORT_NUMERIC);
+		$expected_active = array_values(array_diff($base['active_child_ids'], $hardened_predecessor_ids)); sort($expected_active, SORT_NUMERIC);
+		$expected_pairs = array_values(array_unique(array_merge($base['completed_pair_fingerprints'], $hardened_predecessor_pairs))); sort($expected_pairs, SORT_STRING);
+		$expected_predecessor = is_array($last_hardened_after) ? (string) $last_hardened_after['authority_fingerprint'] : (string) $base['predecessor_fingerprint'];
+		if (count(array_intersect($base['active_child_ids'], $hardened_predecessor_ids)) !== count($hardened_predecessor_ids)
+			|| (int) $now['sequence'] !== (int) $base['sequence'] + count($hardened_predecessor_ids)
+			|| $now['active_child_ids'] !== $expected_active || $now['returned_child_ids'] !== $expected_returned
+			|| $now['completed_pair_fingerprints'] !== $expected_pairs || !hash_equals($expected_predecessor, (string) $now['predecessor_fingerprint'])
+			|| (isset($base['split_lineage_fingerprints']) && $base['split_lineage_fingerprints'] !== $now['split_lineage_fingerprints'])) {
+			throw new WCOS_Bulk_Return_Batch_Exception('unexpected_source_evolution', __('The original changed outside the exact frozen Bulk Return predecessor chain.', 'wc-order-splitter'));
+		}
+	}
+
+	private static function is_legacy_execution_row(array $row) {
+		$intent = isset($row['batch_child_intent']) && is_array($row['batch_child_intent']) ? $row['batch_child_intent'] : array();
+		$authority = isset($intent['return_authority']) && is_array($intent['return_authority']) ? $intent['return_authority'] : array();
+		return self::is_legacy_return_authority($authority);
+	}
+
+	private static function is_legacy_return_authority(array $authority) {
+		$plan = isset($authority['plan']) && is_array($authority['plan']) ? $authority['plan'] : array();
+		$pair = isset($authority['pair_authority']) && is_array($authority['pair_authority']) ? $authority['pair_authority'] : array();
+		return WCOS_Return_Plan::is_legacy_compatibility($plan)
+			&& WCOS_Legacy_Return_Compatibility_Authority::LINEAGE_BASIS === sanitize_key(isset($pair['lineage_basis']) ? (string) $pair['lineage_basis'] : '');
 	}
 
 	private static function assert_legacy_review_current(array $plan) {
@@ -518,7 +581,7 @@ final class WCOS_Bulk_Return_Batch_Plan {
 			$row_keys = is_array($row) ? array_keys($row) : array();
 			$expected_row_keys = array('batch_child_intent', 'child_order_id', 'classification', 'classification_fingerprint', 'eligible', 'message', 'ordinal', 'original_order_id', 'reason', 'selection_ordinal', 'split_child_key', 'split_operation_id', 'summary');
 			sort($row_keys, SORT_STRING); sort($expected_row_keys, SORT_STRING);
-			$group_key = is_array($row) ? absint(isset($row['original_order_id']) ? $row['original_order_id'] : 0) . '|' . sanitize_key(isset($row['split_operation_id']) ? (string) $row['split_operation_id'] : '') : '';
+			$group_key = is_array($row) ? absint(isset($row['original_order_id']) ? $row['original_order_id'] : 0) : '';
 			$expected_predecessors = isset($predecessor_groups[$group_key]) ? array_keys($predecessor_groups[$group_key]) : array();
 			$expected_predecessor_ids = isset($predecessor_groups[$group_key]) ? array_values($predecessor_groups[$group_key]) : array();
 			if (!is_array($row) || $row_keys !== $expected_row_keys || !isset($row['ordinal'], $row['classification'], $row['eligible'], $row['child_order_id'], $row['original_order_id'])
