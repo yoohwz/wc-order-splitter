@@ -24,7 +24,7 @@ wcos_bulk_partial_ui_verify_assert('completed' === $mixed_summary['status'] && 1
 wcos_bulk_partial_ui_verify_assert(empty(wcos_bulk_partial_ui_batch_records($manifest['mixed']['original_id'])) && empty(wcos_bulk_partial_ui_batch_records($mixed_skipped->get_id())), 'All-Skipped UI Review or Skipped row created durable authority.');
 
 $confirm_child = wc_get_order($manifest['confirm_drift']['child_ids'][0]);
-wcos_bulk_partial_ui_verify_assert($confirm_child instanceof WC_Order && 'cancelled' === $confirm_child->get_status() && empty(wcos_bulk_partial_ui_batch_records($confirm_child->get_id())), 'Eligible-to-ineligible Confirm drift created durable authority.');
+wcos_bulk_partial_ui_verify_assert($confirm_child instanceof WC_Order && 'on-hold' === $confirm_child->get_status() && empty(wcos_bulk_partial_ui_batch_records($confirm_child->get_id())), 'Eligible-to-ineligible Confirm drift created durable authority.');
 
 $runtime_ids = $manifest['runtime']['child_ids'];
 $runtime_completed = wc_get_order($runtime_ids[0]); $runtime_skipped = wc_get_order($runtime_ids[1]); $runtime_blocked = wc_get_order($runtime_ids[2]); $runtime_not_run = wc_get_order($runtime_ids[3]);
