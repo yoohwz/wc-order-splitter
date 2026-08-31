@@ -184,9 +184,13 @@ final class WCOS_Split_Compensator {
 	}
 
 	private static function assert_child_safe(WC_Order $source, WC_Order $child, $operation_id, array $expected_signatures) {
+		$record = WCOS_Operation_Journal::get($source, $operation_id);
+		$commercial_policy = is_array($record)
+			? WCOS_Split_Commercial_Policy::from_journal($record)
+			: WCOS_Split_Commercial_Policy::legacy();
 		if ('shop_order' !== $child->get_type()
 			|| 'wc-order-splitter-split' !== $child->get_created_via()
-			|| 'pending' !== $child->get_status()
+			|| (string) $commercial_policy['child_status'] !== $child->get_status()
 			|| (int) $child->get_meta(WCOS_Split_Order_Service::RELATION_PARENT_META, true) !== $source->get_id()
 			|| (string) $child->get_meta(WCOS_Split_Order_Service::OPERATION_META, true) !== $operation_id
 			|| '' === sanitize_key((string) $child->get_meta(WCOS_Split_Order_Service::CHILD_KEY_META, true))) {

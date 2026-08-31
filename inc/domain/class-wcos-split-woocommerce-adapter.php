@@ -38,8 +38,12 @@ final class WCOS_Split_WooCommerce_Adapter {
             }
 
             $this->assert_verified_confirmation_source($source, $operation_id);
-            $this->assert_supported($source, $precision);
 			$existing_journal = WCOS_Operation_Journal::get($source, $operation_id);
+			if (!is_array($existing_journal)) {
+				$this->assert_supported($source, $precision);
+			} else {
+				WCOS_Split_Commercial_Policy::from_journal($existing_journal);
+			}
 			if (!is_array($existing_journal) && isset($operation_context['manual_quantity_authority'])) {
 				$manual_authority = WCOS_Manual_Split_Quantity_Authority::assert_current(
 					$source,

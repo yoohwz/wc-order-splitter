@@ -4,6 +4,9 @@ if (!defined('ABSPATH')) {
 	exit(1);
 }
 
+$side_effect_previous_allowed = get_option('order_splitter_status_allowed', array('wc-processing'));
+update_option('order_splitter_status_allowed', array('wc-pending'));
+
 function wcos_side_effect_assert($condition, $message) {
 	if (!$condition) {
 		throw new RuntimeException($message);
@@ -164,5 +167,6 @@ $duplicate->delete(true);
 $split_source->delete(true);
 $duplicate_source->delete(true);
 wp_delete_post($product_id, true);
+update_option('order_splitter_status_allowed', $side_effect_previous_allowed);
 
 echo "mutation-side-effects-idempotent-ok\n";

@@ -54,6 +54,7 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-merge-recovery-snapshot.php';
 		include_once $root . 'domain/class-wcos-merge-recovery-state-graph.php';
 		include_once $root . 'domain/class-wcos-operation-journal.php';
+		include_once $root . 'domain/class-wcos-split-commercial-policy.php';
 		include_once $root . 'domain/class-wcos-manual-reconciliation-blocker.php';
 		include_once $root . 'domain/class-wcos-operation-journal-retention.php';
 		WCOS_Operation_Journal_Retention::bootstrap();

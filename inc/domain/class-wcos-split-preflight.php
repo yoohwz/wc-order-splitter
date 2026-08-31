@@ -26,27 +26,13 @@ final class WCOS_Split_Preflight_Exception extends RuntimeException {
  * Reports intentionally contain no customer/address/payment plaintext.
  */
 final class WCOS_Split_Preflight {
-    const POLICY_VERSION = 6;
+    const POLICY_VERSION = WCOS_Split_Commercial_Policy::POLICY_VERSION;
 
-    public static function policy() {
-        return array(
-            'policy_version' => self::POLICY_VERSION,
-            'shipping' => 'keep_on_source',
-            'fees' => 'keep_on_source',
-            'negative_fees' => 'reject',
-            'coupons' => 'reject',
-            'refunds' => 'reject',
-            'payment' => 'source_only',
-            'payment_transaction' => 'keep_on_source',
-            'child_status' => 'pending',
-            'tax' => 'preserve_historical',
-            'physical_stock' => 'no_write',
-            'nested_split' => 'reject',
-            'manual_reconciliation' => 'reject',
-            'unknown_private_line_meta' => 'reject',
-            'context_inconsistent_private_meta' => 'reject',
-            'fractional_quantity' => self::fractional_quantities_supported() ? 'supported_by_integration' : 'integer_only',
-        );
+    public static function policy($source = null) {
+        if (!$source instanceof WC_Order) {
+            return WCOS_Split_Commercial_Policy::legacy();
+        }
+        return WCOS_Split_Commercial_Policy::freeze($source);
     }
 
     public static function fractional_quantities_supported() {
@@ -102,7 +88,7 @@ final class WCOS_Split_Preflight {
             'manual_reconciliation_operation_ids' => array(),
             'unknown_private_meta_keys' => array(),
             'inconsistent_private_meta_keys' => array(),
-            'policy' => self::policy(),
+            'policy' => array(),
         );
 
         foreach ($source->get_items('fee') as $fee) {
@@ -118,6 +104,12 @@ final class WCOS_Split_Preflight {
             return self::reject($report, 'unsupported_order_type', __('Only WooCommerce shop orders can be split.', 'wc-order-splitter'));
         }
 
+        try {
+            $report['policy'] = self::policy($source);
+        } catch (Throwable $throwable) {
+            return self::reject($report, 'ambiguous_refund_provenance', $throwable->getMessage());
+        }
+
         $manual_records = WCOS_Operation_Journal::manual_reconciliation_records($source);
         if (!empty($manual_records)) {
             $report['manual_reconciliation_count'] = count($manual_records);
@@ -129,23 +121,11 @@ final class WCOS_Split_Preflight {
             );
         }
 
-        if (!in_array($source->get_status(), array('pending', 'on-hold', 'processing'), true)) {
-            return self::reject($report, 'unsupported_status', __('This order status is not supported by the quantity-split policy.', 'wc-order-splitter'));
+        if (!in_array($source->get_status(), (array) $report['policy']['allowed_statuses'], true)) {
+            return self::reject($report, 'status_disabled', __('This order status is not enabled in the Order Splitter settings.', 'wc-order-splitter'));
         }
         if ('' === (string) $source->get_currency()) {
             return self::reject($report, 'missing_currency', __('The source order does not have a currency.', 'wc-order-splitter'));
-        }
-        if ($report['negative_fee_count'] > 0) {
-            return self::reject($report, 'negative_fee_policy_missing', __('Orders containing negative fee rows are not supported until an explicit discount-like fee policy is implemented.', 'wc-order-splitter'));
-        }
-        if ($report['coupon_count'] > 0) {
-            return self::reject($report, 'coupon_policy_missing', __('Orders containing coupon rows are not supported until a coupon allocation policy is implemented.', 'wc-order-splitter'));
-        }
-        if ($source->get_total_refunded() != 0 || $report['refund_count'] > 0) {
-            return self::reject($report, 'refund_policy_missing', __('Refunded or partially refunded orders are not supported until a refund allocation policy is implemented.', 'wc-order-splitter'));
-        }
-        if (!empty($source->get_meta(WCOS_Split_Order_Service::RELATION_PARENT_META, true)) || !empty($source->get_meta('yoos_original_order', true))) {
-            return self::reject($report, 'nested_split', __('Nested splitting of an existing split child is not supported.', 'wc-order-splitter'));
         }
         if (0 === $report['line_count']) {
             return self::reject($report, 'no_line_items', __('An order without product line items cannot be split.', 'wc-order-splitter'));

@@ -4,6 +4,9 @@ if (!defined('ABSPATH')) {
 	exit(1);
 }
 
+$compensation_previous_allowed = get_option('order_splitter_status_allowed', array('wc-processing'));
+update_option('order_splitter_status_allowed', array('wc-pending'));
+
 function wcos_compensation_assert($condition, $message) {
 	if (!$condition) {
 		throw new RuntimeException($message);
@@ -44,7 +47,10 @@ function wcos_compensation_stage_split(WC_Order $source, $operation_id) {
 			$source,
 			$operation_id,
 			'split',
-			array('source_signature' => WCOS_Order_Contract_Snapshot::source_signature($source)),
+			array(
+				'source_signature' => WCOS_Order_Contract_Snapshot::source_signature($source),
+				'commercial_policy' => WCOS_Split_Commercial_Policy::freeze($source),
+			),
 			$fingerprint
 		),
 		'Unable to start compensation journal.'
@@ -207,5 +213,6 @@ $final_source->delete(true);
 
 remove_action('wcos_mutation_compensation_error', $error_listener, 10);
 wp_delete_post($product_id, true);
+update_option('order_splitter_status_allowed', $compensation_previous_allowed);
 
 echo "split-compensation-and-resume-ok\n";

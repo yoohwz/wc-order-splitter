@@ -325,14 +325,25 @@ final class WCOS_Return_Lineage_Authority {
 	}
 
 	private static function assert_split_fingerprint(array $record, array $plan, $execution_policy, array $context) {
+		$legacy_commercial_policy = empty($context['commercial_policy']) || !is_array($context['commercial_policy']);
+		try {
+			$commercial_policy = $legacy_commercial_policy
+				? WCOS_Split_Commercial_Policy::legacy()
+				: WCOS_Split_Commercial_Policy::assert_valid($context['commercial_policy']);
+		} catch (Throwable $throwable) {
+			self::reject('split_commercial_policy_invalid', __('The Split journal commercial policy authority is invalid.', 'wc-order-splitter'));
+		}
 		$fingerprint_context = array(
-			'policy_version' => WCOS_Split_Order_Service::POLICY_VERSION,
+			'policy_version' => $legacy_commercial_policy ? WCOS_Split_Order_Service::LEGACY_POLICY_VERSION : WCOS_Split_Order_Service::POLICY_VERSION,
 			'plan' => $plan,
-			'shipping_policy' => 'keep_on_source',
+			'shipping_policy' => $commercial_policy['shipping'],
 			'fee_policy' => 'keep_on_source',
-			'child_status' => 'pending',
+			'child_status' => $commercial_policy['child_status'],
 			'execution_policy' => $execution_policy,
 		);
+		if (!$legacy_commercial_policy) {
+			$fingerprint_context['commercial_policy'] = $commercial_policy;
+		}
 		if (isset($context['strategy_authority'])) {
 			$fingerprint_context['strategy_authority'] = $context['strategy_authority'];
 		}

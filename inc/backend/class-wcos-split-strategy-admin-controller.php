@@ -172,8 +172,8 @@ final class WCOS_Split_Strategy_Admin_Controller {
 		$strategy = $this->strategy_from_request($request);
 		$this->assert_strategy_enabled($strategy);
 		$order_id = isset($request['order_id']) ? absint($request['order_id']) : 0;
-		$order = $this->authorized_order($request, $order_id);
 		$operation_id = isset($request['operation_id']) ? sanitize_key((string) $request['operation_id']) : '';
+		$order = $this->authorized_order($request, $order_id, $operation_id);
 		$confirmation_token = isset($request['confirmation_token']) ? (string) $request['confirmation_token'] : '';
 
 		try {
@@ -333,6 +333,12 @@ final class WCOS_Split_Strategy_Admin_Controller {
 				'bucketQuantity' => __('total quantity', 'wc-order-splitter'),
 				'childOrder' => __('Child order', 'wc-order-splitter'),
 				'reloadOrder' => __('Reload source order', 'wc-order-splitter'),
+				'frozenStatus' => __('Frozen source and child status:', 'wc-order-splitter'),
+				'shippingReplicated' => __('Historical shipping rows are replicated to every child.', 'wc-order-splitter'),
+				'shippingSourceOnly' => __('Shipping remains only on the source.', 'wc-order-splitter'),
+				'sourceOwnership' => __('Fees, coupons, refunds, and payment context remain source-owned.', 'wc-order-splitter'),
+				'refundLinesPinned' => __('refund-affected line(s) are pinned to the source.', 'wc-order-splitter'),
+				'nestedParent' => __('Nested Split records the actual source as immediate parent.', 'wc-order-splitter'),
 			)
 		);
 	}
@@ -347,7 +353,11 @@ final class WCOS_Split_Strategy_Admin_Controller {
 		$description_id = $dialog_id . '-description';
 		$bucket_legend_id = $dialog_id . '-bucket-legend';
 		$ack_id = $dialog_id . '-ack';
-		$nonce = wp_create_nonce('wcos_split_strategy_order_' . $order->get_id());
+			$nonce = wp_create_nonce('wcos_split_strategy_order_' . $order->get_id());
+			$commercial_policy = WCOS_Split_Commercial_Policy::freeze($order);
+			$shipping_label = WCOS_Split_Commercial_Policy::SHIPPING_REPLICATE_TO_EACH_CHILD === $commercial_policy['shipping']
+				? __('Historical shipping rows are replicated to every child.', 'wc-order-splitter')
+				: __('Shipping remains only on the source.', 'wc-order-splitter');
 
 		ob_start();
 		?>
@@ -365,8 +375,8 @@ final class WCOS_Split_Strategy_Admin_Controller {
 				<form class="wcos-strategy-form" aria-busy="false" novalidate>
 					<div class="wcos-strategy-policy">
 						<h3><?php esc_html_e('How this Split works', 'wc-order-splitter'); ?></h3>
-						<p><?php esc_html_e('Review the current buckets, then choose exactly one bucket to remain on the source order. Every other reviewed bucket becomes a separate pending child order and its product lines move in full.', 'wc-order-splitter'); ?></p>
-						<p><?php esc_html_e('Shipping, positive fees, payment context, and other source-owned state remain on the source order. Product stock is not physically changed by the Split request.', 'wc-order-splitter'); ?></p>
+							<p><?php esc_html_e('Review the current buckets, then choose exactly one bucket to remain on the source order. Every other reviewed bucket becomes a separate child order and its eligible product lines move in full.', 'wc-order-splitter'); ?></p>
+							<p class="wcos-strategy-commercial-summary"><?php echo esc_html(sprintf(__('Frozen source and child status: %1$s. %2$s Fees, coupons, refunds, and payment context remain source-owned; %3$d refund-affected line(s) are pinned to the source. Nested Split records the actual source as immediate parent.', 'wc-order-splitter'), wc_get_order_status_name($commercial_policy['source_status']), $shipping_label, count($commercial_policy['refund_affected_item_ids']))); ?></p>
 					</div>
 
 					<div class="wcos-strategy-review-controls">
@@ -388,7 +398,7 @@ final class WCOS_Split_Strategy_Admin_Controller {
 						<p class="wcos-strategy-confirmation-summary"></p>
 						<label class="wcos-strategy-confirm-label" for="<?php echo esc_attr($ack_id); ?>">
 							<input id="<?php echo esc_attr($ack_id); ?>" type="checkbox" class="wcos-strategy-confirm-checkbox">
-							<span><?php esc_html_e('I understand that every reviewed bucket except the selected source bucket will move to pending child order(s) using the frozen Review state.', 'wc-order-splitter'); ?></span>
+								<span><?php esc_html_e('I understand that every eligible reviewed bucket except the selected source bucket will move to child order(s) using the frozen Review and commercial policy.', 'wc-order-splitter'); ?></span>
 						</label>
 						<button type="button" class="button button-primary wcos-strategy-execute-button" disabled><?php esc_html_e('Execute strategy Split', 'wc-order-splitter'); ?></button>
 					</section>
@@ -425,7 +435,7 @@ final class WCOS_Split_Strategy_Admin_Controller {
 		}
 	}
 
-	private function authorized_order(array $request, $order_id) {
+	private function authorized_order(array $request, $order_id, $operation_id = '') {
 		if (!$order_id) {
 			throw new WCOS_Split_Transport_Exception('invalid_order', __('A valid order ID is required.', 'wc-order-splitter'), 400, false);
 		}
@@ -442,14 +452,15 @@ final class WCOS_Split_Strategy_Admin_Controller {
 		} catch (Throwable $throwable) {
 			throw new WCOS_Split_Transport_Exception('authorization_failed', __('You are not allowed to use a Split strategy on this order.', 'wc-order-splitter'), 403, false);
 		}
-		$this->assert_status_enabled($order);
+		if ('' === sanitize_key((string) $operation_id) || !is_array(WCOS_Operation_Journal::get($order, $operation_id))) {
+			$this->assert_status_enabled($order);
+		}
 		return $order;
 	}
 
 	private function assert_status_enabled(WC_Order $order) {
-		$allowed = (array) get_option('order_splitter_status_allowed', array('wc-processing'));
-		$status = 'wc-' . $order->get_status();
-		if (!in_array($status, $allowed, true)) {
+		$policy = WCOS_Split_Commercial_Policy::freeze($order);
+		if (!in_array($order->get_status(), (array) $policy['allowed_statuses'], true)) {
 			throw new WCOS_Split_Transport_Exception('status_disabled', __('This order status is disabled in the Order Splitter settings.', 'wc-order-splitter'), 409, false);
 		}
 	}
@@ -461,6 +472,7 @@ final class WCOS_Split_Strategy_Admin_Controller {
 			'owner_mismatch' => 403,
 			'expired' => 410,
 			'source_changed' => 409,
+			'commercial_policy_changed' => 409,
 			'source_missing' => 404,
 			'review_invalid' => 409,
 		);
@@ -481,6 +493,7 @@ final class WCOS_Split_Strategy_Admin_Controller {
 			'review_incomplete' => 409,
 			'planner_policy_changed' => 409,
 			'split_policy_changed' => 409,
+			'commercial_policy_changed' => 409,
 			'execution_policy_mismatch' => 409,
 			'journal_mismatch' => 409,
 			'manual_reconciliation' => 409,
