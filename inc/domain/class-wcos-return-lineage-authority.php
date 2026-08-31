@@ -84,7 +84,7 @@ final class WCOS_Return_Lineage_Authority {
 		}
 
 		$strategy = self::assert_strategy_authority($context, $execution_policy, $snapshot, $plan);
-		self::assert_split_fingerprint($record, $plan, $execution_policy, $context);
+		$split_commercial_policy = self::assert_split_fingerprint($record, $plan, $execution_policy, $context);
 		$initial_target_ids = self::canonical_id_list(isset($context['target_order_ids']) ? $context['target_order_ids'] : array(), 'target_order_ids');
 		$current_relation_ids = self::canonical_id_list($source->get_meta(WCOS_Split_Order_Service::RELATION_CHILDREN_META, true), 'source_child_relations');
 		if (array_diff($current_relation_ids, $initial_target_ids)) {
@@ -140,6 +140,7 @@ final class WCOS_Return_Lineage_Authority {
 			'source_evolution_authority' => $source_evolution,
 			'source_evolution_authority_fingerprint' => $source_evolution['authority_fingerprint'],
 			'child_commercial_authority' => self::sealed_fingerprint('child_commercial', $child_signature),
+			'payment_ownership_authority' => self::payment_ownership_authority($split_commercial_policy),
 			'lines' => $lines,
 			'legacy_diagnosis' => $legacy,
 		);
@@ -155,6 +156,48 @@ final class WCOS_Return_Lineage_Authority {
 			absint(isset($copy['child_order_id']) ? $copy['child_order_id'] : 0),
 			self::canonicalize($copy)
 		);
+	}
+
+	/**
+	 * Proves that a paid-class child status is inherited operational state only.
+	 *
+	 * Current transaction and paid-date evidence remains a separate mandatory
+	 * preflight rejection. Legacy or malformed lineage never obtains this proof.
+	 */
+	public static function proves_source_only_payment(array $authority) {
+		if (empty($authority['authority_fingerprint'])
+			|| !hash_equals((string) $authority['authority_fingerprint'], self::fingerprint($authority))
+			|| empty($authority['payment_ownership_authority'])
+			|| !is_array($authority['payment_ownership_authority'])) {
+			return false;
+		}
+		$payment = $authority['payment_ownership_authority'];
+		$stored = isset($payment['authority_fingerprint']) ? sanitize_key((string) $payment['authority_fingerprint']) : '';
+		$copy = $payment;
+		unset($copy['authority_fingerprint']);
+		$expected = WCOS_Mutation_Fingerprint::create(
+			'return_payment_ownership_authority',
+			absint(isset($copy['source_order_id']) ? $copy['source_order_id'] : 0),
+			self::canonicalize($copy)
+		);
+		return 1 === (int) (isset($copy['schema_version']) ? $copy['schema_version'] : 0)
+			&& 1 === (int) (isset($copy['policy_version']) ? $copy['policy_version'] : 0)
+			&& absint(isset($copy['source_order_id']) ? $copy['source_order_id'] : 0) === absint(isset($authority['source_order_id']) ? $authority['source_order_id'] : 0)
+			&& WCOS_Split_Commercial_Policy::POLICY_VERSION === (int) (isset($copy['split_commercial_policy_version']) ? $copy['split_commercial_policy_version'] : 0)
+			&& 'authenticated_split_commercial_policy' === (isset($copy['basis']) ? $copy['basis'] : '')
+			&& 'source_only' === (isset($copy['payment']) ? $copy['payment'] : '')
+			&& 'keep_on_source' === (isset($copy['payment_transaction']) ? $copy['payment_transaction'] : '')
+			&& 'not_independent_payment_ownership' === (isset($copy['inherited_paid_status']) ? $copy['inherited_paid_status'] : '')
+			&& 'must_be_empty' === (isset($copy['child_transaction_id']) ? $copy['child_transaction_id'] : '')
+			&& 'must_be_absent' === (isset($copy['child_date_paid']) ? $copy['child_date_paid'] : '')
+			&& 1 === preg_match('/^[0-9a-f]{64}$/D', isset($copy['commercial_policy_fingerprint']) ? (string) $copy['commercial_policy_fingerprint'] : '')
+			&& 1 === preg_match('/^[0-9a-f]{64}$/D', isset($copy['commercial_policy_authority']) ? (string) $copy['commercial_policy_authority'] : '')
+			&& 1 === preg_match('/^[0-9a-f]{64}$/D', $stored)
+			&& hash_equals(
+				(string) $copy['commercial_policy_authority'],
+				self::sealed_fingerprint('payment_ownership_policy', (string) $copy['commercial_policy_fingerprint'])
+			)
+			&& hash_equals($stored, $expected);
 	}
 
 	public static function legacy_candidate(WC_Order $child, ?WC_Order $source = null) {
@@ -355,6 +398,34 @@ final class WCOS_Return_Lineage_Authority {
 		if (!hash_equals($stored, $expected)) {
 			self::reject('split_fingerprint_mismatch', __('The Split journal request fingerprint does not match its durable plan and policy.', 'wc-order-splitter'));
 		}
+		return $commercial_policy;
+	}
+
+	private static function payment_ownership_authority(array $commercial_policy) {
+		$commercial_policy = WCOS_Split_Commercial_Policy::assert_valid($commercial_policy);
+		if (WCOS_Split_Commercial_Policy::POLICY_VERSION !== (int) $commercial_policy['policy_version']) {
+			return array();
+		}
+		$authority = array(
+			'schema_version' => 1,
+			'policy_version' => 1,
+			'source_order_id' => absint($commercial_policy['source_order_id']),
+			'split_commercial_policy_version' => (int) $commercial_policy['policy_version'],
+			'basis' => 'authenticated_split_commercial_policy',
+			'payment' => $commercial_policy['payment'],
+			'payment_transaction' => $commercial_policy['payment_transaction'],
+			'inherited_paid_status' => 'not_independent_payment_ownership',
+			'child_transaction_id' => 'must_be_empty',
+			'child_date_paid' => 'must_be_absent',
+			'commercial_policy_fingerprint' => $commercial_policy['policy_fingerprint'],
+			'commercial_policy_authority' => self::sealed_fingerprint('payment_ownership_policy', $commercial_policy['policy_fingerprint']),
+		);
+		$authority['authority_fingerprint'] = WCOS_Mutation_Fingerprint::create(
+			'return_payment_ownership_authority',
+			$authority['source_order_id'],
+			self::canonicalize($authority)
+		);
+		return $authority;
 	}
 
 	private static function assert_target_set(WC_Order $source, array $context, array $plan, $source_id, $operation_id, $child_id, $child_key, array $active_target_ids) {

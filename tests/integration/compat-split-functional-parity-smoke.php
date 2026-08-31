@@ -68,6 +68,8 @@ try {
 	));
 	wcos_compat_split_assert(!is_wp_error($user_id), 'Unable to create the Split compatibility operator.');
 	wp_set_current_user($user_id);
+	$duplicate_policy = WCOS_Duplicate_Preflight::policy();
+	wcos_compat_split_assert('pending' === $duplicate_policy['target_status'] && 'do_not_copy' === $duplicate_policy['payment_transaction'], 'Split payment ownership compatibility changed Duplicate policy.');
 	update_option('order_splitter_status_allowed', array('wc-completed', 'packed', 'wc-on-hold', 'wc-not-registered'));
 	update_option('order_splitter_exclude_shipping_fee', 'no');
 
@@ -209,6 +211,92 @@ try {
 	$order_ids[] = $keep_child->get_id();
 	wcos_compat_split_assert(empty($keep_child->get_items('shipping')), 'Checked shipping exclusion did not keep shipping only on the source.');
 	wcos_compat_split_assert(1 === count(wc_get_order($keep_source->get_id())->get_items('shipping')), 'Keep-on-source policy changed source shipping.');
+	$keep_child = wc_get_order($keep_child->get_id());
+	$completed_lineage = WCOS_Return_Lineage_Authority::resolve($keep_child);
+	wcos_compat_split_assert($keep_child->is_paid() && null === $keep_child->get_date_paid() && '' === (string) $keep_child->get_transaction_id(), 'Completed Split child did not isolate paid-class status from independent payment evidence: ' . wp_json_encode(array(
+		'status' => $keep_child->get_status(),
+		'is_paid' => $keep_child->is_paid(),
+		'date_paid' => $keep_child->get_date_paid() ? $keep_child->get_date_paid()->getTimestamp() : null,
+		'transaction_id' => (string) $keep_child->get_transaction_id(),
+	)));
+	wcos_compat_split_assert(WCOS_Return_Lineage_Authority::proves_source_only_payment($completed_lineage), 'Completed Split child did not receive sealed source-only payment authority.');
+	$completed_return = WCOS_Return_Preflight::report($keep_child, true);
+	wcos_compat_split_assert(!empty($completed_return['supported']), 'Authenticated completed Split child was rejected solely because of its inherited paid-class status.');
+
+	/* Paid-class processing status is operational state, not child payment ownership. */
+	update_option('order_splitter_status_allowed', array('wc-completed', 'wc-processing', 'packed', 'wc-on-hold'));
+	$payment_product = wcos_compat_split_product('WCOS source-only payment child', '13.00');
+	$payment_product->set_manage_stock(true);
+	$payment_product->set_stock_quantity(30);
+	$payment_product->save();
+	$product_ids[] = $payment_product->get_id();
+	$processing_source = wcos_compat_split_order('processing', array(array($payment_product, 3)));
+	$order_ids[] = $processing_source->get_id();
+	$processing_item_id = (int) key($processing_source->get_items('line_item'));
+	$processing_stock_before = WCOS_Order_Contract_Snapshot::product_stock($processing_source);
+	$processing_reduced_before = WCOS_Order_Contract_Snapshot::aggregate(array($processing_source))['stock_reduced'];
+	$processing_verified = wcos_compat_split_confirm($processing_source, array('processing-child' => array($processing_item_id => '1.000000')), $user_id);
+	$processing_children = (new WCOS_Mutation_Gateway())->split_manual_confirmed(
+		$processing_source,
+		$processing_verified['plan'],
+		$processing_verified['operation_id'],
+		$processing_verified['price_precision'],
+		$processing_verified
+	);
+	$processing_child = wc_get_order(reset($processing_children)->get_id());
+	$order_ids[] = $processing_child->get_id();
+	$processing_source = wc_get_order($processing_source->get_id());
+	wcos_compat_split_assert('processing' === $processing_child->get_status() && $processing_child->is_paid(), 'Processing Split child did not retain its paid-class source status.');
+	wcos_compat_split_assert(null === $processing_child->get_date_paid() && '' === (string) $processing_child->get_transaction_id(), 'Processing Split child gained independent payment evidence.');
+	wcos_compat_split_assert($processing_stock_before === WCOS_Order_Contract_Snapshot::product_stock($processing_source), 'Processing Split changed physical stock.');
+	wcos_compat_split_assert($processing_reduced_before === WCOS_Order_Contract_Snapshot::aggregate(array($processing_source, $processing_child))['stock_reduced'], 'Processing Split changed family _reduced_stock ownership.');
+	$processing_lineage = WCOS_Return_Lineage_Authority::resolve($processing_child);
+	wcos_compat_split_assert(WCOS_Return_Lineage_Authority::proves_source_only_payment($processing_lineage), 'Processing Split child did not receive sealed source-only payment authority.');
+	wcos_compat_split_assert(false === strpos(wp_json_encode($processing_lineage['payment_ownership_authority']), '@example.test'), 'Payment ownership authority leaked customer PII.');
+	$processing_return = WCOS_Return_Preflight::report($processing_child, true);
+	wcos_compat_split_assert(!empty($processing_return['supported']), 'Authenticated processing Split child was rejected solely because of its inherited paid-class status.');
+	$bulk_review = WCOS_Bulk_Return_Review_Store::create(array($processing_child->get_id()), $user_id);
+	wcos_compat_split_assert(!empty($bulk_review['plan']['all_eligible']), 'Authenticated processing Split child remained ineligible for Bulk Return.');
+	WCOS_Bulk_Return_Review_Store::delete($bulk_review['review_id']);
+
+	$processing_child->set_transaction_id('wcos-child-owned-transaction');
+	$processing_child->save();
+	$transaction_return = WCOS_Return_Preflight::report(wc_get_order($processing_child->get_id()), true);
+	wcos_compat_split_assert(empty($transaction_return['supported']) && 'child_payment_ownership' === $transaction_return['reason'], 'Source-only policy bypassed child transaction ownership.');
+	$processing_child = wc_get_order($processing_child->get_id());
+	$processing_child->set_transaction_id('');
+	$processing_child->save();
+	$processing_child = wc_get_order($processing_child->get_id());
+	$processing_child->set_date_paid(time());
+	$processing_child->save();
+	$paid_date_return = WCOS_Return_Preflight::report(wc_get_order($processing_child->get_id()), true);
+	wcos_compat_split_assert(empty($paid_date_return['supported']) && 'child_payment_ownership' === $paid_date_return['reason'], 'Source-only policy bypassed child paid-date ownership.');
+	$processing_child = wc_get_order($processing_child->get_id());
+	$processing_child->set_date_paid(null);
+	$processing_child->save();
+
+	$processing_journal_key = 'wcos_mutation_op_' . hash('sha256', absint($processing_source->get_id()) . '|' . sanitize_key($processing_verified['operation_id']));
+	$processing_journal = WCOS_Operation_Journal::get($processing_source, $processing_verified['operation_id']);
+	$missing_policy_journal = $processing_journal;
+	unset($missing_policy_journal['context']['commercial_policy']);
+	update_option($processing_journal_key, $missing_policy_journal, false);
+	wp_cache_delete($processing_journal_key, 'options');
+	$missing_policy_return = WCOS_Return_Preflight::report(wc_get_order($processing_child->get_id()), true);
+	update_option($processing_journal_key, $processing_journal, false);
+	wp_cache_delete($processing_journal_key, 'options');
+	wcos_compat_split_assert(empty($missing_policy_return['supported']) && 'split_fingerprint_mismatch' === $missing_policy_return['reason'], 'Missing current commercial policy obtained the paid-status exception.');
+
+	$tampered_policy_journal = $processing_journal;
+	$tampered_policy_journal['context']['commercial_policy']['payment'] = 'child_owned';
+	$tampered_policy_journal['context']['commercial_policy']['policy_fingerprint'] = WCOS_Split_Commercial_Policy::fingerprint($tampered_policy_journal['context']['commercial_policy']);
+	update_option($processing_journal_key, $tampered_policy_journal, false);
+	wp_cache_delete($processing_journal_key, 'options');
+	$tampered_policy_return = WCOS_Return_Preflight::report(wc_get_order($processing_child->get_id()), true);
+	update_option($processing_journal_key, $processing_journal, false);
+	wp_cache_delete($processing_journal_key, 'options');
+	wcos_compat_split_assert(empty($tampered_policy_return['supported']) && 'split_commercial_policy_invalid' === $tampered_policy_return['reason'], 'Tampered commercial policy obtained the paid-status exception.');
+	wcos_compat_split_assert(!empty(WCOS_Return_Preflight::report(wc_get_order($processing_child->get_id()), true)['supported']), 'Restored source-only payment authority did not recover deterministically.');
+	update_option('order_splitter_status_allowed', array('wc-completed', 'packed', 'wc-on-hold', 'wc-not-registered'));
 
 	/* Review-to-execute settings drift is rejected before journal start. */
 	$drift_source = wcos_compat_split_order('completed', array(array($product, 3)));
@@ -338,6 +426,8 @@ try {
 	$order_ids[] = $old_child->get_id();
 	wcos_compat_split_assert('pending' === $old_child->get_status() && empty($old_child->get_items('shipping')), 'Old durable journal did not retain pending-child/keep-shipping semantics.');
 	wcos_compat_split_assert(1 === count(wc_get_order($old_source->get_id())->get_items('shipping')), 'Old durable journal changed source shipping ownership.');
+	$old_lineage = WCOS_Return_Lineage_Authority::resolve(wc_get_order($old_child->get_id()));
+	wcos_compat_split_assert(!WCOS_Return_Lineage_Authority::proves_source_only_payment($old_lineage), 'Legacy Split journal obtained current source-only payment authority.');
 
 	$current_without_policy = $old_record;
 	$current_without_policy['context']['policy_version'] = WCOS_Split_Commercial_Policy::POLICY_VERSION;

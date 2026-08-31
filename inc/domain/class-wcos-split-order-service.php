@@ -412,6 +412,12 @@ final class WCOS_Split_Order_Service {
 		if (is_wp_error($result)) {
 			throw new RuntimeException($result->get_error_message());
 		}
+		if ('source_only' === $commercial_policy['payment']
+			&& 'keep_on_source' === $commercial_policy['payment_transaction']) {
+			/* Paid-class status setters may infer a paid date; Split children own neither. */
+			$child->set_date_paid(null);
+			$child->set_transaction_id('');
+		}
 		$child->set_address($source->get_address('billing'), 'billing');
 		$child->set_address($source->get_address('shipping'), 'shipping');
 		$child->update_meta_data(self::RELATION_PARENT_META, $source->get_id());
@@ -595,6 +601,11 @@ final class WCOS_Split_Order_Service {
 		}
 		if ((string) $commercial_policy['child_status'] !== $child->get_status()) {
 			throw new RuntimeException(__('A Split child does not have the frozen source status.', 'wc-order-splitter'));
+		}
+		if ('source_only' === $commercial_policy['payment']
+			&& 'keep_on_source' === $commercial_policy['payment_transaction']
+			&& (null !== $child->get_date_paid('edit') || '' !== (string) $child->get_transaction_id('edit'))) {
+			throw new RuntimeException(__('A Split child unexpectedly owns payment transaction or paid-date evidence.', 'wc-order-splitter'));
 		}
 		$expected_shipping_count = WCOS_Split_Commercial_Policy::SHIPPING_REPLICATE_TO_EACH_CHILD === $commercial_policy['shipping']
 			? count($source->get_items('shipping'))
