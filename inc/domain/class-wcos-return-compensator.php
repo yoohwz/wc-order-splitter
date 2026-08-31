@@ -175,7 +175,7 @@ final class WCOS_Return_Compensator {
 		}
 		self::boundary($lease, $child, $original, $record, $snapshot, $added_ids, 'complete', 'after_forward_relations');
 		WCOS_Return_Recovery_Snapshot::assert_physical_stock_unchanged($snapshot, $child, $plan);
-		WCOS_Return_Recovery_Snapshot::assert_success_contract($snapshot, $child, $original);
+		WCOS_Return_Recovery_Snapshot::assert_success_contract($snapshot, $child, $original, $plan);
 		$destinations = isset($record['context']['return_destination_item_ids']) ? (array) $record['context']['return_destination_item_ids'] : array();
 		WCOS_Return_Recovery_Snapshot::assert_single_operational_owner($snapshot, $child, $original, $destinations);
 		if (WCOS_Return_Recovery_State_Graph::RELATIONS_COMPLETE === $state) {

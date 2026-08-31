@@ -36,9 +36,14 @@ final class WCOS_Return_Lineage_Authority {
 
 		$raw_source_id = $child->get_meta(WCOS_Split_Order_Service::RELATION_PARENT_META, true);
 		if ('' === $raw_source_id || null === $raw_source_id) {
-			$legacy = self::legacy_candidate($child);
-			if (!empty($legacy['legacy_parent_id'])) {
-				self::reject('legacy_lineage_not_authoritative', __('Legacy Split metadata is diagnostic only and cannot authorize Return.', 'wc-order-splitter'));
+			$raw_operation_id = $child->get_meta(WCOS_Split_Order_Service::OPERATION_META, true);
+			$raw_child_key = $child->get_meta(WCOS_Split_Order_Service::CHILD_KEY_META, true);
+			if (('' !== $raw_operation_id && null !== $raw_operation_id) || ('' !== $raw_child_key && null !== $raw_child_key)) {
+				self::reject('hardened_lineage_partial', __('Partial hardened Split metadata cannot fall back to legacy compatibility.', 'wc-order-splitter'));
+			}
+			$legacy_parent = $child->get_meta('yoos_original_order', true);
+			if ('' !== $legacy_parent && null !== $legacy_parent) {
+				return WCOS_Legacy_Return_Compatibility_Authority::resolve($child);
 			}
 			self::reject('lineage_missing', __('This order does not carry hardened Split parent authority.', 'wc-order-splitter'));
 		}
@@ -156,6 +161,9 @@ final class WCOS_Return_Lineage_Authority {
 	}
 
 	public static function fingerprint(array $authority) {
+		if (WCOS_Legacy_Return_Compatibility_Authority::is_authority($authority)) {
+			return WCOS_Legacy_Return_Compatibility_Authority::fingerprint($authority);
+		}
 		$copy = $authority;
 		unset($copy['authority_fingerprint']);
 		return WCOS_Mutation_Fingerprint::create(
@@ -165,6 +173,10 @@ final class WCOS_Return_Lineage_Authority {
 		);
 	}
 
+	public static function line_identity_authority($identity_fingerprint) {
+		return self::sealed_fingerprint('line_identity', $identity_fingerprint);
+	}
+
 	/**
 	 * Proves that a paid-class child status is inherited operational state only.
 	 *
@@ -172,6 +184,9 @@ final class WCOS_Return_Lineage_Authority {
 	 * preflight rejection. Legacy or malformed lineage never obtains this proof.
 	 */
 	public static function proves_source_only_payment(array $authority) {
+		if (WCOS_Legacy_Return_Compatibility_Authority::is_authority($authority)) {
+			return WCOS_Legacy_Return_Compatibility_Authority::proves_source_only_payment($authority);
+		}
 		if (empty($authority['authority_fingerprint'])
 			|| !hash_equals((string) $authority['authority_fingerprint'], self::fingerprint($authority))
 			|| empty($authority['payment_ownership_authority'])
@@ -464,6 +479,10 @@ final class WCOS_Return_Lineage_Authority {
 				$pair = is_array($record) ? WCOS_Return_Journal_Context::pair_from_record($record) : null;
 			} catch (Throwable $throwable) {
 				$pair = null;
+			}
+			if (is_array($pair)
+				&& WCOS_Legacy_Return_Compatibility_Authority::LINEAGE_BASIS === (isset($pair['lineage_basis']) ? $pair['lineage_basis'] : '')) {
+				continue;
 			}
 			if (!$child_id || '' === $operation_id || !$child instanceof WC_Order || !is_array($pair)
 				|| $source_id !== absint($pair['original_order_id']) || $child_id !== absint($pair['child_order_id'])

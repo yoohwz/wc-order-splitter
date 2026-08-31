@@ -52,6 +52,9 @@ final class WCOS_Return_Recovery_Snapshot {
 		$snapshot['child_archive_signature_before'] = self::child_archive_signature($child);
 		$active_contract = WCOS_Order_Contract_Snapshot::aggregate(array($child, $original), $pair['price_precision']);
 		unset($active_contract['stock_reduced']);
+		if (WCOS_Return_Plan::is_legacy_compatibility($plan)) {
+			$active_contract = self::exclude_retained_child_shipping($active_contract, $child, $pair['price_precision']);
+		}
 		$snapshot['active_economic_contract_before'] = $active_contract;
 		$snapshot['active_economic_before_signature'] = WCOS_Mutation_Fingerprint::create('return_active_economic_v1', $original->get_id(), $active_contract);
 		$snapshot['expected_checkpoint_signatures'] = array(
@@ -292,9 +295,12 @@ final class WCOS_Return_Recovery_Snapshot {
 		return false;
 	}
 
-	public static function assert_success_contract(array $snapshot, WC_Order $child, WC_Order $original) {
+	public static function assert_success_contract(array $snapshot, WC_Order $child, WC_Order $original, array $plan = array()) {
 		if (!hash_equals(self::normalized_fingerprint($snapshot['child_archive_signature_before']), self::child_archive_signature($child))) {
 			throw new RuntimeException(__('Return retirement did not preserve the complete child commercial archive.', 'wc-order-splitter'));
+		}
+		if (WCOS_Return_Plan::is_legacy_compatibility($plan)) {
+			WCOS_Legacy_Return_Compatibility_Authority::assert_child_shipping($child, $plan['child_shipping_authority'], $snapshot['price_precision']);
 		}
 		$active = WCOS_Order_Contract_Snapshot::aggregate(array($original), $snapshot['price_precision']);
 		unset($active['stock_reduced']);
@@ -303,6 +309,33 @@ final class WCOS_Return_Recovery_Snapshot {
 			throw new RuntimeException(__('The original order does not conserve active Return economic ownership.', 'wc-order-splitter'));
 		}
 		return true;
+	}
+
+	private static function exclude_retained_child_shipping(array $contract, WC_Order $child, $precision) {
+		$shipping_units = WCOS_Decimal::to_units($child->get_shipping_total(), $precision);
+		$shipping_tax_units = WCOS_Decimal::to_units($child->get_shipping_tax(), $precision);
+		foreach (array(
+			'shipping_total' => $shipping_units,
+			'tax_total' => $shipping_tax_units,
+			'grand_total' => $shipping_units + $shipping_tax_units,
+		) as $field => $subtract) {
+			$contract[$field] = WCOS_Decimal::from_units(WCOS_Decimal::to_units($contract[$field], $precision) - $subtract, $precision);
+		}
+		foreach ($child->get_items('tax') as $tax_item) {
+			$rate_id = (string) absint($tax_item->get_rate_id());
+			$subtract = WCOS_Decimal::to_units($tax_item->get_shipping_tax_total(), $precision);
+			if (isset($contract['tax_by_rate'][$rate_id])) {
+				$contract['tax_by_rate'][$rate_id]['shipping'] = WCOS_Decimal::from_units(
+					WCOS_Decimal::to_units($contract['tax_by_rate'][$rate_id]['shipping'], $precision) - $subtract,
+					$precision
+				);
+				if (0 === WCOS_Decimal::to_units($contract['tax_by_rate'][$rate_id]['cart'], $precision)
+					&& 0 === WCOS_Decimal::to_units($contract['tax_by_rate'][$rate_id]['shipping'], $precision)) {
+					unset($contract['tax_by_rate'][$rate_id]);
+				}
+			}
+		}
+		return $contract;
 	}
 
 	private static function participant_state(WC_Order $order, array $owned_item_ids, array $baseline_all_ids = array()) {

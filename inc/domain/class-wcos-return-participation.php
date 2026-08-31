@@ -97,6 +97,25 @@ final class WCOS_Return_Participation {
 		if (empty($state['child']) || empty($state['original'])) {
 			throw new RuntimeException(__('Return participation must be reciprocal before active Split cleanup.', 'wc-order-splitter'));
 		}
+		$record = WCOS_Operation_Journal::get($child, sanitize_key((string) $operation_id));
+		$pair = is_array($record) ? WCOS_Return_Journal_Context::pair_from_record($record) : null;
+		$is_legacy_compatibility = is_array($pair)
+			&& WCOS_Legacy_Return_Compatibility_Authority::LINEAGE_BASIS === (isset($pair['lineage_basis']) ? $pair['lineage_basis'] : '');
+		if ($is_legacy_compatibility) {
+			$children = WCOS_Legacy_Return_Compatibility_Authority::legacy_child_ids($original, true);
+			$child_id = absint($child->get_id());
+			if (!in_array($child_id, $children, true)) {
+				return true;
+			}
+			$children = array_values(array_filter($children, static function($candidate) use ($child_id) { return $candidate !== $child_id; }));
+			$fresh = wc_get_order($original->get_id());
+			$fresh->update_meta_data('yoos_splitted_order', implode(',', $children));
+			$fresh->save_meta_data();
+			if (WCOS_Legacy_Return_Compatibility_Authority::legacy_child_ids(wc_get_order($original->get_id()), true) !== $children) {
+				throw new RuntimeException(__('The returned legacy child could not be removed from reciprocal compatibility authority.', 'wc-order-splitter'));
+			}
+			return true;
+		}
 		$children = self::canonical_ids($original->get_meta(WCOS_Split_Order_Service::RELATION_CHILDREN_META, true));
 		$child_id = absint($child->get_id());
 		if (!in_array($child_id, $children, true)) {
@@ -140,11 +159,20 @@ final class WCOS_Return_Participation {
 		if (empty($remaining['operation_ids'][$operation_id])) {
 			self::delete_exact_value($fresh_original, self::ORIGINAL_OPERATION_META, $operation_id);
 		}
-		$active = self::canonical_ids($fresh_original->get_meta(WCOS_Split_Order_Service::RELATION_CHILDREN_META, true));
-		if (!in_array($child_id, $active, true)) {
-			$active[] = $child_id;
-			sort($active, SORT_NUMERIC);
-			$fresh_original->update_meta_data(WCOS_Split_Order_Service::RELATION_CHILDREN_META, $active);
+		$is_legacy_compatibility = WCOS_Legacy_Return_Compatibility_Authority::LINEAGE_BASIS === (isset($pair['lineage_basis']) ? $pair['lineage_basis'] : '');
+		if ($is_legacy_compatibility) {
+			$active = WCOS_Legacy_Return_Compatibility_Authority::legacy_child_ids($fresh_original, true);
+			if (!in_array($child_id, $active, true)) {
+				$active[] = $child_id;
+				$fresh_original->update_meta_data('yoos_splitted_order', implode(',', $active));
+			}
+		} else {
+			$active = self::canonical_ids($fresh_original->get_meta(WCOS_Split_Order_Service::RELATION_CHILDREN_META, true));
+			if (!in_array($child_id, $active, true)) {
+				$active[] = $child_id;
+				sort($active, SORT_NUMERIC);
+				$fresh_original->update_meta_data(WCOS_Split_Order_Service::RELATION_CHILDREN_META, $active);
+			}
 		}
 		$fresh_original->save_meta_data();
 		$state = self::state_for_pair(wc_get_order($child_id), wc_get_order($original_id), $operation_id, $pair['pair_fingerprint']);
@@ -157,7 +185,13 @@ final class WCOS_Return_Participation {
 		$child_id = absint($child->get_id());
 		$original_id = absint($original->get_id());
 		$child_state = self::inspect($child);
-		$active = self::canonical_ids($original->get_meta(WCOS_Split_Order_Service::RELATION_CHILDREN_META, true));
+		$record = WCOS_Operation_Journal::get($child, $operation_id);
+		$pair = is_array($record) ? WCOS_Return_Journal_Context::pair_from_record($record) : null;
+		$is_legacy_compatibility = is_array($pair)
+			&& WCOS_Legacy_Return_Compatibility_Authority::LINEAGE_BASIS === (isset($pair['lineage_basis']) ? $pair['lineage_basis'] : '');
+		$active = $is_legacy_compatibility
+			? WCOS_Legacy_Return_Compatibility_Authority::legacy_child_ids($original, true)
+			: self::canonical_ids($original->get_meta(WCOS_Split_Order_Service::RELATION_CHILDREN_META, true));
 		return array(
 			'child' => !empty($child_state['complete']) && $original_id === $child_state['values']['returned_to_order_id']
 				&& $operation_id === $child_state['values']['operation_id'] && $pair_fingerprint === $child_state['values']['pair_fingerprint'],

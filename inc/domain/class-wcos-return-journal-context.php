@@ -20,6 +20,8 @@ final class WCOS_Return_Journal_Context {
 		}
 		$plan_fingerprint = self::fingerprint(isset($plan['plan_fingerprint']) ? $plan['plan_fingerprint'] : '');
 		$lineage_fingerprint = self::fingerprint(isset($lineage_authority['authority_fingerprint']) ? $lineage_authority['authority_fingerprint'] : '');
+		$is_legacy_compatibility = WCOS_Return_Plan::is_legacy_compatibility($plan)
+			&& WCOS_Legacy_Return_Compatibility_Authority::is_authority($lineage_authority);
 		if ('' === $plan_fingerprint || !hash_equals($plan_fingerprint, WCOS_Return_Plan::fingerprint($plan))
 			|| '' === $lineage_fingerprint || !hash_equals($lineage_fingerprint, WCOS_Return_Lineage_Authority::fingerprint($lineage_authority))
 			|| $child_id !== absint(isset($plan['child_order_id']) ? $plan['child_order_id'] : 0)
@@ -31,6 +33,12 @@ final class WCOS_Return_Journal_Context {
 			$original_id,
 			isset($plan['split_operation_id']) ? $plan['split_operation_id'] : ''
 		);
+		if ($is_legacy_compatibility
+			&& (!hash_equals((string) $plan['legacy_relation_authority_fingerprint'], (string) $lineage_authority['legacy_relation_authority_fingerprint'])
+				|| $plan['child_shipping_authority'] !== $lineage_authority['child_shipping_authority']
+				|| $source_evolution_authority !== $lineage_authority['source_evolution_authority'])) {
+			throw new RuntimeException(__('Legacy Return plan, relation, shipping, and source-evolution authority do not form one pair.', 'wc-order-splitter'));
+		}
 
 		$authority = array(
 			'child_order_id' => $child_id,
@@ -38,15 +46,15 @@ final class WCOS_Return_Journal_Context {
 			'split_operation_id' => sanitize_key((string) $plan['split_operation_id']),
 			'split_child_key' => sanitize_key((string) $plan['split_child_key']),
 			'lineage_authority_fingerprint' => $lineage_fingerprint,
-			'plan_schema_version' => WCOS_Return_Plan::SCHEMA_VERSION,
-			'plan_policy_version' => WCOS_Return_Plan::POLICY_VERSION,
+			'plan_schema_version' => (int) $plan['schema_version'],
+			'plan_policy_version' => (int) $plan['policy_version'],
 			'plan_fingerprint' => $plan_fingerprint,
 			'price_precision' => WCOS_Price_Precision_Scope::validate($plan['price_precision']),
 			'currency' => (string) $plan['currency'],
 			'prices_include_tax' => (bool) $plan['prices_include_tax'],
-			'preflight_policy_version' => WCOS_Return_Preflight::POLICY_VERSION,
-			'lineage_schema_version' => WCOS_Return_Lineage_Authority::SCHEMA_VERSION,
-			'lineage_policy_version' => WCOS_Return_Lineage_Authority::POLICY_VERSION,
+			'preflight_policy_version' => $is_legacy_compatibility ? WCOS_Return_Preflight::LEGACY_COMPATIBILITY_POLICY_VERSION : WCOS_Return_Preflight::POLICY_VERSION,
+			'lineage_schema_version' => (int) $lineage_authority['schema_version'],
+			'lineage_policy_version' => (int) $lineage_authority['policy_version'],
 			'participation_schema_version' => WCOS_Return_Participation::SCHEMA_VERSION,
 			'retirement_policy_schema_version' => WCOS_Return_Retirement_Policy::SCHEMA_VERSION,
 			'retirement_policy_identifier' => WCOS_Return_Retirement_Policy::approved_identifier(),
@@ -58,6 +66,13 @@ final class WCOS_Return_Journal_Context {
 			'source_evolution_authority' => $source_evolution_authority,
 			'source_evolution_authority_fingerprint' => self::fingerprint($source_evolution_authority['authority_fingerprint']),
 		);
+		if ($is_legacy_compatibility) {
+			$authority['lineage_basis'] = WCOS_Legacy_Return_Compatibility_Authority::LINEAGE_BASIS;
+			$authority['legacy_relation_authority_fingerprint'] = self::fingerprint($plan['legacy_relation_authority_fingerprint']);
+			$shipping = isset($plan['child_shipping_authority']) && is_array($plan['child_shipping_authority']) ? $plan['child_shipping_authority'] : array();
+			WCOS_Legacy_Return_Compatibility_Authority::assert_shipping_authority($shipping, $child_id, $plan['price_precision']);
+			$authority['child_shipping_authority_fingerprint'] = self::fingerprint($shipping['authority_fingerprint']);
+		}
 		$authority = self::canonical_authority($authority);
 		if (!is_array($authority)) {
 			throw new RuntimeException(__('The canonical Return pair authority could not be constructed.', 'wc-order-splitter'));
@@ -226,6 +241,9 @@ final class WCOS_Return_Journal_Context {
 			'order_stock_flag_policy' => $pair['order_stock_flag_policy'],
 			'source_evolution' => WCOS_Return_Source_Evolution_Authority::create_terminal_evolution($pair, $original),
 		);
+		if (isset($pair['lineage_basis'])) {
+			$result['lineage_basis'] = $pair['lineage_basis'];
+		}
 		$result['result_fingerprint'] = self::terminal_result_fingerprint($result);
 		return $result;
 	}
@@ -274,6 +292,12 @@ final class WCOS_Return_Journal_Context {
 			'retirement_policy_schema_version', 'source_evolution_authority',
 			'source_evolution_authority_fingerprint', 'split_child_key', 'split_operation_id', 'stock_ownership_policy',
 		);
+		$is_legacy_compatibility = WCOS_Legacy_Return_Compatibility_Authority::LINEAGE_BASIS === sanitize_key(isset($authority['lineage_basis']) ? (string) $authority['lineage_basis'] : '');
+		if ($is_legacy_compatibility) {
+			$expected[] = 'lineage_basis';
+			$expected[] = 'legacy_relation_authority_fingerprint';
+			$expected[] = 'child_shipping_authority_fingerprint';
+		}
 		$actual = array_keys($authority);
 		sort($actual, SORT_STRING);
 		sort($expected, SORT_STRING);
@@ -288,16 +312,28 @@ final class WCOS_Return_Journal_Context {
 			self::fingerprint(isset($authority['plan_fingerprint']) ? $authority['plan_fingerprint'] : ''),
 			self::fingerprint(isset($authority['source_evolution_authority_fingerprint']) ? $authority['source_evolution_authority_fingerprint'] : ''),
 		);
+		if ($is_legacy_compatibility) {
+			$fingerprints[] = self::fingerprint(isset($authority['legacy_relation_authority_fingerprint']) ? $authority['legacy_relation_authority_fingerprint'] : '');
+			$fingerprints[] = self::fingerprint(isset($authority['child_shipping_authority_fingerprint']) ? $authority['child_shipping_authority_fingerprint'] : '');
+		}
+		$plan_versions_valid = $is_legacy_compatibility
+			? WCOS_Return_Plan::COMPATIBILITY_SCHEMA_VERSION === (int) $authority['plan_schema_version']
+				&& WCOS_Return_Plan::COMPATIBILITY_POLICY_VERSION === (int) $authority['plan_policy_version']
+			: WCOS_Return_Plan::SCHEMA_VERSION === (int) $authority['plan_schema_version']
+				&& WCOS_Return_Plan::POLICY_VERSION === (int) $authority['plan_policy_version'];
+		$lineage_versions_valid = $is_legacy_compatibility
+			? WCOS_Legacy_Return_Compatibility_Authority::SCHEMA_VERSION === (int) $authority['lineage_schema_version']
+				&& WCOS_Legacy_Return_Compatibility_Authority::POLICY_VERSION === (int) $authority['lineage_policy_version']
+				&& WCOS_Return_Preflight::LEGACY_COMPATIBILITY_POLICY_VERSION === (int) $authority['preflight_policy_version']
+			: WCOS_Return_Lineage_Authority::SCHEMA_VERSION === (int) $authority['lineage_schema_version']
+				&& WCOS_Return_Lineage_Authority::POLICY_VERSION === (int) $authority['lineage_policy_version']
+				&& WCOS_Return_Preflight::POLICY_VERSION === (int) $authority['preflight_policy_version'];
 		if ($actual !== $expected || !$child_id || !$original_id || $child_id === $original_id
 			|| in_array('', $fingerprints, true) || !is_array($authority['source_evolution_authority'])
 			|| $precision !== WCOS_Price_Precision_Scope::validate($precision)
 			|| 1 !== preg_match('/^[A-Z]{3}$/D', (string) $authority['currency'])
 			|| !in_array($authority['prices_include_tax'], array(true, false), true)
-			|| WCOS_Return_Plan::SCHEMA_VERSION !== (int) $authority['plan_schema_version']
-			|| WCOS_Return_Plan::POLICY_VERSION !== (int) $authority['plan_policy_version']
-			|| WCOS_Return_Preflight::POLICY_VERSION !== (int) $authority['preflight_policy_version']
-			|| WCOS_Return_Lineage_Authority::SCHEMA_VERSION !== (int) $authority['lineage_schema_version']
-			|| WCOS_Return_Lineage_Authority::POLICY_VERSION !== (int) $authority['lineage_policy_version']
+			|| !$plan_versions_valid || !$lineage_versions_valid
 			|| WCOS_Return_Participation::SCHEMA_VERSION !== (int) $authority['participation_schema_version']
 			|| WCOS_Return_Retirement_Policy::SCHEMA_VERSION !== (int) $authority['retirement_policy_schema_version']
 			|| WCOS_Return_Retirement_Policy::approved_identifier() !== sanitize_key((string) $authority['retirement_policy_identifier'])
@@ -313,6 +349,11 @@ final class WCOS_Return_Journal_Context {
 		$canonical['price_precision'] = $precision;
 		foreach (array('child_signature_before', 'original_signature_before', 'original_relation_signature_before', 'lineage_authority_fingerprint', 'plan_fingerprint', 'source_evolution_authority_fingerprint') as $field) {
 			$canonical[$field] = self::fingerprint($authority[$field]);
+		}
+		if ($is_legacy_compatibility) {
+			$canonical['lineage_basis'] = WCOS_Legacy_Return_Compatibility_Authority::LINEAGE_BASIS;
+			$canonical['legacy_relation_authority_fingerprint'] = self::fingerprint($authority['legacy_relation_authority_fingerprint']);
+			$canonical['child_shipping_authority_fingerprint'] = self::fingerprint($authority['child_shipping_authority_fingerprint']);
 		}
 		return '' === $canonical['split_operation_id'] || '' === $canonical['split_child_key'] ? null : $canonical;
 	}
@@ -398,6 +439,16 @@ final class WCOS_Return_Journal_Context {
 			'stock_ownership_policy' => sanitize_key((string) $copy['stock_ownership_policy']),
 			'order_stock_flag_policy' => sanitize_key((string) $copy['order_stock_flag_policy']),
 		);
+		$is_legacy_compatibility = WCOS_Return_Plan::COMPATIBILITY_SCHEMA_VERSION === $canonical['plan_schema_version']
+			&& WCOS_Return_Plan::COMPATIBILITY_POLICY_VERSION === $canonical['plan_policy_version']
+			&& WCOS_Legacy_Return_Compatibility_Authority::SCHEMA_VERSION === $canonical['lineage_schema_version']
+			&& WCOS_Legacy_Return_Compatibility_Authority::POLICY_VERSION === $canonical['lineage_policy_version']
+			&& WCOS_Return_Preflight::LEGACY_COMPATIBILITY_POLICY_VERSION === $canonical['preflight_policy_version'];
+		$current_versions = WCOS_Return_Plan::SCHEMA_VERSION === $canonical['plan_schema_version']
+			&& WCOS_Return_Plan::POLICY_VERSION === $canonical['plan_policy_version']
+			&& WCOS_Return_Lineage_Authority::SCHEMA_VERSION === $canonical['lineage_schema_version']
+			&& WCOS_Return_Lineage_Authority::POLICY_VERSION === $canonical['lineage_policy_version']
+			&& WCOS_Return_Preflight::POLICY_VERSION === $canonical['preflight_policy_version'];
 		if (self::CONFIRMATION_SCHEMA_VERSION !== $canonical['confirmation_schema_version']
 			|| '' === $canonical['operation_id'] || !$canonical['operator_user_id']
 			|| !$canonical['child_order_id'] || !$canonical['original_order_id']
@@ -408,11 +459,7 @@ final class WCOS_Return_Journal_Context {
 			|| 1 !== preg_match('/^[A-Z]{3}$/D', $canonical['currency'])
 			|| !in_array($canonical['prices_include_tax'], array(true, false), true)
 			|| WCOS_Return_Order_Service::POLICY_VERSION !== $canonical['return_service_policy_version']
-			|| WCOS_Return_Preflight::POLICY_VERSION !== $canonical['preflight_policy_version']
-			|| WCOS_Return_Plan::SCHEMA_VERSION !== $canonical['plan_schema_version']
-			|| WCOS_Return_Plan::POLICY_VERSION !== $canonical['plan_policy_version']
-			|| WCOS_Return_Lineage_Authority::SCHEMA_VERSION !== $canonical['lineage_schema_version']
-			|| WCOS_Return_Lineage_Authority::POLICY_VERSION !== $canonical['lineage_policy_version']
+			|| (!$current_versions && !$is_legacy_compatibility)
 			|| self::SCHEMA_VERSION !== $canonical['journal_context_schema_version']
 			|| WCOS_Return_Retirement_Policy::SCHEMA_VERSION !== $canonical['retirement_policy_schema_version']
 			|| WCOS_Return_Retirement_Policy::approved_identifier() !== $canonical['retirement_policy_identifier']

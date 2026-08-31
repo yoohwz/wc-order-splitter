@@ -250,6 +250,7 @@ jobs:
           grep -Fq 'class-wcos-return-compensator.php' inc/cores/script.php
           grep -Fq 'class-wcos-return-retirement-policy.php' inc/cores/script.php
           grep -Fq 'class-wcos-return-source-evolution-authority.php' inc/cores/script.php
+          grep -Fq 'class-wcos-legacy-return-compatibility-authority.php' inc/cores/script.php
           grep -Fq "'return' === \$type" inc/domain/class-wcos-mutation-recovery-coordinator.php
           grep -Fq 'const APPROVED = self::NON_FORCE_TRASH_ARCHIVE;' inc/domain/class-wcos-return-retirement-policy.php
           grep -Fq 'class-wcos-return-order-service.php' inc/cores/script.php
@@ -319,6 +320,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Stage exact public 1.4.11 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline_sha=e1d8aeb8eff38f4ce69dad1a08993e17521c6359
+          baseline_tree=75140a414cd637d134f860d8a70e7f92cbe4853c
+          baseline_dir=tests/integration/.wcos-compat-003-baseline
+          test "$(git rev-parse "$baseline_sha")" = "$baseline_sha"
+          test "$(git rev-parse "$baseline_sha^{tree}")" = "$baseline_tree"
+          test ! -e "$baseline_dir"
+          mkdir -p "$baseline_dir"
+          git archive "$baseline_sha" | tar -x -C "$baseline_dir"
+          test "$(sed -n 's/^ \* Version: //p' "$baseline_dir/wc-order-splitter.php" | head -n 1)" = 1.4.11
 
       - name: Setup Node
         uses: actions/setup-node@v7
@@ -334,30 +351,6 @@ jobs:
 
       - name: Install and activate WooCommerce 11.0.1
         run: npx wp-env run cli wp plugin install https://downloads.wordpress.org/plugin/woocommerce.11.0.1.zip --activate
-
-      - name: Install early-translation monitor
-        run: |
-          npx wp-env run cli wp eval '
-            wp_mkdir_p(WPMU_PLUGIN_DIR);
-            @unlink(WP_CONTENT_DIR . "/wcos-early-translation.jsonl");
-            $source = WP_PLUGIN_DIR . "/wc-order-splitter/tests/integration/early-translation-monitor.php";
-            $target = WPMU_PLUGIN_DIR . "/wcos-early-translation-monitor.php";
-            if (!copy($source, $target)) { exit(1); }
-          '
-
-      - name: Activate Order Splitter
-        run: npx wp-env run cli wp plugin activate wc-order-splitter
-
-      - name: Reject early WooCommerce translation loading
-        run: |
-          npx wp-env run cli wp eval '
-            $log = WP_CONTENT_DIR . "/wcos-early-translation.jsonl";
-            if (file_exists($log) && filesize($log) > 0) {
-              fwrite(STDERR, file_get_contents($log));
-              exit(1);
-            }
-            echo "early-translation-loading-ok\n";
-          '
 
       - name: Configure legacy order storage
         if: matrix.storage == 'legacy'
@@ -376,6 +369,61 @@ jobs:
         run: |
           npx wp-env run cli wp option update woocommerce_custom_orders_table_enabled yes
           npx wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled yes
+
+      - name: Install exact public 1.4.11 baseline beside the current checkout
+        run: |
+          npx wp-env run cli wp eval '
+            $source = WP_PLUGIN_DIR . "/wc-order-splitter/tests/integration/.wcos-compat-003-baseline";
+            $target = WP_PLUGIN_DIR . "/wcos-legacy-1-4-11";
+            if (!is_dir($source) || file_exists($target) || !wp_mkdir_p($target)) { exit(1); }
+            $iterator = new RecursiveIteratorIterator(
+              new RecursiveDirectoryIterator($source, FilesystemIterator::SKIP_DOTS),
+              RecursiveIteratorIterator::SELF_FIRST
+            );
+            foreach ($iterator as $entry) {
+              $relative = substr($entry->getPathname(), strlen($source) + 1);
+              $destination = $target . "/" . $relative;
+              if ($entry->isDir()) {
+                if (!wp_mkdir_p($destination)) { exit(1); }
+              } elseif (!copy($entry->getPathname(), $destination)) {
+                exit(1);
+              }
+            }
+          '
+
+      - name: Create a genuine Split fixture with exact public 1.4.11
+        run: |
+          npx wp-env run cli wp plugin activate wcos-legacy-1-4-11
+          npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/compat-legacy-1-4-11-create.php
+          npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/compat-legacy-1-4-11-seal.php
+          npx wp-env run cli wp plugin deactivate wcos-legacy-1-4-11
+
+      - name: Remove exact public 1.4.11 before current runtime validation
+        run: npx wp-env run cli wp plugin delete wcos-legacy-1-4-11
+
+      - name: Install early-translation monitor
+        run: |
+          npx wp-env run cli wp eval '
+            wp_mkdir_p(WPMU_PLUGIN_DIR);
+            @unlink(WP_CONTENT_DIR . "/wcos-early-translation.jsonl");
+            $source = WP_PLUGIN_DIR . "/wc-order-splitter/tests/integration/early-translation-monitor.php";
+            $target = WPMU_PLUGIN_DIR . "/wcos-early-translation-monitor.php";
+            if (!copy($source, $target)) { exit(1); }
+          '
+
+      - name: Activate Order Splitter after the in-place fixture upgrade
+        run: npx wp-env run cli wp plugin activate wc-order-splitter
+
+      - name: Reject early WooCommerce translation loading
+        run: |
+          npx wp-env run cli wp eval '
+            $log = WP_CONTENT_DIR . "/wcos-early-translation.jsonl";
+            if (file_exists($log) && filesize($log) > 0) {
+              fwrite(STDERR, file_get_contents($log));
+              exit(1);
+            }
+            echo "early-translation-loading-ok\n";
+          '
 
       - name: Verify plugin, storage mode, and enabled production gate state
         shell: bash
@@ -495,6 +543,9 @@ jobs:
 
       - name: Verify 1.4.11 Split functional parity matrix
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/compat-split-functional-parity-smoke.php
+
+      - name: Verify genuine exact-1.4.11 legacy Return upgrade compatibility
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/compat-legacy-return-upgrade-smoke.php
 
       - name: Verify enabled Return domain and hardened Split lineage authority
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/return-domain-lineage-smoke.php

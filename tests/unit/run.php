@@ -35,6 +35,7 @@ require_once $root . 'class-wcos-merge-retirement-policy.php';
 require_once $root . 'class-wcos-merge-plan.php';
 require_once $root . 'class-wcos-merge-recovery-state-graph.php';
 require_once $root . 'class-wcos-return-participation.php';
+require_once $root . 'class-wcos-legacy-return-compatibility-authority.php';
 require_once $root . 'class-wcos-return-plan.php';
 require_once $root . 'class-wcos-return-retirement-policy.php';
 require_once $root . 'class-wcos-return-recovery-state-graph.php';

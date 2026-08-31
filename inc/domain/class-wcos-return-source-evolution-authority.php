@@ -15,7 +15,31 @@ final class WCOS_Return_Source_Evolution_Authority {
 	const POLICY_VERSION = 2;
 	const LEGACY_SCHEMA_VERSION = 1;
 	const LEGACY_POLICY_VERSION = 1;
+	const COMPATIBILITY_SCHEMA_VERSION = 3;
+	const COMPATIBILITY_POLICY_VERSION = 1;
 	const TERMINAL_SCHEMA_VERSION = 1;
+
+	/** Create one pair-scoped source snapshot for authenticated 1.4.11 compatibility. */
+	public static function legacy_compatibility_snapshot(WC_Order $original, $split_operation_id, $child_id, array $hardened_active_child_ids) {
+		$original_id = absint($original->get_id());
+		$child_id = absint($child_id);
+		$split_operation_id = sanitize_key((string) $split_operation_id);
+		if (!$original_id || !$child_id || $original_id === $child_id || '' === $split_operation_id) {
+			throw new InvalidArgumentException(__('Legacy Return source-evolution identity is incomplete.', 'wc-order-splitter'));
+		}
+		return self::compatibility_authority(
+			$original_id,
+			$split_operation_id,
+			0,
+			'',
+			self::sealed_signature('commercial', WCOS_Order_Contract_Snapshot::source_signature($original)),
+			self::sealed_signature('relation', WCOS_Order_Mutation_Snapshot::split_owned_signature($original)),
+			array($child_id),
+			array(),
+			array(),
+			$hardened_active_child_ids
+		);
+	}
 
 	public static function resolve(WC_Order $original, $split_operation_id, $base_commercial_signature, $base_relation_signature, array $initial_child_ids, array $split_lineages = array()) {
 		$original_id = absint($original->get_id());
@@ -74,7 +98,26 @@ final class WCOS_Return_Source_Evolution_Authority {
 				)) {
 				throw new RuntimeException(__('A Return source-evolution pointer lacks an authoritative child journal.', 'wc-order-splitter'));
 			}
+			$pair = WCOS_Return_Journal_Context::pair_from_record($record);
 			$result = WCOS_Return_Journal_Context::terminal_result_from_record($record);
+			if (is_array($pair)
+				&& WCOS_Legacy_Return_Compatibility_Authority::LINEAGE_BASIS === (isset($pair['lineage_basis']) ? $pair['lineage_basis'] : '')) {
+				$evolution = isset($result['source_evolution']) ? $result['source_evolution'] : array();
+				self::assert_terminal_evolution($evolution, $pair);
+				$before = $evolution['authority_before'];
+				$after = $evolution['authority_after'];
+				$events[] = array(
+					'type' => 'compatibility_return',
+					'operation_id' => sanitize_key((string) $result['operation_id']),
+					'before_commercial_signature' => $before['original_commercial_signature'],
+					'before_relation_signature' => $before['original_relation_signature'],
+					'after_commercial_signature' => $after['original_commercial_signature'],
+					'after_relation_signature' => $after['original_relation_signature'],
+					'before_active_child_ids' => $before['hardened_active_child_ids'],
+					'after_active_child_ids' => $after['hardened_active_child_ids'],
+				);
+				continue;
+			}
 			$operation_id = sanitize_key((string) $result['split_operation_id']);
 			$child_id = absint($result['child_order_id']);
 			if (!isset($lineages[$operation_id]) || !isset($all_target_ids[$child_id])
@@ -85,7 +128,6 @@ final class WCOS_Return_Source_Evolution_Authority {
 			if (empty($state['child']) || empty($state['original']) || empty($state['active_split_removed'])) {
 				throw new RuntimeException(__('Completed Return participation is incomplete or the child is still active.', 'wc-order-splitter'));
 			}
-			$pair = WCOS_Return_Journal_Context::pair_from_record($record);
 			$expected_child_signature = $lineages[$operation_id]['target_child_signatures'][$child_id];
 			if (!is_array($pair) || !hash_equals(
 				$pair['child_signature_before'], self::sealed_signature('child_commercial', $expected_child_signature)
@@ -129,7 +171,7 @@ final class WCOS_Return_Source_Evolution_Authority {
 		$last_return_authority = '';
 		foreach ($ordered as $ordinal => $event) {
 			if (0 === $ordinal) {
-				if ('split' !== $event['type'] || !empty($event['before_active_child_ids'])) {
+				if (!in_array($event['type'], array('split', 'compatibility_return'), true) || !empty($event['before_active_child_ids'])) {
 					throw new RuntimeException(__('Hardened source evolution does not begin at an empty Split relation state.', 'wc-order-splitter'));
 				}
 				$current_commercial = $event['before_commercial_signature'];
@@ -150,6 +192,10 @@ final class WCOS_Return_Source_Evolution_Authority {
 					throw new RuntimeException(__('A Split source transition does not preserve all active hardened siblings.', 'wc-order-splitter'));
 				}
 				$current_lineages[] = $event['lineage_fingerprint'];
+			} elseif ('compatibility_return' === $event['type']) {
+				if ($event['after_active_child_ids'] !== $current_active) {
+					throw new RuntimeException(__('Legacy compatibility Return changed unrelated hardened child authority.', 'wc-order-splitter'));
+				}
 			} else {
 				$child_id = $event['child_order_id'];
 				$expected_returned = self::ids(array_merge($current_returned, array($child_id)));
@@ -208,7 +254,15 @@ final class WCOS_Return_Source_Evolution_Authority {
 		$returned = self::ids(array_merge($before['returned_child_ids'], array($child_id)));
 		$pairs = array_values(array_unique(array_merge($before['completed_pair_fingerprints'], array($pair['pair_fingerprint']))));
 		sort($pairs, SORT_STRING);
-		if (self::LEGACY_SCHEMA_VERSION === (int) $before['schema_version']) {
+		if (self::COMPATIBILITY_SCHEMA_VERSION === (int) $before['schema_version']) {
+			$after = self::compatibility_authority(
+				$pair['original_order_id'], $pair['split_operation_id'], $before['sequence'] + 1,
+				$before['authority_fingerprint'],
+				self::sealed_signature('commercial', WCOS_Order_Contract_Snapshot::source_signature($original)),
+				self::sealed_signature('relation', WCOS_Order_Mutation_Snapshot::split_owned_signature($original)),
+				$active, $returned, $pairs, $before['hardened_active_child_ids']
+			);
+		} elseif (self::LEGACY_SCHEMA_VERSION === (int) $before['schema_version']) {
 			$after = self::legacy_authority(
 				$pair['original_order_id'], $pair['split_operation_id'], $before['sequence'] + 1,
 				$before['authority_fingerprint'],
@@ -253,6 +307,12 @@ final class WCOS_Return_Source_Evolution_Authority {
 				&& $before['split_lineage_fingerprints'] !== $after['split_lineage_fingerprints'])) {
 			throw new RuntimeException(__('Return terminal source-evolution evidence failed integrity verification.', 'wc-order-splitter'));
 		}
+		if (self::COMPATIBILITY_SCHEMA_VERSION === (int) $before['schema_version']
+			&& ($before['hardened_active_child_ids'] !== $after['hardened_active_child_ids']
+				|| WCOS_Legacy_Return_Compatibility_Authority::LINEAGE_BASIS !== $before['lineage_basis']
+				|| $before['lineage_basis'] !== $after['lineage_basis'])) {
+			throw new RuntimeException(__('Legacy Return terminal evolution changed unrelated hardened lineage authority.', 'wc-order-splitter'));
+		}
 		if (!empty($pair)) {
 			$child_id = absint($pair['child_order_id']);
 			if (!hash_equals($before['authority_fingerprint'], $pair['source_evolution_authority_fingerprint'])
@@ -270,6 +330,9 @@ final class WCOS_Return_Source_Evolution_Authority {
 		$schema = isset($authority['schema_version']) ? (int) $authority['schema_version'] : 0;
 		if (self::LEGACY_SCHEMA_VERSION === $schema) {
 			return self::assert_legacy_valid($authority, $original_order_id, $split_operation_id);
+		}
+		if (self::COMPATIBILITY_SCHEMA_VERSION === $schema) {
+			return self::assert_compatibility_valid($authority, $original_order_id, $split_operation_id);
 		}
 		$expected = array(
 			'active_child_ids', 'authority_fingerprint', 'completed_pair_fingerprints', 'original_commercial_signature',
@@ -353,6 +416,48 @@ final class WCOS_Return_Source_Evolution_Authority {
 		return true;
 	}
 
+	private static function assert_compatibility_valid(array $authority, $original_order_id, $split_operation_id) {
+		$expected = array(
+			'active_child_ids', 'authority_fingerprint', 'completed_pair_fingerprints', 'hardened_active_child_ids',
+			'lineage_basis', 'original_commercial_signature', 'original_order_id', 'original_relation_signature',
+			'policy_version', 'predecessor_fingerprint', 'returned_child_ids', 'schema_version', 'sequence', 'split_operation_id',
+		);
+		$actual = array_keys($authority);
+		sort($actual, SORT_STRING);
+		sort($expected, SORT_STRING);
+		$stored = self::fingerprint(isset($authority['authority_fingerprint']) ? $authority['authority_fingerprint'] : '');
+		$copy = $authority;
+		unset($copy['authority_fingerprint']);
+		if ($actual !== $expected || self::COMPATIBILITY_POLICY_VERSION !== (int) $authority['policy_version']
+			|| WCOS_Legacy_Return_Compatibility_Authority::LINEAGE_BASIS !== (isset($authority['lineage_basis']) ? $authority['lineage_basis'] : '')
+			|| !$authority['original_order_id'] || '' === sanitize_key((string) $authority['split_operation_id'])
+			|| !is_array($authority['active_child_ids']) || !is_array($authority['returned_child_ids'])
+			|| !is_array($authority['completed_pair_fingerprints']) || !is_array($authority['hardened_active_child_ids'])
+			|| self::ids($authority['active_child_ids']) !== array_values($authority['active_child_ids'])
+			|| self::ids($authority['returned_child_ids']) !== array_values($authority['returned_child_ids'])
+			|| self::ids($authority['hardened_active_child_ids']) !== array_values($authority['hardened_active_child_ids'])
+			|| array_intersect($authority['active_child_ids'], $authority['returned_child_ids'])
+			|| '' === self::fingerprint($authority['original_commercial_signature'])
+			|| '' === self::fingerprint($authority['original_relation_signature']) || '' === $stored
+			|| !hash_equals($stored, WCOS_Mutation_Fingerprint::create('return_source_evolution_legacy_compat_v1', absint($authority['original_order_id']), $copy))) {
+			throw new RuntimeException(__('Legacy compatibility source-evolution authority failed integrity verification.', 'wc-order-splitter'));
+		}
+		foreach ($authority['completed_pair_fingerprints'] as $value) {
+			if ('' === self::fingerprint($value)) {
+				throw new RuntimeException(__('Legacy compatibility source-evolution pair evidence is malformed.', 'wc-order-splitter'));
+			}
+		}
+		if ((int) $authority['sequence'] !== count($authority['returned_child_ids'])
+			|| (int) $authority['sequence'] !== count($authority['completed_pair_fingerprints'])
+			|| (0 === (int) $authority['sequence']) !== ('' === (string) $authority['predecessor_fingerprint'])
+			|| ((int) $authority['sequence'] > 0 && '' === self::fingerprint($authority['predecessor_fingerprint']))
+			|| ($original_order_id && absint($original_order_id) !== absint($authority['original_order_id']))
+			|| ('' !== (string) $split_operation_id && sanitize_key((string) $split_operation_id) !== $authority['split_operation_id'])) {
+			throw new RuntimeException(__('Legacy compatibility source-evolution authority is not canonical for this pair.', 'wc-order-splitter'));
+		}
+		return true;
+	}
+
 	private static function authority($original_id, $split_operation_id, $sequence, $predecessor, $commercial, $relation, array $active, array $returned, array $pairs, array $lineages) {
 		$authority = array(
 			'schema_version' => self::SCHEMA_VERSION,
@@ -390,6 +495,28 @@ final class WCOS_Return_Source_Evolution_Authority {
 		);
 		sort($authority['completed_pair_fingerprints'], SORT_STRING);
 		$authority['authority_fingerprint'] = WCOS_Mutation_Fingerprint::create('return_source_evolution_v1', $authority['original_order_id'], $authority);
+		self::assert_valid($authority, $original_id, $split_operation_id);
+		return $authority;
+	}
+
+	private static function compatibility_authority($original_id, $split_operation_id, $sequence, $predecessor, $commercial, $relation, array $active, array $returned, array $pairs, array $hardened_active) {
+		$authority = array(
+			'schema_version' => self::COMPATIBILITY_SCHEMA_VERSION,
+			'policy_version' => self::COMPATIBILITY_POLICY_VERSION,
+			'lineage_basis' => WCOS_Legacy_Return_Compatibility_Authority::LINEAGE_BASIS,
+			'original_order_id' => absint($original_id),
+			'split_operation_id' => sanitize_key((string) $split_operation_id),
+			'sequence' => absint($sequence),
+			'predecessor_fingerprint' => self::fingerprint($predecessor),
+			'original_commercial_signature' => self::fingerprint($commercial),
+			'original_relation_signature' => self::fingerprint($relation),
+			'active_child_ids' => self::ids($active),
+			'returned_child_ids' => self::ids($returned),
+			'completed_pair_fingerprints' => array_values(array_unique(array_map(array(__CLASS__, 'fingerprint'), $pairs))),
+			'hardened_active_child_ids' => self::ids($hardened_active),
+		);
+		sort($authority['completed_pair_fingerprints'], SORT_STRING);
+		$authority['authority_fingerprint'] = WCOS_Mutation_Fingerprint::create('return_source_evolution_legacy_compat_v1', $authority['original_order_id'], $authority);
 		self::assert_valid($authority, $original_id, $split_operation_id);
 		return $authority;
 	}

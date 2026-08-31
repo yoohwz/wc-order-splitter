@@ -6,13 +6,15 @@ defined('ABSPATH') || exit;
 final class WCOS_Return_Preflight {
 
 	const POLICY_VERSION = 1;
+	const LEGACY_COMPATIBILITY_POLICY_VERSION = 2;
 
 	public static function policy() {
 		return array(
 			'policy_version' => self::POLICY_VERSION,
 			'lineage' => 'direct_hardened_split_child_only',
 			'scope' => 'all_child_product_lines',
-			'legacy_lineage' => 'diagnostic_only',
+			'legacy_lineage' => 'corroborated_lazy_1_4_11_compatibility',
+			'legacy_compatibility_policy_version' => self::LEGACY_COMPATIBILITY_POLICY_VERSION,
 			'child_shipping' => 'reject',
 			'child_fees' => 'reject',
 			'child_coupons' => 'reject',
@@ -62,6 +64,7 @@ final class WCOS_Return_Preflight {
 			return self::reject($report, 'source_missing', __('The Return original order is unavailable.', 'wc-order-splitter'));
 		}
 		$report['source_order_id'] = $source->get_id();
+		$is_legacy_compatibility = WCOS_Legacy_Return_Compatibility_Authority::is_authority($authority);
 
 		if ($authorize) {
 			try {
@@ -97,11 +100,26 @@ final class WCOS_Return_Preflight {
 		if (self::has_refunds($child) || self::has_refunds($source)) {
 			return self::reject($report, 'refund_ownership_unsupported', __('Refund-bearing Return participants are outside the initial policy.', 'wc-order-splitter'));
 		}
-		if (!empty($child->get_items('shipping')) || !empty($child->get_items('fee')) || !empty($child->get_items('coupon'))
-			|| 0 !== WCOS_Decimal::to_units($child->get_shipping_total(), $authority['price_precision'])) {
+		if (!empty($child->get_items('fee')) || !empty($child->get_items('coupon'))) {
 			return self::reject($report, 'child_charge_ownership', __('The Split child owns charges that the initial Return policy cannot transfer.', 'wc-order-splitter'));
 		}
-		if (self::has_inconsistent_stock_state($child)) {
+		if (!$is_legacy_compatibility
+			&& (!empty($child->get_items('shipping')) || 0 !== WCOS_Decimal::to_units($child->get_shipping_total(), $authority['price_precision']))) {
+			return self::reject($report, 'child_charge_ownership', __('The Split child owns charges that the initial Return policy cannot transfer.', 'wc-order-splitter'));
+		}
+		if ($is_legacy_compatibility) {
+			try {
+				WCOS_Legacy_Return_Compatibility_Authority::assert_child_shipping(
+					$child,
+					isset($authority['child_shipping_authority']) && is_array($authority['child_shipping_authority']) ? $authority['child_shipping_authority'] : array(),
+					$authority['price_precision']
+				);
+			} catch (Throwable $throwable) {
+				return self::reject($report, 'legacy_shipping_authority_invalid', __('Legacy child shipping could not be frozen as immutable retired history.', 'wc-order-splitter'));
+			}
+		}
+		if (self::has_inconsistent_stock_state($child)
+			|| ($is_legacy_compatibility && self::has_inconsistent_stock_state($source))) {
 			return self::reject($report, 'child_stock_state_inconsistent', __('The Split child has inconsistent reduced-stock ownership evidence.', 'wc-order-splitter'));
 		}
 
@@ -113,7 +131,9 @@ final class WCOS_Return_Preflight {
 
 		$report['supported'] = true;
 		$report['reason'] = 'supported';
-		$report['message'] = __('This direct hardened Split child has exact read-only Return lineage and plan authority.', 'wc-order-splitter');
+		$report['message'] = $is_legacy_compatibility
+			? __('Legacy 1.4.11 compatibility lineage was corroborated and frozen into an exact hardened Return plan.', 'wc-order-splitter')
+			: __('This direct hardened Split child has exact read-only Return lineage and plan authority.', 'wc-order-splitter');
 		$report['lineage_authority'] = $authority;
 		$report['return_plan'] = $plan;
 		return $report;
@@ -156,9 +176,9 @@ final class WCOS_Return_Preflight {
 		return $order->get_total_refunded() != 0 || !empty($order->get_refunds());
 	}
 
-	private static function has_inconsistent_stock_state(WC_Order $child) {
-		$order_reduced = (bool) $child->get_data_store()->get_stock_reduced($child->get_id());
-		foreach ($child->get_items('line_item') as $item) {
+	private static function has_inconsistent_stock_state(WC_Order $order) {
+		$order_reduced = (bool) $order->get_data_store()->get_stock_reduced($order->get_id());
+		foreach ($order->get_items('line_item') as $item) {
 			$value = $item->get_meta('_reduced_stock', true);
 			if ('' === $value || null === $value) {
 				continue;
@@ -173,6 +193,11 @@ final class WCOS_Return_Preflight {
 				return true;
 			}
 		}
+		/*
+		 * WooCommerce can persist the order-level flag even when every line is
+		 * unmanaged and therefore owns no _reduced_stock marker. The legacy
+		 * adapter must not infer line ownership from status/the order flag alone.
+		 */
 		return false;
 	}
 
