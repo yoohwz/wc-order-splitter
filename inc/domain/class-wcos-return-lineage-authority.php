@@ -86,17 +86,15 @@ final class WCOS_Return_Lineage_Authority {
 		$strategy = self::assert_strategy_authority($context, $execution_policy, $snapshot, $plan);
 		$split_commercial_policy = self::assert_split_fingerprint($record, $plan, $execution_policy, $context);
 		$initial_target_ids = self::canonical_id_list(isset($context['target_order_ids']) ? $context['target_order_ids'] : array(), 'target_order_ids');
-		$current_relation_ids = self::canonical_id_list($source->get_meta(WCOS_Split_Order_Service::RELATION_CHILDREN_META, true), 'source_child_relations');
-		if (array_diff($current_relation_ids, $initial_target_ids)) {
-			self::reject('source_relation_target_mismatch', __('The original order contains a child outside immutable Split authority.', 'wc-order-splitter'));
-		}
+		$split_lineages = self::authenticated_split_lineages($source);
 		try {
 			$source_evolution = WCOS_Return_Source_Evolution_Authority::resolve(
 				$source,
 				$operation_id,
 				self::fingerprint_value(isset($context['source_signature_after']) ? $context['source_signature_after'] : '', 'source_signature_after'),
 				self::fingerprint_value(isset($context['source_recovery_signature_after']) ? $context['source_recovery_signature_after'] : '', 'source_recovery_signature_after'),
-				$initial_target_ids
+				$initial_target_ids,
+				$split_lineages
 			);
 		} catch (Throwable $throwable) {
 			self::reject('source_drift', __('The original order changed outside authenticated completed Return evolution.', 'wc-order-splitter'));
@@ -118,7 +116,16 @@ final class WCOS_Return_Lineage_Authority {
 			self::reject('commercial_context_drift', __('The Return participant commercial context no longer matches durable Split evidence.', 'wc-order-splitter'));
 		}
 
-		$lines = self::prove_child_lines($source, $child, $snapshot, $plan, $child_key, $fully_moved, $price_precision, $source_evolution['sequence'] > 0);
+		$lines = self::prove_child_lines(
+			$source,
+			$child,
+			$snapshot,
+			$plan,
+			$child_key,
+			$fully_moved,
+			$price_precision,
+			$source_evolution['sequence'] > 0 || count($source_evolution['split_lineage_fingerprints']) > 1
+		);
 		$child_signature = WCOS_Order_Contract_Snapshot::source_signature($child);
 		$authority = array(
 			'schema_version' => self::SCHEMA_VERSION,
@@ -428,11 +435,200 @@ final class WCOS_Return_Lineage_Authority {
 		return $authority;
 	}
 
+	/**
+	 * Authenticates every currently relevant hardened Split operation for one source.
+	 *
+	 * The active relation list is only a pointer set. Each member, and each child
+	 * retired by an authenticated completed Return, must resolve to one completed
+	 * source-keyed Split journal. Full journal target sets are closed recursively so
+	 * a missing or silently detached sibling cannot disappear from the proof.
+	 */
+	private static function authenticated_split_lineages(WC_Order $source) {
+		$source_id = absint($source->get_id());
+		$active_ids = self::canonical_id_list(
+			$source->get_meta(WCOS_Split_Order_Service::RELATION_CHILDREN_META, true),
+			'source_child_relations'
+		);
+		$returned = array();
+		try {
+			$pointers = WCOS_Return_Participation::completed_authorities_for_original($source);
+		} catch (Throwable $throwable) {
+			self::reject('return_participation_invalid', __('Completed Return participation cannot authenticate the source relation history.', 'wc-order-splitter'));
+		}
+		foreach ($pointers as $pointer) {
+			$child_id = absint(isset($pointer['child_order_id']) ? $pointer['child_order_id'] : 0);
+			$operation_id = isset($pointer['operation_id']) ? sanitize_key((string) $pointer['operation_id']) : '';
+			$child = $child_id ? wc_get_order($child_id) : null;
+			$record = $child instanceof WC_Order ? WCOS_Operation_Journal::get($child, $operation_id) : null;
+			try {
+				$pair = is_array($record) ? WCOS_Return_Journal_Context::pair_from_record($record) : null;
+			} catch (Throwable $throwable) {
+				$pair = null;
+			}
+			if (!$child_id || '' === $operation_id || !$child instanceof WC_Order || !is_array($pair)
+				|| $source_id !== absint($pair['original_order_id']) || $child_id !== absint($pair['child_order_id'])
+				|| isset($returned[$child_id])) {
+				self::reject('return_participation_invalid', __('Completed Return participation is missing, duplicated, or conflicts with its child journal.', 'wc-order-splitter'));
+			}
+			$returned[$child_id] = array('pair' => $pair);
+		}
+
+		if (array_intersect($active_ids, array_keys($returned))) {
+			self::reject('active_return_conflict', __('A completed Return child remains in active Split relations.', 'wc-order-splitter'));
+		}
+
+		$queue = array_values(array_unique(array_merge($active_ids, array_keys($returned))));
+		$operations = array();
+		$owners = array();
+		for ($cursor = 0; $cursor < count($queue); $cursor++) {
+			$child_id = absint($queue[$cursor]);
+			$child = wc_get_order($child_id);
+			if (!$child instanceof WC_Order || 'shop_order' !== $child->get_type()) {
+				self::reject('source_relation_target_mismatch', __('The original order contains an active child without hardened Split authority.', 'wc-order-splitter'));
+			}
+			$parent_id = self::positive_int_scalar($child->get_meta(WCOS_Split_Order_Service::RELATION_PARENT_META, true), 'target_parent');
+			$operation_id = self::canonical_key_scalar($child->get_meta(WCOS_Split_Order_Service::OPERATION_META, true), 'target_operation');
+			$child_key = self::canonical_key_scalar($child->get_meta(WCOS_Split_Order_Service::CHILD_KEY_META, true), 'target_child_key');
+			if ($source_id !== $parent_id) {
+				self::reject('journal_target_provenance_mismatch', __('A hardened Split target points to a different original order.', 'wc-order-splitter'));
+			}
+
+			if (!isset($operations[$operation_id])) {
+				$record = WCOS_Operation_Journal::get($source, $operation_id);
+				self::assert_journal_identity($record, $source_id, $operation_id);
+				$context = $record['context'];
+				$plan = self::canonical_split_plan($context);
+				$execution_policy = self::execution_policy($context);
+				$fully_moved = self::canonical_id_list(isset($context['fully_moved_item_ids']) ? $context['fully_moved_item_ids'] : array(), 'fully_moved_item_ids');
+				$snapshot = self::source_snapshot($context, $source_id);
+				if (self::derive_fully_moved_ids($snapshot, $plan) !== $fully_moved) {
+					self::reject('fully_moved_authority_mismatch', __('A Split lineage journal has inconsistent whole-line provenance.', 'wc-order-splitter'));
+				}
+				if (WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY === $execution_policy && !empty($fully_moved)) {
+					self::reject('execution_policy_mismatch', __('A Split lineage journal has inconsistent execution policy.', 'wc-order-splitter'));
+				}
+				self::assert_strategy_authority($context, $execution_policy, $snapshot, $plan);
+				self::assert_split_fingerprint($record, $plan, $execution_policy, $context);
+
+				$target_ids = self::canonical_id_list(isset($context['target_order_ids']) ? $context['target_order_ids'] : array(), 'target_order_ids');
+				if (count($target_ids) !== count($plan)) {
+					self::reject('journal_target_set_mismatch', __('A completed Split target set does not match its durable plan.', 'wc-order-splitter'));
+				}
+				$before_active = self::canonical_id_list($snapshot['relation_meta']['_wcos_child_order_ids'], 'snapshot_child_relations');
+				if (array_intersect($before_active, $target_ids)) {
+					self::reject('journal_target_set_mismatch', __('A Split operation attempts to mint an already-active target.', 'wc-order-splitter'));
+				}
+				$after_active = self::canonical_id_list(array_merge($before_active, $target_ids), 'derived_child_relations');
+				$before_legacy = self::legacy_id_list($snapshot['relation_meta']['yoos_splitted_order']);
+				$after_legacy = array_values(array_unique(array_merge($before_legacy, $target_ids)));
+				sort($after_legacy, SORT_NUMERIC);
+				$before_commercial = self::fingerprint_value($snapshot['source_signature'], 'source_signature');
+				$before_relation = self::fingerprint_value($snapshot['source_recovery_signature'], 'source_recovery_signature');
+				$after_commercial = self::fingerprint_value(isset($context['source_signature_after']) ? $context['source_signature_after'] : '', 'source_signature_after');
+				$after_relation = self::fingerprint_value(isset($context['source_recovery_signature_after']) ? $context['source_recovery_signature_after'] : '', 'source_recovery_signature_after');
+				if (!hash_equals($before_commercial, self::fingerprint_value(isset($context['source_signature']) ? $context['source_signature'] : '', 'source_signature'))
+					|| !hash_equals($after_relation, WCOS_Mutation_Fingerprint::create(
+						'split_source_owned_state',
+						$source_id,
+						array(
+							'source_signature' => $after_commercial,
+							'relation_meta' => array(
+								'_wcos_child_order_ids' => $after_active,
+								'yoos_splitted_order' => implode(',', $after_legacy),
+							),
+						)
+					))) {
+					self::reject('split_transition_mismatch', __('A completed Split journal does not prove its exact source-state transition.', 'wc-order-splitter'));
+				}
+				$child_signatures = self::canonical_child_signatures(isset($context['child_signatures']) ? $context['child_signatures'] : array());
+				if (array_keys($child_signatures) !== $target_ids) {
+					self::reject('child_signature_set_mismatch', __('A completed Split journal is missing exact target signatures.', 'wc-order-splitter'));
+				}
+				$evidence = array(
+					'operation_id' => $operation_id,
+					'operation_fingerprint' => self::fingerprint_value($record['fingerprint'], 'split_operation_fingerprint'),
+					'before_commercial_signature' => WCOS_Return_Source_Evolution_Authority::sealed_signature('commercial', $before_commercial),
+					'before_relation_signature' => WCOS_Return_Source_Evolution_Authority::sealed_signature('relation', $before_relation),
+					'after_commercial_signature' => WCOS_Return_Source_Evolution_Authority::sealed_signature('commercial', $after_commercial),
+					'after_relation_signature' => WCOS_Return_Source_Evolution_Authority::sealed_signature('relation', $after_relation),
+					'before_active_child_ids' => $before_active,
+					'after_active_child_ids' => $after_active,
+					'target_child_ids' => $target_ids,
+					'target_child_signatures' => $child_signatures,
+					'plan_child_keys' => array_keys($plan),
+					'target_child_keys' => array(),
+				);
+				$evidence['lineage_fingerprint'] = WCOS_Mutation_Fingerprint::create('return_split_lineage_v1', $source_id, $evidence);
+				$operations[$operation_id] = $evidence;
+				foreach ($target_ids as $target_id) {
+					if (!in_array($target_id, $queue, true)) {
+						$queue[] = $target_id;
+					}
+				}
+			}
+
+			$evidence =& $operations[$operation_id];
+			if (!in_array($child_id, $evidence['target_child_ids'], true) || !in_array($child_key, $evidence['plan_child_keys'], true)
+				|| isset($evidence['target_child_keys'][$child_id]) || isset($owners[$child_id])) {
+				self::reject('journal_target_provenance_mismatch', __('A Split target has missing, duplicated, or ambiguous operation provenance.', 'wc-order-splitter'));
+			}
+			$evidence['target_child_keys'][$child_id] = $child_key;
+			$owners[$child_id] = $operation_id;
+			$expected_child_signature = $evidence['target_child_signatures'][$child_id];
+			if (isset($returned[$child_id])) {
+				$pair = $returned[$child_id]['pair'];
+				if ($operation_id !== $pair['split_operation_id'] || $child_key !== $pair['split_child_key']
+					|| !hash_equals(
+						$pair['child_signature_before'],
+						WCOS_Return_Source_Evolution_Authority::sealed_signature('child_commercial', $expected_child_signature)
+					)) {
+					self::reject('returned_child_provenance_mismatch', __('A completed Return does not match its hardened Split target evidence.', 'wc-order-splitter'));
+				}
+			} elseif (!in_array($child_id, $active_ids, true)) {
+				self::reject('active_child_provenance_mismatch', __('An active Split child does not match its completed journal participation state.', 'wc-order-splitter'));
+			}
+			unset($evidence);
+		}
+
+		foreach ($operations as $operation_id => &$evidence) {
+			ksort($evidence['target_child_keys'], SORT_NUMERIC);
+			$actual_child_keys = array_values($evidence['target_child_keys']);
+			sort($actual_child_keys, SORT_STRING);
+			if (array_keys($evidence['target_child_keys']) !== $evidence['target_child_ids']
+				|| $actual_child_keys !== $evidence['plan_child_keys']) {
+				self::reject('journal_target_provenance_mismatch', __('A completed Split lineage contains duplicated or unaccounted child provenance.', 'wc-order-splitter'));
+			}
+			$copy = $evidence;
+			unset($copy['lineage_fingerprint']);
+			$evidence['lineage_fingerprint'] = WCOS_Mutation_Fingerprint::create('return_split_lineage_v1', $source_id, $copy);
+		}
+		unset($evidence);
+		ksort($operations, SORT_STRING);
+		return array_values($operations);
+	}
+
+	private static function canonical_child_signatures($signatures) {
+		if (!is_array($signatures)) {
+			self::reject('child_signature_set_malformed', __('A completed Split target-signature set is malformed.', 'wc-order-splitter'));
+		}
+		$result = array();
+		foreach ($signatures as $child_id => $signature) {
+			$child_id = self::positive_int_scalar(is_int($child_id) ? $child_id : (string) $child_id, 'child_signature_order_id');
+			if (isset($result[$child_id])) {
+				self::reject('child_signature_set_duplicate', __('A completed Split target-signature set contains duplicate IDs.', 'wc-order-splitter'));
+			}
+			$result[$child_id] = self::fingerprint_value($signature, 'child_signature');
+		}
+		ksort($result, SORT_NUMERIC);
+		return $result;
+	}
+
 	private static function assert_target_set(WC_Order $source, array $context, array $plan, $source_id, $operation_id, $child_id, $child_key, array $active_target_ids) {
 		$target_ids = self::canonical_id_list(isset($context['target_order_ids']) ? $context['target_order_ids'] : array(), 'target_order_ids');
 		$active_target_ids = self::canonical_id_list($active_target_ids, 'active_target_order_ids');
-		if (count($target_ids) !== count($plan) || 1 !== count(array_keys($active_target_ids, $child_id, true))
-			|| array_diff($active_target_ids, $target_ids)) {
+		if (count($target_ids) !== count($plan)
+			|| 1 !== count(array_keys($target_ids, $child_id, true))
+			|| 1 !== count(array_keys($active_target_ids, $child_id, true))) {
 			self::reject('journal_target_set_mismatch', __('The completed Split target set does not contain this child exactly once.', 'wc-order-splitter'));
 		}
 		$relation_ids = self::canonical_id_list($source->get_meta(WCOS_Split_Order_Service::RELATION_CHILDREN_META, true), 'source_child_relations');
@@ -440,7 +636,7 @@ final class WCOS_Return_Lineage_Authority {
 			self::reject('source_relation_target_mismatch', __('The original order active-child relation set does not match authenticated Return evolution.', 'wc-order-splitter'));
 		}
 		$seen_keys = array();
-		foreach ($active_target_ids as $target_id) {
+		foreach ($target_ids as $target_id) {
 			$target = wc_get_order($target_id);
 			if (!$target instanceof WC_Order || 'shop_order' !== $target->get_type()) {
 				self::reject('journal_target_missing', __('A completed Split target is unavailable.', 'wc-order-splitter'));
@@ -458,8 +654,8 @@ final class WCOS_Return_Lineage_Authority {
 		}
 		$keys = array_keys($seen_keys);
 		sort($keys, SORT_STRING);
-		if (count($keys) !== count($active_target_ids)) {
-			self::reject('journal_target_key_set_mismatch', __('The active child-key set does not match authenticated Return evolution.', 'wc-order-splitter'));
+		if ($keys !== array_keys($plan)) {
+			self::reject('journal_target_key_set_mismatch', __('The Split target child-key set does not match its durable plan.', 'wc-order-splitter'));
 		}
 	}
 
@@ -485,10 +681,27 @@ final class WCOS_Return_Lineage_Authority {
 			$line['product_id'] = absint($item->get_product_id());
 			$line['variation_id'] = absint($item->get_variation_id());
 			$line['tax_class'] = (string) $item->get_tax_class();
-			$line['destination'] = in_array($source_item_id, $fully_moved, true)
-				? WCOS_Return_Plan::DESTINATION_FRESH_SOURCE_ITEM
-				: WCOS_Return_Plan::DESTINATION_RESIDUAL_SOURCE_ITEM;
-			$line['destination_source_item_id'] = in_array($source_item_id, $fully_moved, true) ? 0 : $source_item_id;
+			$residual_destination = !in_array($source_item_id, $fully_moved, true);
+			if ($source_evolved) {
+				$current_source_item = $source->get_item($source_item_id);
+				if ($current_source_item instanceof WC_Order_Item_Product) {
+					try {
+						$current_identity = WCOS_Line_Identity::from_item($current_source_item);
+					} catch (Throwable $throwable) {
+						self::reject('source_line_identity_invalid', __('An evolved Return destination has non-canonical business metadata.', 'wc-order-splitter'));
+					}
+					if (!hash_equals($line['line_identity'], $current_identity)) {
+						self::reject('source_line_identity_drift', __('An evolved Return destination no longer matches its hardened commercial identity.', 'wc-order-splitter'));
+					}
+					$residual_destination = true;
+				} else {
+					$residual_destination = false;
+				}
+			}
+			$line['destination'] = $residual_destination
+				? WCOS_Return_Plan::DESTINATION_RESIDUAL_SOURCE_ITEM
+				: WCOS_Return_Plan::DESTINATION_FRESH_SOURCE_ITEM;
+			$line['destination_source_item_id'] = $residual_destination ? $source_item_id : 0;
 			$actual[$source_item_id] = $line;
 		}
 		ksort($actual, SORT_NUMERIC);

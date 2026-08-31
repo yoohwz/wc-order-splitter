@@ -38,6 +38,24 @@ function wcos_compat_split_confirm(WC_Order $source, array $plan, $user_id) {
 	return WCOS_Split_Confirmation_Store::verify($source, $confirmation['operation_id'], $confirmation['confirmation_token'], $user_id);
 }
 
+function wcos_compat_split_return(WC_Order $child, $user_id) {
+	$report = WCOS_Return_Preflight::assert_supported($child, true);
+	$authority = WCOS_Return_Review_Store::authority_from_preflight($child, $report);
+	$created = WCOS_Return_Confirmation_Store::create($child, $authority, $user_id);
+	$confirmed = WCOS_Return_Confirmation_Store::verify(
+		$child,
+		$created['operation_id'],
+		$created['confirmation_token'],
+		$user_id
+	);
+	return (new WCOS_Mutation_Gateway())->return_order(
+		$child,
+		$created['operation_id'],
+		$confirmed['price_precision'],
+		WCOS_Return_Confirmation_Store::operation_authority($confirmed)
+	);
+}
+
 $previous_user_id = get_current_user_id();
 $previous_allowed = get_option('order_splitter_status_allowed', array('wc-processing'));
 $previous_shipping = get_option('order_splitter_exclude_shipping_fee', 'no');
@@ -471,6 +489,95 @@ try {
 	$order_ids[] = $second_on_hold_child->get_id();
 	$on_hold_relations = array_values(array_unique(array_map('absint', (array) wc_get_order($on_hold_source->get_id())->get_meta(WCOS_Split_Order_Service::RELATION_CHILDREN_META, true))));
 	wcos_compat_split_assert(2 === count($on_hold_relations) && in_array($on_hold_child->get_id(), $on_hold_relations, true) && in_array($second_on_hold_child->get_id(), $on_hold_relations, true), 'A second valid Split overwrote an existing active descendant relation.');
+
+	/* Repeated hardened Split operations share one authenticated global Return lineage. */
+	foreach (array($on_hold_child, $second_on_hold_child) as $candidate) {
+		$candidate_report = WCOS_Return_Preflight::report(wc_get_order($candidate->get_id()), true);
+		wcos_compat_split_assert(!empty($candidate_report['supported']), 'A direct child from repeated Split failed ordinary Return preflight.');
+		$candidate_bulk = WCOS_Bulk_Return_Review_Store::create(array($candidate->get_id()), $user_id);
+		wcos_compat_split_assert(!empty($candidate_bulk['plan']['all_eligible']), 'A direct child from repeated Split failed Bulk Return preflight.');
+		WCOS_Bulk_Return_Review_Store::delete($candidate_bulk['review_id']);
+	}
+
+	$on_hold_source = wc_get_order($on_hold_source->get_id());
+	$clean_relations = $on_hold_source->get_meta(WCOS_Split_Order_Service::RELATION_CHILDREN_META, true);
+	$on_hold_source->update_meta_data(WCOS_Split_Order_Service::RELATION_CHILDREN_META, array_merge($clean_relations, array(999999991)));
+	$on_hold_source->save_meta_data();
+	$injected_report = WCOS_Return_Preflight::report(wc_get_order($on_hold_child->get_id()), true);
+	wcos_compat_split_assert(empty($injected_report['supported']), 'An injected unrelated active relation ID obtained Return authority.');
+	$on_hold_source = wc_get_order($on_hold_source->get_id());
+	$on_hold_source->update_meta_data(WCOS_Split_Order_Service::RELATION_CHILDREN_META, $clean_relations);
+	$on_hold_source->save_meta_data();
+
+	$provenance_tamper_cases = array(
+		WCOS_Split_Order_Service::RELATION_PARENT_META => $on_hold_source->get_id() + 999,
+		WCOS_Split_Order_Service::OPERATION_META => 'tampered-split-operation',
+		WCOS_Split_Order_Service::CHILD_KEY_META => 'tampered-child-key',
+	);
+	foreach ($provenance_tamper_cases as $meta_key => $tampered_value) {
+		$tampered_child = wc_get_order($second_on_hold_child->get_id());
+		$original_value = $tampered_child->get_meta($meta_key, true);
+		$tampered_child->update_meta_data($meta_key, $tampered_value);
+		$tampered_child->save_meta_data();
+		$tampered_report = WCOS_Return_Preflight::report(wc_get_order($on_hold_child->get_id()), true);
+		wcos_compat_split_assert(empty($tampered_report['supported']), 'Repeated-Split Return failed open for tampered child provenance: ' . $meta_key);
+		$tampered_child = wc_get_order($second_on_hold_child->get_id());
+		$tampered_child->update_meta_data($meta_key, $original_value);
+		$tampered_child->save_meta_data();
+	}
+
+	$second_split_operation = (string) wc_get_order($second_on_hold_child->get_id())->get_meta(WCOS_Split_Order_Service::OPERATION_META, true);
+	$second_split_journal_key = 'wcos_mutation_op_' . hash('sha256', $on_hold_source->get_id() . '|' . sanitize_key($second_split_operation));
+	$second_split_journal = get_option($second_split_journal_key);
+	$tampered_second_split_journal = $second_split_journal;
+	$tampered_second_split_journal['context']['target_order_ids'] = array();
+	update_option($second_split_journal_key, $tampered_second_split_journal, false);
+	wp_cache_delete($second_split_journal_key, 'options');
+	$tampered_membership = WCOS_Return_Preflight::report(wc_get_order($on_hold_child->get_id()), true);
+	wcos_compat_split_assert(empty($tampered_membership['supported']), 'Repeated-Split Return failed open for tampered journal target membership.');
+	update_option($second_split_journal_key, $second_split_journal, false);
+	wp_cache_delete($second_split_journal_key, 'options');
+
+	wcos_compat_split_return(wc_get_order($on_hold_child->get_id()), $user_id);
+	$after_first_operation_return = WCOS_Return_Preflight::report(wc_get_order($second_on_hold_child->get_id()), true);
+	wcos_compat_split_assert(!empty($after_first_operation_return['supported']), 'Returning an earlier-operation child stranded a later-operation sibling.');
+	wcos_compat_split_return(wc_get_order($second_on_hold_child->get_id()), $user_id);
+
+	$reverse_source = wcos_compat_split_order('on-hold', array(array($product, 4)));
+	$order_ids[] = $reverse_source->get_id();
+	$reverse_item_id = (int) key($reverse_source->get_items('line_item'));
+	$reverse_first = wcos_compat_split_confirm($reverse_source, array('reverse-first' => array($reverse_item_id => '1.000000')), $user_id);
+	$reverse_first_children = (new WCOS_Mutation_Gateway())->split_manual_confirmed($reverse_source, $reverse_first['plan'], $reverse_first['operation_id'], $reverse_first['price_precision'], $reverse_first);
+	$reverse_first_child = reset($reverse_first_children);
+	$order_ids[] = $reverse_first_child->get_id();
+	$reverse_source = wc_get_order($reverse_source->get_id());
+	$reverse_second = wcos_compat_split_confirm($reverse_source, array('reverse-second' => array($reverse_item_id => '1.000000')), $user_id);
+	$reverse_second_children = (new WCOS_Mutation_Gateway())->split_manual_confirmed($reverse_source, $reverse_second['plan'], $reverse_second['operation_id'], $reverse_second['price_precision'], $reverse_second);
+	$reverse_second_child = reset($reverse_second_children);
+	$order_ids[] = $reverse_second_child->get_id();
+	wcos_compat_split_return(wc_get_order($reverse_second_child->get_id()), $user_id);
+	$after_later_operation_return = WCOS_Return_Preflight::report(wc_get_order($reverse_first_child->get_id()), true);
+	wcos_compat_split_assert(!empty($after_later_operation_return['supported']), 'Returning a later-operation child stranded an earlier-operation sibling.');
+	wcos_compat_split_return(wc_get_order($reverse_first_child->get_id()), $user_id);
+
+	$mixed_lineage_source = wcos_compat_split_order('on-hold', array(array($product, 7)));
+	$order_ids[] = $mixed_lineage_source->get_id();
+	$mixed_lineage_item_id = (int) key($mixed_lineage_source->get_items('line_item'));
+	$mixed_first = wcos_compat_split_confirm($mixed_lineage_source, array(
+		'mixed-a' => array($mixed_lineage_item_id => '1.000000'),
+		'mixed-b' => array($mixed_lineage_item_id => '1.000000'),
+	), $user_id);
+	$mixed_first_children = (new WCOS_Mutation_Gateway())->split_manual_confirmed($mixed_lineage_source, $mixed_first['plan'], $mixed_first['operation_id'], $mixed_first['price_precision'], $mixed_first);
+	foreach ($mixed_first_children as $mixed_child) { $order_ids[] = $mixed_child->get_id(); }
+	$mixed_lineage_source = wc_get_order($mixed_lineage_source->get_id());
+	$mixed_second = wcos_compat_split_confirm($mixed_lineage_source, array('mixed-c' => array($mixed_lineage_item_id => '1.000000')), $user_id);
+	$mixed_second_children = (new WCOS_Mutation_Gateway())->split_manual_confirmed($mixed_lineage_source, $mixed_second['plan'], $mixed_second['operation_id'], $mixed_second['price_precision'], $mixed_second);
+	$mixed_second_child = reset($mixed_second_children);
+	$order_ids[] = $mixed_second_child->get_id();
+	foreach (array_merge(array_values($mixed_first_children), array($mixed_second_child)) as $mixed_child) {
+		$mixed_report = WCOS_Return_Preflight::report(wc_get_order($mixed_child->get_id()), true);
+		wcos_compat_split_assert(!empty($mixed_report['supported']), 'Same-operation siblings plus a later Split child did not retain global Return eligibility.');
+	}
 
 	/* Category and Stock-status execution consume the same frozen policy. */
 	$strategy_a = wcos_compat_split_product('WCOS strategy category source', '7.00', 'instock');
