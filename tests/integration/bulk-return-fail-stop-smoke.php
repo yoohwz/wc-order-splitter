@@ -41,15 +41,16 @@ try {
 	$confirmed = WCOS_Bulk_Return_Confirmation_Store::create($stored['review_id'], $stored['review_token'], $operator_id);
 	$coordinator = WCOS_Bulk_Return_Confirmation_Store::verify($confirmed['batch_id'], $confirmed['anchor_child_id'], $confirmed['batch_token'], $operator_id);
 	$plan = $coordinator['verified']['authority']['plan'];
+	$execution_rows = WCOS_Bulk_Return_Batch_Plan::execution_rows($plan);
 	$mapping = $coordinator['verified']['authority']['operation_map'];
 	$orchestrator = new WCOS_Bulk_Return_Orchestrator();
 
 	$first = $orchestrator->advance($confirmed['batch_id'], $confirmed['anchor_child_id'], $confirmed['batch_token'], $operator_id, 0);
 	wcos_bulk_fail_assert(1 === $first['cursor'] && 1 === $first['counts']['completed'], 'Bulk fail-stop first row did not complete.');
-	$first_child = wc_get_order($plan['rows'][0]['child_order_id']);
+	$first_child = wc_get_order($execution_rows[0]['child_order_id']);
 	$first_signature = WCOS_Order_Contract_Snapshot::source_signature($first_child);
 
-	$second_child = wc_get_order($plan['rows'][1]['child_order_id']);
+	$second_child = wc_get_order($execution_rows[1]['child_order_id']);
 	$second_items = $second_child->get_items('line_item');
 	$second_item = reset($second_items);
 	$second_item->set_total(WCOS_Decimal::from_units(WCOS_Decimal::to_units($second_item->get_total(), 2) + 1, 2));
@@ -58,9 +59,9 @@ try {
 	$stopped = $orchestrator->advance($confirmed['batch_id'], $confirmed['anchor_child_id'], $confirmed['batch_token'], $operator_id, 1);
 	wcos_bulk_fail_assert('blocked' === $stopped['status'] && 3 === $stopped['cursor'], 'Bulk Return did not stop after the first non-success row.');
 	wcos_bulk_fail_assert(1 === $stopped['counts']['completed'] && 1 === $stopped['counts']['blocked'] && 1 === $stopped['counts']['not_run_blocked'], 'Bulk Return fail-stop aggregate is incorrect.');
-	wcos_bulk_fail_assert($first_signature === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($plan['rows'][0]['child_order_id'])), 'Bulk Return reversed a completed sibling after later failure.');
-	wcos_bulk_fail_assert(null === WCOS_Operation_Journal::get(wc_get_order($plan['rows'][1]['child_order_id']), $mapping[1]['operation_id']), 'Authority-drifted row created a child Return journal.');
-	wcos_bulk_fail_assert(null === WCOS_Operation_Journal::get(wc_get_order($plan['rows'][2]['child_order_id']), $mapping[2]['operation_id']), 'not_run_blocked row created a child Return journal.');
+	wcos_bulk_fail_assert($first_signature === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($execution_rows[0]['child_order_id'])), 'Bulk Return reversed a completed sibling after later failure.');
+	wcos_bulk_fail_assert(null === WCOS_Operation_Journal::get(wc_get_order($execution_rows[1]['child_order_id']), $mapping[1]['operation_id']), 'Authority-drifted row created a child Return journal.');
+	wcos_bulk_fail_assert(null === WCOS_Operation_Journal::get(wc_get_order($execution_rows[2]['child_order_id']), $mapping[2]['operation_id']), 'not_run_blocked row created a child Return journal.');
 
 	echo "bulk-return-fail-stop-ok originals=3 completed=1 blocked=1 not_run=1 rollback=0\n";
 } finally {

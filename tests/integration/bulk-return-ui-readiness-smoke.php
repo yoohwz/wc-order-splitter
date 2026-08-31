@@ -35,18 +35,19 @@ wcos_bulk_ui_assert(isset($controller->register_bulk_action(array())[WCOS_Bulk_R
 global $wpdb;
 $journal_count_before = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name LIKE 'wcos_mutation_op_%'");
 $ineligible_review = $controller->review_request(array('nonce' => wp_create_nonce(WCOS_Bulk_Return_Admin_Controller::NONCE_ACTION), 'child_order_ids' => array(999999999)));
-wcos_bulk_ui_assert(empty($ineligible_review['summary']['all_eligible']), 'Enabled Bulk Return Review treated a missing order as eligible.');
+wcos_bulk_ui_assert(empty($ineligible_review['summary']['all_eligible']) && empty($ineligible_review['summary']['has_eligible']) && 0 === $ineligible_review['summary']['eligible_count'] && 1 === $ineligible_review['summary']['skipped_count'], 'Enabled Bulk Return Review did not disclose a missing order as zero-Eligible/one-Skipped.');
 WCOS_Bulk_Return_Review_Store::delete($ineligible_review['review_id']);
 $journal_count_after = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name LIKE 'wcos_mutation_op_%'");
 wcos_bulk_ui_assert($journal_count_before === $journal_count_after, 'Enabled Bulk Return Review created a coordinator before Confirm.');
 
 $client = file_get_contents($root . '/js/p2-bulk-return-admin.js');
-foreach (array('window.WCOSBackboneModal.open', 'var activeBatch = null;', 'function review()', 'function confirm()', 'function execute()', 'function resume()', "event.key === 'Escape' && busy", "content.setAttribute('aria-modal', 'true')", 'child_order_ids: ids', 'cursor: activeBatch.cursor', 'summary.groups || {}', 'counts.manual_reconciliation', 'counts.not_run_blocked') as $needle) {
+foreach (array('window.WCOSBackboneModal.open', 'var activeBatch = null;', 'function review()', 'function confirm()', 'function execute()', 'function resume()', "event.key === 'Escape' && busy", "content.setAttribute('aria-modal', 'true')", 'child_order_ids: ids', 'cursor: activeBatch.cursor', 'summary.groups || {}', 'reviewEligible = !!summary.has_eligible', 'summary.skipped_results || []', 'counts.skipped', 'counts.manual_reconciliation', 'counts.not_run_blocked') as $needle) {
 	wcos_bulk_ui_assert(false !== strpos($client, $needle), 'Bulk Return client contract is missing: ' . $needle);
 }
 foreach (array('original_order_id:', 'source_order_id:', 'plan:', 'fingerprint:', 'retirement_policy:', 'localStorage', 'sessionStorage', 'document.cookie', '.innerHTML', 'console.') as $forbidden) {
 	wcos_bulk_ui_assert(false === strpos($client, $forbidden), 'Bulk Return client authors/stores forbidden authority: ' . $forbidden);
 }
+wcos_bulk_ui_assert(false === strpos($client, 'summary.all_eligible') && false === strpos($client, 'mixedBlocked'), 'Bulk Return client still vetoes mixed Eligible/Skipped Review.');
 $controller_source = file_get_contents($root . '/inc/backend/class-wcos-bulk-return-admin-controller.php');
 wcos_bulk_ui_assert(false === strpos($controller_source, 'new WCOS_Return_Order_Service'), 'Bulk Return controller directly instantiates Return service.');
 wcos_bulk_ui_assert(false === strpos($controller_source, 'new WCOS_Return_WooCommerce_Adapter'), 'Bulk Return controller directly instantiates Return adapter.');

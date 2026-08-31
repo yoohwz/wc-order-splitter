@@ -571,6 +571,9 @@ jobs:
       - name: Verify enabled Bulk Return controller Review Confirm Execute contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/bulk-return-enabled-controller-smoke.php
 
+      - name: Verify Bulk Return partial eligibility compatibility contracts
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/bulk-return-partial-eligibility-smoke.php
+
       - name: Verify enabled Bulk Return different-original fail-stop contracts
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/bulk-return-fail-stop-smoke.php
 

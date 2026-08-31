@@ -40,10 +40,11 @@ final class WCOS_Bulk_Return_Orchestrator {
 
 		$ordinal = (int) $progress['cursor'];
 		$plan = $verified['authority']['plan'];
-		if (!isset($plan['rows'][$ordinal], $verified['authority']['operation_map'][$ordinal])) {
+		$execution_rows = WCOS_Bulk_Return_Batch_Plan::execution_rows($plan);
+		if (!isset($execution_rows[$ordinal], $verified['authority']['operation_map'][$ordinal])) {
 			throw new WCOS_Bulk_Return_Orchestrator_Exception('coordinator_corrupt', __('Bulk Return coordinator does not contain the current row.', 'wc-order-splitter'), false);
 		}
-		$row = $plan['rows'][$ordinal];
+		$row = $execution_rows[$ordinal];
 		$mapping = $verified['authority']['operation_map'][$ordinal];
 		$operation_id = sanitize_key((string) $mapping['operation_id']);
 		$child = wc_get_order(absint($row['child_order_id']));
@@ -146,7 +147,8 @@ final class WCOS_Bulk_Return_Orchestrator {
 		if ($current_cursor !== (int) $ordinal) {
 			throw new WCOS_Bulk_Return_Orchestrator_Exception('coordinator_cursor_invalid', __('Bulk Return coordinator cursor cannot be reconstructed safely.', 'wc-order-splitter'), false);
 		}
-		$row = $verified['authority']['plan']['rows'][$ordinal];
+		$execution_rows = WCOS_Bulk_Return_Batch_Plan::execution_rows($verified['authority']['plan']);
+		$row = $execution_rows[$ordinal];
 		$results = $verified['progress']['results'];
 		$results[] = array(
 			'ordinal' => (int) $ordinal,
@@ -177,8 +179,9 @@ final class WCOS_Bulk_Return_Orchestrator {
 		$current_status = in_array(sanitize_key((string) $reason), array('manual_reconciliation', 'manual_reconciled'), true)
 			? 'manual_reconciliation'
 			: 'blocked';
+		$execution_rows = WCOS_Bulk_Return_Batch_Plan::execution_rows($verified['authority']['plan']);
 		for ($index = $cursor; $index < $total; $index++) {
-			$row = $verified['authority']['plan']['rows'][$index];
+			$row = $execution_rows[$index];
 			$mapping = $verified['authority']['operation_map'][$index];
 			$results[] = array(
 				'ordinal' => $index,
