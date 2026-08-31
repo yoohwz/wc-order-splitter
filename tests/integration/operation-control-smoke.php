@@ -108,6 +108,10 @@ foreach ($hard_off_gate_states as $workflow => $enabled) {
 	$hard_off_gate_states[$workflow] = false;
 }
 $feature_gate_states->setValue(null, $hard_off_gate_states);
+$regression_allowed_statuses = get_option('order_splitter_status_allowed', array('wc-processing'));
+$regression_exclude_shipping = get_option('order_splitter_exclude_shipping_fee', 'no');
+update_option('order_splitter_status_allowed', array('wc-pending', 'wc-processing'));
+update_option('order_splitter_exclude_shipping_fee', 'yes');
 
 try {
 	require __DIR__ . '/p2-quantity-split-adapter-smoke.php';
@@ -127,6 +131,8 @@ try {
 	require __DIR__ . '/p2-durable-replay-smoke.php';
 	require __DIR__ . '/p2-duplicate-readiness-smoke.php';
 } finally {
+	update_option('order_splitter_status_allowed', $regression_allowed_statuses);
+	update_option('order_splitter_exclude_shipping_fee', $regression_exclude_shipping);
 	$feature_gate_states->setValue(null, $release_gate_states);
 }
 

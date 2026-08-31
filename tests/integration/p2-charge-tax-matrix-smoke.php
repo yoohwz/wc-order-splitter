@@ -165,7 +165,7 @@ foreach (array(false, true) as $prices_include_tax) {
 			wcos_p2_adapter_assert('wcos-p2-source-transaction' === $source->get_transaction_id(), 'Paid source lost its transaction ID.');
 			wcos_p2_adapter_assert('' === $child->get_transaction_id(), 'Child duplicated the source transaction ID.');
 			wcos_p2_adapter_assert('bacs' === $child->get_payment_method(), 'Child lost non-transaction payment context.');
-			wcos_p2_adapter_assert('pending' === $child->get_status(), 'Paid source produced a paid-status child.');
+			wcos_p2_adapter_assert($source->get_status() === $child->get_status(), 'Child did not preserve the exact frozen source status.');
 			wcos_p2_adapter_assert(null === $child->get_date_paid(), 'Child duplicated the source paid timestamp.');
 		}
 
@@ -174,8 +174,8 @@ foreach (array(false, true) as $prices_include_tax) {
 	}
 }
 
-/* Negative fees are discount-like and remain explicitly unsupported. */
-$negative_product = wcos_p2_adapter_product('WCOS P2 negative fee reject', '10.00');
+/* Negative fees are source-owned and are never duplicated to children. */
+$negative_product = wcos_p2_adapter_product('WCOS P2 source-owned negative fee', '10.00');
 list($negative_source, $negative_line_id) = wcos_p2_adapter_order($negative_product, 2);
 $negative_fee = new WC_Order_Item_Fee();
 $negative_fee->set_name('Legacy negative fee');
@@ -183,24 +183,22 @@ $negative_fee->set_amount('-2.00');
 $negative_fee->set_total('-2.00');
 $negative_fee->set_tax_status('none');
 $negative_source->add_item($negative_fee);
-$negative_source->set_total('18.00');
+$negative_source->calculate_totals(false);
 $negative_source->save();
 $negative_source = wc_get_order($negative_source->get_id());
 $negative_report = $adapter->preflight($negative_source);
-wcos_p2_adapter_assert(empty($negative_report['supported']) && 'negative_fee_policy_missing' === $negative_report['reason'], 'Negative fee did not fail closed with a stable policy reason.');
+wcos_p2_adapter_assert(!empty($negative_report['supported']), 'Source-owned negative fee failed Split preflight.');
 wcos_p2_adapter_assert(1 === (int) $negative_report['negative_fee_count'], 'Negative fee was not reported by preflight.');
 $negative_operation = 'p2-negative-fee-' . wp_generate_uuid4();
-$negative_before = WCOS_Order_Contract_Snapshot::source_signature($negative_source);
-$negative_rejected = false;
-try {
-	$adapter->split($negative_source, array('child-one' => array($negative_line_id => '1.000000')), $negative_operation);
-} catch (WCOS_Split_Preflight_Exception $exception) {
-	$negative_rejected = 'negative_fee_policy_missing' === $exception->get_reason();
-}
-wcos_p2_adapter_assert($negative_rejected, 'Negative-fee Split was not rejected before mutation.');
-wcos_p2_adapter_assert($negative_before === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($negative_source->get_id())), 'Negative-fee rejection changed the source order.');
-wcos_p2_adapter_assert(null === WCOS_Operation_Journal::get(wc_get_order($negative_source->get_id()), $negative_operation), 'Negative-fee rejection created a journal.');
-wcos_p2_adapter_cleanup($negative_source->get_id());
+$negative_children = $adapter->split($negative_source, array('child-one' => array($negative_line_id => '1.000000')), $negative_operation);
+$negative_source = wc_get_order($negative_source->get_id());
+$negative_child = wc_get_order($negative_children[0]->get_id());
+wcos_p2_adapter_assert(1 === count($negative_source->get_items('fee')), 'Split removed the source-owned negative fee.');
+wcos_p2_adapter_assert(0 === count($negative_child->get_items('fee')), 'Split duplicated a source-owned negative fee to a child.');
+$negative_source_fees = $negative_source->get_items('fee');
+$negative_source_fee = reset($negative_source_fees);
+wcos_p2_adapter_assert($negative_source_fee instanceof WC_Order_Item_Fee && -200 === wcos_p2_charge_units($negative_source_fee->get_total()), 'Source-owned negative fee amount drifted.');
+wcos_p2_adapter_cleanup($negative_source->get_id(), $negative_operation);
 wp_delete_post($negative_product->get_id(), true);
 
 /* Multi-child rounding: every cent and tax cent is conserved deterministically. */
