@@ -399,19 +399,22 @@ class WooCommerce_Order_Splitter_Settings {
 				'id'       => 'order_splitter_order_label',
 				'default'  => 'yes',
 			),
-			'allow_split_orders' => array(
-				'name'     => esc_html__('Permission', 'wc-order-splitter'),
-				'type'     => 'checkbox',
-				'desc'     => esc_html__('Enable the shop manager to split orders', 'wc-order-splitter'),
-				'id'       => 'order_splitter_shop_manager_permission',
-				'default'  => 'no',
-			),
 			'section_end' => array(
 				'type' => 'sectionend',
 				'id'   => 'advanced_order_splitter_section_end'
 			)
 		);
-		return apply_filters('advanced_settings', $settings);
+		$settings = apply_filters('advanced_settings', $settings);
+		// The retired option must not be reintroduced as a writable field.
+		foreach ($settings as $key => $setting) {
+			if (is_array($setting)
+				&& isset($setting['id'])
+				&& 'order_splitter_shop_manager_permission' === $setting['id']) {
+				unset($settings[$key]);
+			}
+		}
+
+		return $settings;
 	}
 
 	public function get_automation_splitter_settings() {
@@ -491,7 +494,6 @@ class WooCommerce_Order_Splitter_Settings {
 			'order_splitter_status_allowed' => array('wc-processing'),
 			'order_splitter_exclude_shipping_fee' => 'no',
 			'order_splitter_disable_split_order_email' => 'none',
-			'order_splitter_shop_manager_permission' => 'no',
 			'order_splitter_order_label' => 'yes',
 		);
 

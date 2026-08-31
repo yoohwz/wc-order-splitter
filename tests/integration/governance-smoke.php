@@ -19,6 +19,9 @@ function wcos_governance_expect_runtime(callable $callback, $message) {
 	throw new RuntimeException($message);
 }
 
+$legacy_permission_exists = false !== get_option('order_splitter_shop_manager_permission', false);
+$legacy_permission_value = get_option('order_splitter_shop_manager_permission', null);
+
 /* External configuration must never alter the internally approved gate set. */
 foreach (array(
 	'WC_ORDER_SPLITTER_MUTATIONS_ENABLED',
@@ -64,21 +67,20 @@ $subscriber_id = wp_insert_user(array(
 ));
 wcos_governance_assert(!is_wp_error($admin_id) && !is_wp_error($manager_id) && !is_wp_error($subscriber_id), 'Unable to create governance test users.');
 
-update_option('order_splitter_shop_manager_permission', 'no');
 wp_set_current_user($admin_id);
 WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::SPLIT, $order);
 WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::DUPLICATE, $order);
 
 wp_set_current_user($manager_id);
-wcos_governance_expect_runtime(
-	static function() use ($order) {
-		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::SPLIT, $order);
-	},
-	'Shop manager policy did not fail closed.'
-);
-update_option('order_splitter_shop_manager_permission', 'yes');
-WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::SPLIT, $order);
-WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::DUPLICATE, $order);
+foreach (array('no', 'yes', null) as $legacy_permission) {
+	if (null === $legacy_permission) {
+		delete_option('order_splitter_shop_manager_permission');
+	} else {
+		update_option('order_splitter_shop_manager_permission', $legacy_permission);
+	}
+	WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::SPLIT, $order);
+	WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::DUPLICATE, $order);
+}
 
 wp_set_current_user($subscriber_id);
 wcos_governance_expect_runtime(
@@ -169,6 +171,11 @@ if (!function_exists('wp_delete_user')) {
 wp_delete_user($admin_id);
 wp_delete_user($manager_id);
 wp_delete_user($subscriber_id);
+if ($legacy_permission_exists) {
+	update_option('order_splitter_shop_manager_permission', $legacy_permission_value);
+} else {
+	delete_option('order_splitter_shop_manager_permission');
+}
 wp_set_current_user(0);
 
 echo "mutation-governance-and-metadata-policy-ok\n";

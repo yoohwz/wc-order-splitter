@@ -10,7 +10,7 @@ final class WCOS_Order_Mutation_Authorizer {
 	public static function assert_workflow($workflow, WC_Order $source, WC_Order $target = null) {
 		$workflow = sanitize_key((string) $workflow);
 		self::assert_shop_order($source);
-		self::assert_shop_manager_policy();
+		self::assert_operator();
 
 		switch ($workflow) {
 			case WCOS_Feature_Gates::SPLIT:
@@ -54,17 +54,17 @@ final class WCOS_Order_Mutation_Authorizer {
 	}
 
 	public static function assert_split(WC_Order $source) {
-		self::assert_shop_manager_policy();
+		self::assert_operator();
 		self::assert_can_edit($source);
 	}
 
 	public static function assert_duplicate(WC_Order $source) {
-		self::assert_shop_manager_policy();
+		self::assert_operator();
 		self::assert_can_edit($source);
 	}
 
 	public static function assert_return(WC_Order $child, WC_Order $parent) {
-		self::assert_shop_manager_policy();
+		self::assert_operator();
 		self::assert_can_edit($child);
 		self::assert_can_edit($parent);
 		self::assert_can_delete($child);
@@ -80,9 +80,26 @@ final class WCOS_Order_Mutation_Authorizer {
 
 	/** Authorize the current edited order before a Merge target is selected. */
 	public static function assert_merge_source(WC_Order $source) {
-		self::assert_shop_manager_policy();
+		self::assert_operator();
 		self::assert_can_edit($source);
 		self::assert_can_delete($source);
+	}
+
+	/**
+	 * Restrict plugin mutation workflows to the two supported operator roles.
+	 *
+	 * Per-order WooCommerce capability checks remain mandatory and are applied
+	 * separately by the workflow-specific methods above.
+	 */
+	public static function assert_operator() {
+		$user = wp_get_current_user();
+		if (!$user || !$user->exists()) {
+			throw new RuntimeException(__('You must be signed in to mutate orders.', 'wc-order-splitter'));
+		}
+
+		if (empty(array_intersect(array('administrator', 'shop_manager'), (array) $user->roles))) {
+			throw new RuntimeException(__('You are not allowed to use order mutation workflows.', 'wc-order-splitter'));
+		}
 	}
 
 	private static function assert_shop_order(WC_Order $order) {
@@ -91,15 +108,4 @@ final class WCOS_Order_Mutation_Authorizer {
 		}
 	}
 
-	private static function assert_shop_manager_policy() {
-		$user = wp_get_current_user();
-		if (!$user || !$user->exists()) {
-			throw new RuntimeException(__('You must be signed in to mutate orders.', 'wc-order-splitter'));
-		}
-
-		if (in_array('shop_manager', (array) $user->roles, true)
-			&& 'yes' !== get_option('order_splitter_shop_manager_permission', 'no')) {
-			throw new RuntimeException(__('Shop manager access to order mutation workflows is disabled.', 'wc-order-splitter'));
-		}
-	}
 }

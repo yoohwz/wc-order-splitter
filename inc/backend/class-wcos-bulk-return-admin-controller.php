@@ -66,6 +66,10 @@ final class WCOS_Bulk_Return_Admin_Controller {
 	}
 
 	public function register_bulk_action(array $actions) {
+		if (!$this->is_supported_operator()) {
+			return $actions;
+		}
+
 		if (WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN)) {
 			$actions[self::BULK_ACTION] = __('Return to original order', 'wc-order-splitter');
 		}
@@ -146,7 +150,7 @@ final class WCOS_Bulk_Return_Admin_Controller {
 	public function ajax_resume() { $this->send_ajax('resume_request'); }
 
 	public function enqueue_assets() {
-		if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN) || !$this->is_orders_list_screen()) { return; }
+		if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN) || !$this->is_supported_operator() || !$this->is_orders_list_screen()) { return; }
 		$plugin_file = dirname(__DIR__, 2) . '/wc-order-splitter.php';
 		wp_enqueue_style('wcos-bulk-return-admin', plugins_url('css/p2-bulk-return-admin.css', $plugin_file), array('wcos-admin-backbone-modal'), WC_ORDER_SPLITTER_VERSION);
 		wp_enqueue_script('wcos-bulk-return-admin', plugins_url('js/p2-bulk-return-admin.js', $plugin_file), array('jquery', 'wcos-admin-backbone-modal'), WC_ORDER_SPLITTER_VERSION, true);
@@ -189,7 +193,7 @@ final class WCOS_Bulk_Return_Admin_Controller {
 	}
 
 	public function render_dialog() {
-		if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN) || !$this->is_orders_list_screen()) { return; }
+		if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::BULK_RETURN) || !$this->is_supported_operator() || !$this->is_orders_list_screen()) { return; }
 		echo $this->dialog_html(); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 	}
 
@@ -286,5 +290,14 @@ final class WCOS_Bulk_Return_Admin_Controller {
 		if (!$screen) { return false; }
 		$hpos = function_exists('wc_get_page_screen_id') ? wc_get_page_screen_id('shop-order') : 'woocommerce_page_wc-orders';
 		return 'edit-shop_order' === $screen->id || ($hpos === $screen->id && empty($_GET['id']));
+	}
+
+	private function is_supported_operator() {
+		try {
+			WCOS_Order_Mutation_Authorizer::assert_operator();
+			return true;
+		} catch (Throwable $throwable) {
+			return false;
+		}
 	}
 }

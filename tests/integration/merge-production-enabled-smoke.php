@@ -184,11 +184,13 @@ final class WCOS_Merge_Production_Enabled_Matrix {
 		wp_set_current_user((int) $manager);
 		update_option('order_splitter_shop_manager_permission', 'no');
 		$manager_request = self::request($source, $target);
-		self::expect_transport(function() use ($controller, $manager_request) { $controller->review_request($manager_request); }, 'authorization_failed');
+		$manager_review = $controller->review_request($manager_request);
+		self::assert(!empty($manager_review['review_id']), 'Stored legacy no value still blocked Shop Manager Review.');
+		WCOS_Merge_Review_Store::delete($manager_review['review_id']);
 		update_option('order_splitter_shop_manager_permission', 'yes');
 		$manager_request['nonce'] = wp_create_nonce('wcos_merge_order_' . $source->get_id());
 		$manager_review = $controller->review_request($manager_request);
-		self::assert(!empty($manager_review['review_id']), 'Enabled shop-manager semantics did not allow Review.');
+		self::assert(!empty($manager_review['review_id']), 'Stored legacy yes value did not allow Shop Manager Review.');
 		WCOS_Merge_Review_Store::delete($manager_review['review_id']);
 		wp_set_current_user(self::$admin_id);
 		update_option('order_splitter_shop_manager_permission', self::$old_shop_permission);
@@ -202,7 +204,7 @@ final class WCOS_Merge_Production_Enabled_Matrix {
 			'source_excluded' => true,
 			'invalid_input_rejected' => true,
 			'unauthorized_rejected' => true,
-			'shop_manager_option_enforced' => true,
+			'shop_manager_option_inert' => true,
 		);
 	}
 
