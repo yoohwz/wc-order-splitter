@@ -77,6 +77,7 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-return-participation.php';
 		include_once $root . 'domain/class-wcos-return-plan.php';
 		include_once $root . 'domain/class-wcos-return-source-evolution-authority.php';
+		include_once $root . 'domain/class-wcos-legacy-return-compatibility-authority.php';
 		include_once $root . 'domain/class-wcos-return-lineage-authority.php';
 		include_once $root . 'domain/class-wcos-return-preflight.php';
 		include_once $root . 'domain/class-wcos-return-journal-context.php';

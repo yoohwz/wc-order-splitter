@@ -227,9 +227,23 @@ final class WCOS_Order_Mutation_Snapshot {
 
 	private static function relation_state(WC_Order $order) {
 		return array(
-			'_wcos_child_order_ids' => self::normalize_order_ids($order->get_meta('_wcos_child_order_ids', true)),
-			'yoos_splitted_order' => self::normalize_legacy_order_ids($order->get_meta('yoos_splitted_order', true)),
+			'_wcos_child_order_ids' => self::normalize_order_ids(self::single_relation_meta($order, '_wcos_child_order_ids')),
+			'yoos_splitted_order' => self::normalize_legacy_order_ids(self::single_relation_meta($order, 'yoos_splitted_order')),
 		);
+	}
+
+	private static function single_relation_meta(WC_Order $order, $key) {
+		$values = array();
+		foreach ($order->get_meta_data() as $meta) {
+			$data = is_object($meta) && method_exists($meta, 'get_data') ? $meta->get_data() : array();
+			if (isset($data['key']) && (string) $key === (string) $data['key'] && array_key_exists('value', $data)) {
+				$values[] = $data['value'];
+			}
+		}
+		if (count($values) > 1) {
+			throw new RuntimeException(__('Duplicate source relationship metadata is not supported by the hardened mutation engine.', 'wc-order-splitter'));
+		}
+		return empty($values) ? '' : reset($values);
 	}
 
 	private static function normalize_reduced_stock($value) {

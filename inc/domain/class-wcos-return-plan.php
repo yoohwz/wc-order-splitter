@@ -7,12 +7,17 @@ final class WCOS_Return_Plan {
 
 	const SCHEMA_VERSION = 1;
 	const POLICY_VERSION = 1;
+	const COMPATIBILITY_SCHEMA_VERSION = 2;
+	const COMPATIBILITY_POLICY_VERSION = 1;
 	const DESTINATION_RESIDUAL_SOURCE_ITEM = 'residual_source_item';
 	const DESTINATION_FRESH_SOURCE_ITEM = 'fresh_source_item';
 
 	public static function build(array $lineage_authority) {
 		if (empty($lineage_authority['authority_fingerprint'])) {
 			throw new InvalidArgumentException(__('A verified Return lineage authority is required.', 'wc-order-splitter'));
+		}
+		if (WCOS_Legacy_Return_Compatibility_Authority::is_authority($lineage_authority)) {
+			return self::build_legacy_compatibility($lineage_authority);
 		}
 
 		$price_precision = WCOS_Price_Precision_Scope::validate(isset($lineage_authority['price_precision']) ? $lineage_authority['price_precision'] : null);
@@ -61,6 +66,59 @@ final class WCOS_Return_Plan {
 			throw new InvalidArgumentException(__('Return plan authority is incomplete.', 'wc-order-splitter'));
 		}
 
+		$plan['plan_fingerprint'] = self::fingerprint($plan);
+		return $plan;
+	}
+
+	public static function is_legacy_compatibility(array $plan) {
+		return self::COMPATIBILITY_SCHEMA_VERSION === (int) (isset($plan['schema_version']) ? $plan['schema_version'] : 0)
+			&& self::COMPATIBILITY_POLICY_VERSION === (int) (isset($plan['policy_version']) ? $plan['policy_version'] : 0)
+			&& WCOS_Legacy_Return_Compatibility_Authority::LINEAGE_BASIS === sanitize_key(isset($plan['lineage_basis']) ? (string) $plan['lineage_basis'] : '');
+	}
+
+	private static function build_legacy_compatibility(array $authority) {
+		$stored = self::fingerprint_value(isset($authority['authority_fingerprint']) ? $authority['authority_fingerprint'] : '');
+		if (!hash_equals($stored, WCOS_Legacy_Return_Compatibility_Authority::fingerprint($authority))) {
+			throw new InvalidArgumentException(__('Legacy Return lineage authority failed integrity verification.', 'wc-order-splitter'));
+		}
+		$precision = WCOS_Price_Precision_Scope::validate(isset($authority['price_precision']) ? $authority['price_precision'] : null);
+		$child_id = absint(isset($authority['child_order_id']) ? $authority['child_order_id'] : 0);
+		$source_id = absint(isset($authority['source_order_id']) ? $authority['source_order_id'] : 0);
+		$operation_id = sanitize_key(isset($authority['split_operation_id']) ? (string) $authority['split_operation_id'] : '');
+		$child_key = sanitize_key(isset($authority['split_child_key']) ? (string) $authority['split_child_key'] : '');
+		$currency = isset($authority['currency']) ? (string) $authority['currency'] : '';
+		$shipping = isset($authority['child_shipping_authority']) && is_array($authority['child_shipping_authority']) ? $authority['child_shipping_authority'] : array();
+		WCOS_Legacy_Return_Compatibility_Authority::assert_shipping_authority($shipping, $child_id, $precision);
+		if (!$child_id || !$source_id || $child_id === $source_id || '' === $operation_id || '' === $child_key
+			|| 1 !== preg_match('/^[A-Z]{3}$/D', $currency)
+			|| WCOS_Legacy_Return_Compatibility_Authority::BASELINE_SHA !== (isset($authority['baseline_sha']) ? $authority['baseline_sha'] : '')) {
+			throw new InvalidArgumentException(__('Legacy Return plan authority is incomplete.', 'wc-order-splitter'));
+		}
+		$plan = array(
+			'schema_version' => self::COMPATIBILITY_SCHEMA_VERSION,
+			'policy_version' => self::COMPATIBILITY_POLICY_VERSION,
+			'lineage_basis' => WCOS_Legacy_Return_Compatibility_Authority::LINEAGE_BASIS,
+			'baseline_sha' => WCOS_Legacy_Return_Compatibility_Authority::BASELINE_SHA,
+			'child_order_id' => $child_id,
+			'source_order_id' => $source_id,
+			'split_operation_id' => $operation_id,
+			'split_child_key' => $child_key,
+			'lineage_authority_fingerprint' => $stored,
+			'legacy_relation_authority_fingerprint' => self::fingerprint_value(isset($authority['legacy_relation_authority_fingerprint']) ? $authority['legacy_relation_authority_fingerprint'] : ''),
+			'price_precision' => $precision,
+			'currency' => $currency,
+			'prices_include_tax' => !empty($authority['prices_include_tax']),
+			'execution_policy' => WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER,
+			'strategy' => WCOS_Legacy_Return_Compatibility_Authority::LINEAGE_BASIS,
+			'source_commercial_authority' => self::fingerprint_value(isset($authority['source_commercial_authority']) ? $authority['source_commercial_authority'] : ''),
+			'source_relation_authority' => self::fingerprint_value(isset($authority['source_relation_authority']) ? $authority['source_relation_authority'] : ''),
+			'child_commercial_authority' => self::fingerprint_value(isset($authority['child_commercial_authority']) ? $authority['child_commercial_authority'] : ''),
+			'child_shipping_authority' => $shipping,
+			'lines' => self::canonical_compatibility_lines(isset($authority['lines']) && is_array($authority['lines']) ? $authority['lines'] : array(), $precision),
+		);
+		if (empty($plan['lines'])) {
+			throw new InvalidArgumentException(__('Legacy Return plan contains no product lines.', 'wc-order-splitter'));
+		}
 		$plan['plan_fingerprint'] = self::fingerprint($plan);
 		return $plan;
 	}
@@ -115,6 +173,45 @@ final class WCOS_Return_Plan {
 				'reduced_stock' => null === (isset($line['reduced_stock']) ? $line['reduced_stock'] : null)
 					? null
 					: WCOS_Decimal::normalize($line['reduced_stock'], 6),
+			);
+		}
+		ksort($canonical, SORT_NUMERIC);
+		return $canonical;
+	}
+
+	private static function canonical_compatibility_lines(array $lines, $price_precision) {
+		$canonical = array();
+		foreach ($lines as $raw_line_key => $line) {
+			$line_key = absint($raw_line_key);
+			if (!$line_key || isset($canonical[$line_key]) || !is_array($line)) {
+				throw new InvalidArgumentException(__('Legacy Return plan line keys must be unique persisted child item IDs.', 'wc-order-splitter'));
+			}
+			$child_item_id = absint(isset($line['child_item_id']) ? $line['child_item_id'] : 0);
+			$source_item_id = absint(isset($line['source_item_id']) ? $line['source_item_id'] : 0);
+			$destination = sanitize_key(isset($line['destination']) ? (string) $line['destination'] : '');
+			$destination_id = absint(isset($line['destination_source_item_id']) ? $line['destination_source_item_id'] : 0);
+			if ($child_item_id !== $line_key || !absint(isset($line['product_id']) ? $line['product_id'] : 0)
+				|| !in_array($destination, array(self::DESTINATION_RESIDUAL_SOURCE_ITEM, self::DESTINATION_FRESH_SOURCE_ITEM), true)
+				|| (self::DESTINATION_RESIDUAL_SOURCE_ITEM === $destination && (!$source_item_id || $destination_id !== $source_item_id))
+				|| (self::DESTINATION_FRESH_SOURCE_ITEM === $destination && (0 !== $source_item_id || 0 !== $destination_id))) {
+				throw new InvalidArgumentException(__('Legacy Return plan destination provenance is inconsistent.', 'wc-order-splitter'));
+			}
+			$canonical[$line_key] = array(
+				'source_item_id' => $source_item_id,
+				'child_item_id' => $child_item_id,
+				'product_id' => absint($line['product_id']),
+				'variation_id' => absint(isset($line['variation_id']) ? $line['variation_id'] : 0),
+				'tax_class' => isset($line['tax_class']) && is_string($line['tax_class']) ? $line['tax_class'] : '',
+				'line_identity_authority' => self::fingerprint_value(isset($line['line_identity_authority']) ? $line['line_identity_authority'] : ''),
+				'destination' => $destination,
+				'destination_source_item_id' => $destination_id,
+				'quantity' => WCOS_Decimal::normalize(isset($line['quantity']) ? $line['quantity'] : '', 6),
+				'subtotal' => WCOS_Decimal::normalize(isset($line['subtotal']) ? $line['subtotal'] : '', $price_precision),
+				'total' => WCOS_Decimal::normalize(isset($line['total']) ? $line['total'] : '', $price_precision),
+				'subtotal_tax' => WCOS_Decimal::normalize(isset($line['subtotal_tax']) ? $line['subtotal_tax'] : '', $price_precision),
+				'total_tax' => WCOS_Decimal::normalize(isset($line['total_tax']) ? $line['total_tax'] : '', $price_precision),
+				'taxes' => self::canonical_taxes(isset($line['taxes']) && is_array($line['taxes']) ? $line['taxes'] : array(), $price_precision),
+				'reduced_stock' => null === (isset($line['reduced_stock']) ? $line['reduced_stock'] : null) ? null : WCOS_Decimal::normalize($line['reduced_stock'], 6),
 			);
 		}
 		ksort($canonical, SORT_NUMERIC);

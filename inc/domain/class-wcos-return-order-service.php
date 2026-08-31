@@ -81,22 +81,32 @@ final class WCOS_Return_Order_Service {
 
 			$original_templates = WCOS_Tax_Item_Synchronizer::templates($original);
 			$child_templates = WCOS_Tax_Item_Synchronizer::templates($child);
-			foreach (array_keys($child_templates) as $rate_id) {
-				if (!isset($original_templates[$rate_id])) {
+			$is_legacy_compatibility = WCOS_Return_Plan::is_legacy_compatibility($plan);
+			$required_child_rate_ids = $is_legacy_compatibility ? $this->plan_tax_rate_ids($plan) : array_keys($child_templates);
+			$templates = $original_templates;
+			foreach ($required_child_rate_ids as $rate_id) {
+				if (isset($original_templates[$rate_id])) {
+					continue;
+				}
+				if (!$is_legacy_compatibility || !isset($child_templates[$rate_id])) {
 					throw new RuntimeException(__('A Return historical tax template disappeared from the original order.', 'wc-order-splitter'));
 				}
+				/* Import only a sealed product-line rate, never child shipping-only authority. */
+				$templates[$rate_id] = $child_templates[$rate_id];
 			}
-			$templates = $original_templates + $child_templates;
+			if (!$is_legacy_compatibility) {
+				$templates = $original_templates + $child_templates;
+			}
 			$added_ids = array();
 			$destination_ids = array();
 
-			foreach ($plan['lines'] as $source_item_id => $line) {
+			foreach ($plan['lines'] as $line_key => $line) {
 				list($child, $original, $record) = $this->boundary($lease, $child_id, $original_id, $operation_id, 'before_original_line_write', $added_ids);
 				$child_item = $child->get_item(absint($line['child_item_id']));
 				$this->assert_plan_line($child_item, $line, $precision, true);
 				if (WCOS_Return_Plan::DESTINATION_RESIDUAL_SOURCE_ITEM === $line['destination']) {
 					$destination = $original->get_item(absint($line['destination_source_item_id']));
-					if (!$destination instanceof WC_Order_Item_Product || (int) $destination->get_id() !== (int) $source_item_id) {
+					if (!$destination instanceof WC_Order_Item_Product || (int) $destination->get_id() !== (int) $line['destination_source_item_id']) {
 						throw new RuntimeException(__('A Return residual destination disappeared.', 'wc-order-splitter'));
 					}
 					$result = $destination->set_props(array(
@@ -109,7 +119,7 @@ final class WCOS_Return_Order_Service {
 					));
 					if (is_wp_error($result)) { throw new RuntimeException($result->get_error_message()); }
 					$destination->save();
-					$destination_ids[$source_item_id] = absint($destination->get_id());
+					$destination_ids[$line_key] = absint($destination->get_id());
 				} else {
 					$destination = WCOS_Order_Item_Cloner::product($child_item, array(), false, WCOS_Order_Item_Meta_Policy::CONTEXT_RETURN);
 					$destination->delete_meta_data('_reduced_stock');
@@ -117,7 +127,7 @@ final class WCOS_Return_Order_Service {
 					$original->save();
 					if (!absint($destination->get_id())) { throw new RuntimeException(__('A fresh Return original line did not persist.', 'wc-order-splitter')); }
 					$added_ids[] = absint($destination->get_id());
-					$destination_ids[$source_item_id] = absint($destination->get_id());
+					$destination_ids[$line_key] = absint($destination->get_id());
 				}
 				$this->event('after_original_line_persistence', $child, $this->load_order($original_id, 'original'), $operation_id);
 				$record = $this->checkpoint_state($child_id, $original_id, $operation_id, WCOS_Return_Recovery_State_Graph::ORIGINAL_STAGING, $added_ids, $destination_ids, false);
@@ -144,9 +154,9 @@ final class WCOS_Return_Order_Service {
 			$child->get_data_store()->set_stock_reduced($child_id, false);
 			$record = $this->checkpoint_state($child_id, $original_id, $operation_id, WCOS_Return_Recovery_State_Graph::CHILD_OWNERSHIP_NEUTRALIZED, $added_ids, $destination_ids, false);
 
-			foreach ($plan['lines'] as $source_item_id => $line) {
+			foreach ($plan['lines'] as $line_key => $line) {
 				list($child, $original, $record) = $this->boundary($lease, $child_id, $original_id, $operation_id, 'before_original_ownership_write', $added_ids);
-				$destination = $original->get_item(absint($destination_ids[$source_item_id]));
+				$destination = $original->get_item(absint($destination_ids[$line_key]));
 				if (!$destination instanceof WC_Order_Item_Product) { throw new RuntimeException(__('A Return ownership destination disappeared.', 'wc-order-splitter')); }
 				$before = $destination->get_meta('_reduced_stock', true);
 				$before = '' === $before || null === $before ? '0.000000' : WCOS_Decimal::normalize($before, 6);
@@ -164,6 +174,9 @@ final class WCOS_Return_Order_Service {
 
 			$child = $this->load_order($child_id, 'child');
 			$original = $this->load_order($original_id, 'original');
+			if (WCOS_Return_Plan::is_legacy_compatibility($plan)) {
+				WCOS_Legacy_Return_Compatibility_Authority::assert_child_shipping($child, $plan['child_shipping_authority'], $precision);
+			}
 			WCOS_Return_Recovery_Snapshot::assert_physical_stock_unchanged($snapshot, $child, $plan);
 			list($child, $original, $record) = $this->boundary($lease, $child_id, $original_id, $operation_id, 'before_child_retirement', $added_ids);
 			$this->event('before_non_force_child_retirement', $child, $original, $operation_id);
@@ -326,11 +339,14 @@ final class WCOS_Return_Order_Service {
 	private function assert_plan_line($item, array $line, $precision, $check_reduced_stock) {
 		$current_reduced = $item instanceof WC_Order_Item_Product ? $item->get_meta('_reduced_stock', true) : null;
 		$current_reduced = '' === $current_reduced || null === $current_reduced ? null : WCOS_Decimal::normalize($current_reduced, 6);
+		$identity_authority = $item instanceof WC_Order_Item_Product
+			? WCOS_Return_Lineage_Authority::line_identity_authority(WCOS_Line_Identity::from_item($item)) : '';
 		if (!$item instanceof WC_Order_Item_Product
 			|| (int) $item->get_id() !== (int) $line['child_item_id']
 			|| (int) $line['product_id'] !== (int) $item->get_product_id()
 			|| (int) $line['variation_id'] !== (int) $item->get_variation_id()
 			|| (string) $line['tax_class'] !== (string) $item->get_tax_class()
+			|| !hash_equals((string) $line['line_identity_authority'], $identity_authority)
 			|| (string) $line['quantity'] !== WCOS_Decimal::normalize($item->get_quantity(), 6)
 			|| (string) $line['subtotal'] !== WCOS_Decimal::normalize($item->get_subtotal(), $precision)
 			|| (string) $line['subtotal_tax'] !== WCOS_Decimal::normalize($item->get_subtotal_tax(), $precision)
@@ -359,6 +375,20 @@ final class WCOS_Return_Order_Service {
 			ksort($result[$bucket], SORT_NUMERIC);
 		}
 		return $result;
+	}
+
+	private function plan_tax_rate_ids(array $plan) {
+		$ids = array();
+		foreach (isset($plan['lines']) && is_array($plan['lines']) ? $plan['lines'] : array() as $line) {
+			foreach (array('subtotal', 'total') as $bucket) {
+				foreach (isset($line['taxes'][$bucket]) && is_array($line['taxes'][$bucket]) ? array_keys($line['taxes'][$bucket]) : array() as $rate_id) {
+					$rate_id = absint($rate_id);
+					if ($rate_id) { $ids[$rate_id] = $rate_id; }
+				}
+			}
+		}
+		ksort($ids, SORT_NUMERIC);
+		return array_values($ids);
 	}
 
 	private function lease_guard(WCOS_Multi_Order_Lease $lease) {

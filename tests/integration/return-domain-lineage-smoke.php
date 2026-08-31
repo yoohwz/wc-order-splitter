@@ -626,13 +626,13 @@ wcos_return_foundation_assert(empty($charge_report['supported']) && 'child_charg
 $child->remove_item($child_fee->get_id());
 $child->save();
 
-/* Legacy-only metadata remains explicitly non-executable. */
+/* One-sided legacy metadata remains explicitly non-executable. */
 $legacy = wc_create_order();
 wcos_return_foundation_record('orders', $legacy->get_id());
 $legacy->update_meta_data('yoos_original_order', $source->get_id());
 $legacy->save();
 $legacy_report = WCOS_Return_Preflight::report(wc_get_order($legacy->get_id()), true);
-wcos_return_foundation_assert(empty($legacy_report['supported']) && 'legacy_lineage_not_authoritative' === $legacy_report['reason'], 'Legacy-only Return lineage became executable.');
+wcos_return_foundation_assert(empty($legacy_report['supported']) && 'legacy_reciprocal_missing' === $legacy_report['reason'], 'One-sided legacy Return lineage became executable.');
 $legacy->delete(true);
 
 $sibling->delete(true);

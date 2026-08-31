@@ -329,6 +329,7 @@ final class WCOS_Return_Admin_Controller {
 
 	private function review_summary(WC_Order $child, WC_Order $original, array $report) {
 		$plan = $report['return_plan'];
+		$is_legacy_compatibility = WCOS_Return_Plan::is_legacy_compatibility($plan);
 		$precision = (int) $plan['price_precision'];
 		$quantity_units = 0;
 		$subtotal_units = 0;
@@ -339,6 +340,12 @@ final class WCOS_Return_Admin_Controller {
 			$subtotal_units += WCOS_Decimal::to_units($line['subtotal'], $precision);
 			$total_units += WCOS_Decimal::to_units($line['total'], $precision);
 			$tax_units += WCOS_Decimal::to_units($line['total_tax'], $precision);
+		}
+		$residual_count = 0;
+		$fresh_count = 0;
+		foreach ($plan['lines'] as $line) {
+			if (WCOS_Return_Plan::DESTINATION_RESIDUAL_SOURCE_ITEM === $line['destination']) { $residual_count++; }
+			else { $fresh_count++; }
 		}
 		return array(
 			'child' => array('id' => $child->get_id(), 'number' => (string) $child->get_order_number(), 'status' => (string) $child->get_status()),
@@ -352,7 +359,15 @@ final class WCOS_Return_Admin_Controller {
 			'currency' => (string) $plan['currency'],
 			'price_precision' => $precision,
 			'retirement' => array('policy' => WCOS_Return_Retirement_Policy::approved_identifier(), 'child_status_after' => 'trash'),
-			'compatibility' => array('supported' => true, 'reason' => 'supported'),
+			'compatibility' => array(
+				'supported' => true,
+				'reason' => 'supported',
+				'lineage_basis' => $is_legacy_compatibility ? WCOS_Legacy_Return_Compatibility_Authority::LINEAGE_BASIS : 'hardened_split',
+				'legacy_1_4_11_detected' => $is_legacy_compatibility,
+				'residual_destination_count' => $residual_count,
+				'fresh_destination_count' => $fresh_count,
+				'child_shipping_disposition' => $is_legacy_compatibility ? 'retain_immutable_on_retired_child' : 'none',
+			),
 		);
 	}
 
