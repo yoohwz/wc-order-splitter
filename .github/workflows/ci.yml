@@ -610,6 +610,23 @@ jobs:
       - name: Reject corrupted reduced-stock source markers
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/stock-marker-validation-smoke.php
 
+      - name: Resolve wp-env CLI container for concurrent workers
+        if: matrix.storage == 'hpos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t cli_containers < <(
+            docker ps \
+              --filter 'status=running' \
+              --filter 'label=com.docker.compose.service=cli' \
+              --format '{{.ID}}'
+          )
+          test "${#cli_containers[@]}" -eq 1
+          cli_container="${cli_containers[0]}"
+          docker inspect --format '{{.State.Status}}' "$cli_container" | grep -Fxq 'running'
+          docker exec --workdir /var/www/html "$cli_container" wp cli info
+          printf 'WCOS_WP_ENV_CLI_CONTAINER=%s\n' "$cli_container" >> "$GITHUB_ENV"
+
       - name: Verify real concurrent worker lease exclusion
         if: matrix.storage == 'hpos'
         shell: bash
@@ -620,19 +637,29 @@ jobs:
           test -n "$order_id"
           worker='wp-content/plugins/wc-order-splitter/tests/integration/concurrency-lock-worker.php'
 
-          npx wp-env run cli wp eval-file "$worker" "$order_id" worker-a 4 > /tmp/wcos-worker-a.log 2>&1 &
+          docker exec --workdir /var/www/html "$WCOS_WP_ENV_CLI_CONTAINER" wp eval-file "$worker" "$order_id" worker-a 4 > /tmp/wcos-worker-a.log 2>&1 &
           worker_a_pid=$!
           sleep 1
-          npx wp-env run cli wp eval-file "$worker" "$order_id" worker-b 0 > /tmp/wcos-worker-b.log 2>&1
-          wait "$worker_a_pid"
+          docker exec --workdir /var/www/html "$WCOS_WP_ENV_CLI_CONTAINER" wp eval-file "$worker" "$order_id" worker-b 0 > /tmp/wcos-worker-b.log 2>&1 &
+          worker_b_pid=$!
 
+          set +e
+          wait "$worker_a_pid"
+          worker_a_status=$?
+          wait "$worker_b_pid"
+          worker_b_status=$?
+          set -e
+
+          printf 'worker-a-status=%s\nworker-b-status=%s\n' "$worker_a_status" "$worker_b_status"
           cat /tmp/wcos-worker-a.log
           cat /tmp/wcos-worker-b.log
+          test "$worker_a_status" -eq 0
+          test "$worker_b_status" -eq 0
           grep -Fq 'ACQUIRED worker-a' /tmp/wcos-worker-a.log
           grep -Fq 'RELEASED worker-a' /tmp/wcos-worker-a.log
           grep -Fq 'BLOCKED worker-b' /tmp/wcos-worker-b.log
 
-          npx wp-env run cli wp eval-file "$worker" "$order_id" worker-c 0 > /tmp/wcos-worker-c.log 2>&1
+          docker exec --workdir /var/www/html "$WCOS_WP_ENV_CLI_CONTAINER" wp eval-file "$worker" "$order_id" worker-c 0 > /tmp/wcos-worker-c.log 2>&1
           cat /tmp/wcos-worker-c.log
           grep -Fq 'ACQUIRED worker-c' /tmp/wcos-worker-c.log
           grep -Fq 'RELEASED worker-c' /tmp/wcos-worker-c.log
@@ -654,15 +681,23 @@ jobs:
           trap cleanup_race EXIT
 
           npx wp-env run cli wp eval-file "$fixture"
-          npx wp-env run cli wp eval-file "$worker" worker-a > /tmp/wcos-confirm-worker-a.log 2>&1 &
+          docker exec --workdir /var/www/html "$WCOS_WP_ENV_CLI_CONTAINER" wp eval-file "$worker" worker-a > /tmp/wcos-confirm-worker-a.log 2>&1 &
           worker_a_pid=$!
-          npx wp-env run cli wp eval-file "$worker" worker-b > /tmp/wcos-confirm-worker-b.log 2>&1 &
+          docker exec --workdir /var/www/html "$WCOS_WP_ENV_CLI_CONTAINER" wp eval-file "$worker" worker-b > /tmp/wcos-confirm-worker-b.log 2>&1 &
           worker_b_pid=$!
-          wait "$worker_a_pid"
-          wait "$worker_b_pid"
 
+          set +e
+          wait "$worker_a_pid"
+          worker_a_status=$?
+          wait "$worker_b_pid"
+          worker_b_status=$?
+          set -e
+
+          printf 'worker-a-status=%s\nworker-b-status=%s\n' "$worker_a_status" "$worker_b_status"
           cat /tmp/wcos-confirm-worker-a.log
           cat /tmp/wcos-confirm-worker-b.log
+          test "$worker_a_status" -eq 0
+          test "$worker_b_status" -eq 0
 
           success_count="$(awk '/^CONFIRMED / { count++ } END { print count + 0 }' /tmp/wcos-confirm-worker-a.log /tmp/wcos-confirm-worker-b.log)"
           rejected_count="$(awk '/^REJECTED / { count++ } END { print count + 0 }' /tmp/wcos-confirm-worker-a.log /tmp/wcos-confirm-worker-b.log)"
@@ -710,15 +745,23 @@ jobs:
           trap cleanup_race EXIT
 
           npx wp-env run cli wp eval-file "$fixture"
-          npx wp-env run cli wp eval-file "$worker" worker-a > /tmp/wcos-return-confirm-worker-a.log 2>&1 &
+          docker exec --workdir /var/www/html "$WCOS_WP_ENV_CLI_CONTAINER" wp eval-file "$worker" worker-a > /tmp/wcos-return-confirm-worker-a.log 2>&1 &
           worker_a_pid=$!
-          npx wp-env run cli wp eval-file "$worker" worker-b > /tmp/wcos-return-confirm-worker-b.log 2>&1 &
+          docker exec --workdir /var/www/html "$WCOS_WP_ENV_CLI_CONTAINER" wp eval-file "$worker" worker-b > /tmp/wcos-return-confirm-worker-b.log 2>&1 &
           worker_b_pid=$!
-          wait "$worker_a_pid"
-          wait "$worker_b_pid"
 
+          set +e
+          wait "$worker_a_pid"
+          worker_a_status=$?
+          wait "$worker_b_pid"
+          worker_b_status=$?
+          set -e
+
+          printf 'worker-a-status=%s\nworker-b-status=%s\n' "$worker_a_status" "$worker_b_status"
           cat /tmp/wcos-return-confirm-worker-a.log
           cat /tmp/wcos-return-confirm-worker-b.log
+          test "$worker_a_status" -eq 0
+          test "$worker_b_status" -eq 0
           success_count="$(awk '/^CONFIRMED / { count++ } END { print count + 0 }' /tmp/wcos-return-confirm-worker-a.log /tmp/wcos-return-confirm-worker-b.log)"
           rejected_count="$(awk '/^REJECTED / { count++ } END { print count + 0 }' /tmp/wcos-return-confirm-worker-a.log /tmp/wcos-return-confirm-worker-b.log)"
           test "$success_count" -eq 1
@@ -760,9 +803,9 @@ jobs:
           trap cleanup_bulk_race EXIT
 
           npx wp-env run cli wp eval-file "$fixture"
-          npx wp-env run cli wp eval-file "$worker" worker-a > /tmp/wcos-bulk-confirm-worker-a.log 2>&1 &
+          docker exec --workdir /var/www/html "$WCOS_WP_ENV_CLI_CONTAINER" wp eval-file "$worker" worker-a > /tmp/wcos-bulk-confirm-worker-a.log 2>&1 &
           worker_a_pid=$!
-          npx wp-env run cli wp eval-file "$worker" worker-b > /tmp/wcos-bulk-confirm-worker-b.log 2>&1 &
+          docker exec --workdir /var/www/html "$WCOS_WP_ENV_CLI_CONTAINER" wp eval-file "$worker" worker-b > /tmp/wcos-bulk-confirm-worker-b.log 2>&1 &
           worker_b_pid=$!
 
           set +e
@@ -822,9 +865,9 @@ jobs:
           trap cleanup_bulk_execute_race EXIT
 
           npx wp-env run cli wp eval-file "$fixture"
-          npx wp-env run cli wp eval-file "$worker" worker-a 0 > /tmp/wcos-bulk-execute-worker-a.log 2>&1 &
+          docker exec --workdir /var/www/html "$WCOS_WP_ENV_CLI_CONTAINER" wp eval-file "$worker" worker-a 0 > /tmp/wcos-bulk-execute-worker-a.log 2>&1 &
           worker_a_pid=$!
-          npx wp-env run cli wp eval-file "$worker" worker-b 1 > /tmp/wcos-bulk-execute-worker-b.log 2>&1 &
+          docker exec --workdir /var/www/html "$WCOS_WP_ENV_CLI_CONTAINER" wp eval-file "$worker" worker-b 1 > /tmp/wcos-bulk-execute-worker-b.log 2>&1 &
           worker_b_pid=$!
 
           set +e
