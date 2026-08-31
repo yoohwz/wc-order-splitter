@@ -4,6 +4,9 @@ if (!defined('ABSPATH')) {
 	exit(1);
 }
 
+require_once __DIR__ . '/split-status-fixture-authority.php';
+WCOS_Test_Split_Status_Fixture_Authority::allow(array('wc-pending'));
+
 $GLOBALS['wcos_return_foundation_manifest'] = array(
 	'orders' => array(),
 	'products' => array(),

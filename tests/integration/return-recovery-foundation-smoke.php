@@ -2,6 +2,9 @@
 
 if (!defined('ABSPATH')) { exit(1); }
 
+require_once __DIR__ . '/split-status-fixture-authority.php';
+WCOS_Test_Split_Status_Fixture_Authority::allow(array('wc-pending'));
+
 function wcos_return_recovery_assert($condition, $message) {
 	if (!$condition) { throw new RuntimeException($message); }
 }
