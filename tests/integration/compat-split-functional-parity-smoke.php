@@ -56,6 +56,101 @@ function wcos_compat_split_return(WC_Order $child, $user_id) {
 	);
 }
 
+function wcos_compat_split_shipping_tamper_case(WC_Product $product, $user_id, $case, array &$order_ids) {
+	$source = wcos_compat_split_order('completed', array(array($product, 3)));
+	$order_ids[] = $source->get_id();
+	$item_id = (int) key($source->get_items('line_item'));
+	$rate_id = 909;
+
+	$shipping = new WC_Order_Item_Shipping();
+	$shipping->set_props(array(
+		'method_title' => 'Immutable authority shipping',
+		'method_id' => 'flat_rate',
+		'instance_id' => 91,
+		'total' => '5.00',
+		'taxes' => array('total' => array($rate_id => '0.50')),
+	));
+	$shipping->add_meta_data('Package label', 'Immutable package', true);
+	$source->add_item($shipping);
+	$tax = new WC_Order_Item_Tax();
+	$tax->set_props(array(
+		'rate_id' => $rate_id,
+		'label' => 'Immutable shipping tax',
+		'tax_total' => '0.00',
+		'shipping_tax_total' => '0.50',
+		'compound' => false,
+		'rate_percent' => 10,
+	));
+	$source->add_item($tax);
+	WCOS_Order_Totals_Rebuilder::rebuild($source);
+	$source->save();
+	$source = wc_get_order($source->get_id());
+
+	$verified = wcos_compat_split_confirm(
+		$source,
+		array('shipping-tamper-' . sanitize_key($case) => array($item_id => '1.000000')),
+		$user_id
+	);
+	$tampered = false;
+	$callback = static function($stage, $checkpoint_source, $checkpoint_children, $operation_id) use ($case, $verified, &$tampered, &$order_ids) {
+		if ($tampered || 'after_source_save' !== $stage || $verified['operation_id'] !== $operation_id) {
+			return;
+		}
+		$tampered = true;
+		$target = 'child_row' === $case
+			? wc_get_order(reset($checkpoint_children)->get_id())
+			: wc_get_order($checkpoint_source->get_id());
+		wcos_compat_split_assert($target instanceof WC_Order, 'Unable to reload persisted shipping tamper target.');
+		$order_ids[] = $target->get_id();
+		$items = array_values($target->get_items('shipping'));
+		wcos_compat_split_assert(!empty($items), 'Shipping tamper target did not retain its persisted row.');
+		$item = $items[0];
+
+		if ('source_total' === $case) {
+			$item->set_total('7.00');
+		} elseif ('source_tax' === $case) {
+			$item->set_taxes(array('total' => array(909 => '0.75')));
+		} elseif ('source_identity_meta' === $case) {
+			$item->set_method_title('Tampered authority shipping');
+			$item->delete_meta_data('Package label');
+			$item->add_meta_data('Package label', 'Tampered package', true);
+		} elseif ('child_row' === $case) {
+			$item->set_method_id('tampered_rate');
+			$item->set_total('8.00');
+			$item->set_taxes(array('total' => array(909 => '0.80')));
+			$item->delete_meta_data('Package label');
+			$item->add_meta_data('Package label', 'Tampered child package', true);
+		} else {
+			throw new RuntimeException('Unknown shipping authority tamper case.');
+		}
+		$item->save();
+		WCOS_Order_Totals_Rebuilder::rebuild($target);
+		$target->save();
+	};
+	add_action('wcos_split_mutation_checkpoint', $callback, 20, 4);
+	$rejected = false;
+	try {
+		(new WCOS_Mutation_Gateway())->split_manual_confirmed(
+			$source,
+			$verified['plan'],
+			$verified['operation_id'],
+			$verified['price_precision'],
+			$verified
+		);
+	} catch (Throwable $throwable) {
+		$rejected = true;
+	} finally {
+		remove_action('wcos_split_mutation_checkpoint', $callback, 20);
+	}
+	$fresh_source = wc_get_order($source->get_id());
+	foreach (array_filter(array_map('absint', (array) $fresh_source->get_meta(WCOS_Split_Order_Service::RELATION_CHILDREN_META, true))) as $child_id) {
+		$order_ids[] = $child_id;
+	}
+	$journal = WCOS_Operation_Journal::get($fresh_source, $verified['operation_id']);
+	wcos_compat_split_assert($tampered && $rejected, 'Persisted shipping tamper was not rejected: ' . $case);
+	wcos_compat_split_assert(is_array($journal) && 'completed' !== $journal['status'], 'Persisted shipping tamper was sealed as completed: ' . $case);
+}
+
 $previous_user_id = get_current_user_id();
 $previous_allowed = get_option('order_splitter_status_allowed', array('wc-processing'));
 $previous_shipping = get_option('order_splitter_exclude_shipping_fee', 'no');
@@ -116,6 +211,9 @@ try {
 			'taxes' => $shipping_row[5],
 		));
 		$shipping->add_meta_data('Package label', $shipping_row[4], true);
+		if ('Package A' === $shipping_row[4]) {
+			$shipping->add_meta_data('Delivery contact', 'private-recipient@example.test', true);
+		}
 		$source->add_item($shipping);
 	}
 	$shipping_tax = new WC_Order_Item_Tax();
@@ -191,12 +289,25 @@ try {
 	wcos_compat_split_assert(2 === count($source->get_items('shipping')) && 2 === count($source->get_items('fee')) && 1 === count($source->get_items('coupon')), 'Source commercial row ownership changed.');
 	$journal = WCOS_Operation_Journal::get($source, $confirmation['operation_id']);
 	wcos_compat_split_assert($policy['policy_fingerprint'] === $journal['context']['commercial_policy']['policy_fingerprint'], 'Journal did not freeze exact commercial policy authority.');
+	wcos_compat_split_assert(
+		isset($journal['context']['shipping_authority']['schema_version'])
+		&& WCOS_Split_Order_Service::SHIPPING_AUTHORITY_SCHEMA_VERSION === (int) $journal['context']['shipping_authority']['schema_version']
+		&& 2 === count($journal['context']['shipping_authority']['rows'])
+		&& 64 === strlen($journal['context']['shipping_authority']['authority_fingerprint']),
+		'Journal did not freeze versioned immutable shipping authority.'
+	);
+	wcos_compat_split_assert(false === strpos(wp_json_encode($journal['context']['shipping_authority']), '@example.test'), 'Immutable shipping authority leaked customer PII.');
 	$replay = (new WCOS_Mutation_Gateway())->split_manual_confirmed($source, $verified['plan'], $verified['operation_id'], $verified['price_precision'], WCOS_Split_Confirmation_Store::verify($source, $verified['operation_id'], $confirmation['confirmation_token'], $user_id));
 	$child_ids = array_map(static function(WC_Order $order) { return $order->get_id(); }, $children);
 	$replay_ids = array_map(static function(WC_Order $order) { return $order->get_id(); }, $replay);
 	sort($child_ids, SORT_NUMERIC);
 	sort($replay_ids, SORT_NUMERIC);
 	wcos_compat_split_assert($child_ids === $replay_ids, 'Completed replay changed the commercial child set or replicated extra shipping.');
+
+	/* Persisted shipping rows cannot drift after source commit and become sealed authority. */
+	foreach (array('source_total', 'source_tax', 'source_identity_meta', 'child_row') as $shipping_tamper_case) {
+		wcos_compat_split_shipping_tamper_case($product, $user_id, $shipping_tamper_case, $order_ids);
+	}
 
 	/* Nested Split keeps the actual child as immediate parent, never the root. */
 	$nested_source = wc_get_order($child->get_id());
