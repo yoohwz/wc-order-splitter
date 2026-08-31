@@ -4,6 +4,9 @@ if (!defined('ABSPATH')) {
 	exit(1);
 }
 
+$tax_variation_previous_allowed = get_option('order_splitter_status_allowed', array('wc-processing'));
+update_option('order_splitter_status_allowed', array('wc-pending'));
+
 function wcos_tax_variation_assert($condition, $message) {
 	if (!$condition) {
 		throw new RuntimeException($message);
@@ -202,5 +205,6 @@ $source->delete(true);
 wp_delete_post($variation_red_id, true);
 wp_delete_post($variation_blue_id, true);
 wp_delete_post($parent_id, true);
+update_option('order_splitter_status_allowed', $tax_variation_previous_allowed);
 
 echo "tax-variation-history-and-identity-ok\n";

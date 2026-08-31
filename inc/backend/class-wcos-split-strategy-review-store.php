@@ -51,6 +51,14 @@ final class WCOS_Split_Strategy_Review_Store {
 		if (!hash_equals((string) $review['source_signature'], $actual_signature)) {
 			throw new WCOS_Split_Strategy_Review_Exception('source_changed', __('The source order changed before its Split strategy review could be stored.', 'wc-order-splitter'));
 		}
+		try {
+			WCOS_Split_Commercial_Policy::assert_current(
+				$current,
+				isset($review['commercial_policy']) && is_array($review['commercial_policy']) ? $review['commercial_policy'] : array()
+			);
+		} catch (Throwable $throwable) {
+			throw new WCOS_Split_Strategy_Review_Exception('commercial_policy_changed', $throwable->getMessage());
+		}
 
 		$review_id = wp_generate_uuid4();
 		$token = wp_generate_password(48, false, false);
@@ -114,6 +122,14 @@ final class WCOS_Split_Strategy_Review_Store {
 		$current_signature = WCOS_Order_Contract_Snapshot::source_signature($current);
 		if (!hash_equals((string) $review['source_signature'], $current_signature)) {
 			throw new WCOS_Split_Strategy_Review_Exception('source_changed', __('The source order changed after Review. Review the strategy again.', 'wc-order-splitter'));
+		}
+		try {
+			WCOS_Split_Commercial_Policy::assert_current(
+				$current,
+				isset($review['commercial_policy']) && is_array($review['commercial_policy']) ? $review['commercial_policy'] : array()
+			);
+		} catch (Throwable $throwable) {
+			throw new WCOS_Split_Strategy_Review_Exception('commercial_policy_changed', $throwable->getMessage());
 		}
 
 		return $review;

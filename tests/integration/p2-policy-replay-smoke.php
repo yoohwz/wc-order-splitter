@@ -4,6 +4,9 @@ if (!defined('ABSPATH')) {
     exit(1);
 }
 
+$policy_previous_allowed = get_option('order_splitter_status_allowed', array('wc-processing'));
+update_option('order_splitter_status_allowed', array('wc-pending'));
+
 $policy_user_id = wp_insert_user(array(
     'user_login' => 'wcos_p2_policy_' . wp_generate_password(8, false),
     'user_pass' => wp_generate_password(24, true),
@@ -33,6 +36,7 @@ wcos_p2_adapter_assert(
 			'plan' => $policy_plan,
 			'execution_policy' => WCOS_Manual_Split_Quantity_Authority::execution_policy($policy_quantity_authority),
 			'manual_quantity_authority' => $policy_quantity_authority,
+			'commercial_policy' => WCOS_Split_Commercial_Policy::freeze($policy_source),
 		),
         $policy_fingerprint
     ),
@@ -95,7 +99,7 @@ try {
         $policy_user_id
     );
 } catch (WCOS_Split_Confirmation_Exception $exception) {
-    $policy_changed = 'policy_changed' === $exception->get_reason();
+    $policy_changed = 'commercial_policy_changed' === $exception->get_reason();
 }
 wcos_p2_adapter_assert($policy_changed, 'Durable replay crossed a changed Split safety policy.');
 
@@ -148,5 +152,6 @@ if ($policy_source) {
 }
 wp_delete_post($policy_product->get_id(), true);
 wp_delete_user($policy_user_id);
+update_option('order_splitter_status_allowed', $policy_previous_allowed);
 
 echo "p2-durable-policy-binding-ok\n";

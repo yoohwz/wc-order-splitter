@@ -45,6 +45,11 @@ function wcos_split_ids(array $orders) {
 	return $ids;
 }
 
+$split_previous_allowed = get_option('order_splitter_status_allowed', array('wc-processing'));
+$split_previous_shipping = get_option('order_splitter_exclude_shipping_fee', 'no');
+update_option('order_splitter_status_allowed', array('wc-pending'));
+update_option('order_splitter_exclude_shipping_fee', 'yes');
+
 $product_a = new WC_Product_Simple();
 $product_a->set_name('WCOS split product A');
 $product_a->set_regular_price('20.00');
@@ -220,5 +225,7 @@ foreach ($children_by_key as $child) {
 $source->delete(true);
 wp_delete_post($product_a_id, true);
 wp_delete_post($product_b_id, true);
+update_option('order_splitter_status_allowed', $split_previous_allowed);
+update_option('order_splitter_exclude_shipping_fee', $split_previous_shipping);
 
 echo "split-conservation-idempotency-and-recovery-ok\n";

@@ -18,6 +18,8 @@ final class WCOS_Return_Preflight {
 			'child_coupons' => 'reject',
 			'refunds' => 'reject',
 			'child_payment_transaction' => 'reject',
+			'child_paid_date' => 'reject',
+			'inherited_paid_status' => 'allow_only_with_authenticated_source_only_split_authority',
 			'physical_stock' => 'read_only_no_write',
 			'catalog_authority' => 'never',
 			'nested_child' => 'reject',
@@ -86,7 +88,10 @@ final class WCOS_Return_Preflight {
 		if (in_array(sanitize_key((string) $child->get_status()), $unsupported_statuses, true)) {
 			return self::reject($report, 'unsupported_child_status', __('The Split child status is outside the initial Return policy.', 'wc-order-splitter'));
 		}
-		if ($child->is_paid() || null !== $child->get_date_paid() || '' !== (string) $child->get_transaction_id()) {
+		$has_paid_date = null !== $child->get_date_paid();
+		$has_transaction = '' !== (string) $child->get_transaction_id();
+		$paid_status_is_source_only = WCOS_Return_Lineage_Authority::proves_source_only_payment($authority);
+		if ($has_paid_date || $has_transaction || ($child->is_paid() && !$paid_status_is_source_only)) {
 			return self::reject($report, 'child_payment_ownership', __('A paid or transaction-bearing Split child cannot be returned in the initial policy.', 'wc-order-splitter'));
 		}
 		if (self::has_refunds($child) || self::has_refunds($source)) {

@@ -132,8 +132,8 @@ wcos_p2_adapter_assert(is_array($record) && 'completed' === $record['status'], '
 wcos_p2_adapter_cleanup($source->get_id(), $safe_operation);
 wp_delete_post($product->get_id(), true);
 
-/* Unsupported coupon policy fails before journal/children and leaves the source unchanged. */
-$coupon_product = wcos_p2_adapter_product('WCOS P2 coupon rejection product');
+/* Coupons remain source-owned while product lines can move safely. */
+$coupon_product = wcos_p2_adapter_product('WCOS P2 source-owned coupon product');
 list($coupon_source, $coupon_item_id) = wcos_p2_adapter_order($coupon_product, 3);
 $coupon = new WC_Order_Item_Coupon();
 $coupon->set_code('p2-coupon');
@@ -141,26 +141,17 @@ $coupon->set_discount('0');
 $coupon->set_discount_tax('0');
 $coupon_source->add_item($coupon);
 $coupon_source->save();
-$coupon_operation = 'p2-coupon-reject-' . wp_generate_uuid4();
-$coupon_before = WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($coupon_source->get_id()));
-$coupon_rejected = false;
-try {
-	$adapter->split(
-		wc_get_order($coupon_source->get_id()),
-		array('child-one' => array($coupon_item_id => '1.000000')),
-		$coupon_operation
-	);
-} catch (WCOS_Split_Preflight_Exception $exception) {
-	$coupon_rejected = 'coupon_policy_missing' === $exception->get_reason();
-}
-wcos_p2_adapter_assert($coupon_rejected, 'P2 adapter did not fail closed on a coupon-bearing source.');
-wcos_p2_adapter_assert(
-	$coupon_before === WCOS_Order_Contract_Snapshot::source_signature(wc_get_order($coupon_source->get_id())),
-	'Coupon preflight rejection changed the source order.'
+$coupon_operation = 'p2-coupon-source-only-' . wp_generate_uuid4();
+$coupon_children = $adapter->split(
+	wc_get_order($coupon_source->get_id()),
+	array('child-one' => array($coupon_item_id => '1.000000')),
+	$coupon_operation
 );
-wcos_p2_adapter_assert(null === WCOS_Operation_Journal::get(wc_get_order($coupon_source->get_id()), $coupon_operation), 'Coupon preflight rejection created a mutation journal.');
-wcos_p2_adapter_assert(empty(wcos_p2_adapter_children($coupon_source->get_id(), $coupon_operation)), 'Coupon preflight rejection created a split child.');
-wcos_p2_adapter_cleanup($coupon_source->get_id());
+$coupon_source = wc_get_order($coupon_source->get_id());
+$coupon_child = wc_get_order($coupon_children[0]->get_id());
+wcos_p2_adapter_assert(1 === count($coupon_source->get_items('coupon')), 'Split removed the source-owned coupon row.');
+wcos_p2_adapter_assert(0 === count($coupon_child->get_items('coupon')), 'Split duplicated a source-owned coupon row to a child.');
+wcos_p2_adapter_cleanup($coupon_source->get_id(), $coupon_operation);
 wp_delete_post($coupon_product->get_id(), true);
 
 /* Deleted catalog products remain splittable because order-time line state is authoritative. */

@@ -4,6 +4,9 @@ if (!defined('ABSPATH')) {
 	exit(1);
 }
 
+$stock_marker_previous_allowed = get_option('order_splitter_status_allowed', array('wc-processing'));
+update_option('order_splitter_status_allowed', array('wc-pending'));
+
 function wcos_stock_marker_assert($condition, $message) {
 	if (!$condition) {
 		throw new RuntimeException($message);
@@ -69,5 +72,6 @@ wcos_stock_marker_case($product_id, '3.000000', true, 'exceeds-quantity');
 wcos_stock_marker_case($product_id, '1.000000', false, 'order-flag-false');
 
 wp_delete_post($product_id, true);
+update_option('order_splitter_status_allowed', $stock_marker_previous_allowed);
 
 echo "corrupted-reduced-stock-markers-fail-closed-ok\n";

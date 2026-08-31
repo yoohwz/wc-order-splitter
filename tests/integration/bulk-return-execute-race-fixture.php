@@ -1,6 +1,9 @@
 <?php
 
 if (!defined('ABSPATH')) { exit(1); }
+
+require_once __DIR__ . '/split-status-fixture-authority.php';
+WCOS_Test_Split_Status_Fixture_Authority::allow(array('wc-processing'));
 $key = 'wcos_bulk_return_execute_race_fixture';
 $admins = get_users(array('role' => 'administrator', 'number' => 1, 'fields' => 'ID'));
 if (empty($admins)) { fwrite(STDERR, "BULK_EXECUTE_ADMIN_MISSING\n"); exit(2); }

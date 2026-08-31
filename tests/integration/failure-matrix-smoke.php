@@ -4,6 +4,9 @@ if (!defined('ABSPATH')) {
 	exit(1);
 }
 
+$failure_previous_allowed = get_option('order_splitter_status_allowed', array('wc-processing'));
+update_option('order_splitter_status_allowed', array('wc-pending'));
+
 function wcos_failure_assert($condition, $message) {
 	if (!$condition) {
 		throw new RuntimeException($message);
@@ -140,5 +143,6 @@ foreach ($duplicate_stages as $stage_under_test) {
 }
 
 wp_delete_post($product_id, true);
+update_option('order_splitter_status_allowed', $failure_previous_allowed);
 
 echo "mutation-failure-matrix-idempotency-ok\n";

@@ -78,7 +78,7 @@ final class WCOS_Split_Admin_Controller {
 			throw new WCOS_Split_Transport_Exception(
 				'confirmation_' . $reason,
 				$exception->getMessage(),
-				in_array($reason, array('source_changed', 'quantity_authority_changed', 'quantity_authority_incomplete'), true) ? 409 : 422,
+				in_array($reason, array('source_changed', 'quantity_authority_changed', 'quantity_authority_incomplete', 'commercial_policy_changed'), true) ? 409 : 422,
 				false
 			);
 		}
@@ -93,8 +93,8 @@ final class WCOS_Split_Admin_Controller {
 
     public function execute_request(array $request) {
         $order_id = isset($request['order_id']) ? absint($request['order_id']) : 0;
-        $order = $this->authorized_order($request, $order_id);
         $operation_id = isset($request['operation_id']) ? sanitize_key((string) $request['operation_id']) : '';
+		$order = $this->authorized_order($request, $order_id, $operation_id);
         $confirmation_token = isset($request['confirmation_token']) ? (string) $request['confirmation_token'] : '';
 
         try {
@@ -119,7 +119,8 @@ final class WCOS_Split_Admin_Controller {
                 'operation_closed' => 409,
                 'journal_incomplete' => 409,
 				'quantity_authority_changed' => 409,
-				'quantity_authority_incomplete' => 409,
+					'quantity_authority_incomplete' => 409,
+					'commercial_policy_changed' => 409,
             );
             $reason = $exception->get_reason();
             throw new WCOS_Split_Transport_Exception(
@@ -270,6 +271,9 @@ final class WCOS_Split_Admin_Controller {
                 'childOrder' => __('Child order', 'wc-order-splitter'),
                 'reloadOrder' => __('Reload source order', 'wc-order-splitter'),
                 'reviewSummary' => __('Reviewed children / affected lines / moved quantity:', 'wc-order-splitter'),
+				'frozenStatus' => __('Frozen source and child status:', 'wc-order-splitter'),
+				'shippingReplicated' => __('Every historical shipping row will be replicated to each child; the source shipping remains unchanged.', 'wc-order-splitter'),
+				'shippingSourceOnly' => __('Shipping remains only on the source order.', 'wc-order-splitter'),
             )
         );
     }
@@ -296,8 +300,12 @@ final class WCOS_Split_Admin_Controller {
 		foreach ($quantity_authority['lines'] as $line_authority) {
 			$step_labels[] = WCOS_Manual_Split_Quantity_Authority::display_decimal($line_authority['quantity_step']);
 		}
-		$step_labels = array_values(array_unique($step_labels));
-		sort($step_labels, SORT_NATURAL);
+			$step_labels = array_values(array_unique($step_labels));
+			sort($step_labels, SORT_NATURAL);
+			$commercial_policy = WCOS_Split_Commercial_Policy::assert_valid($preflight['policy']);
+			$shipping_label = WCOS_Split_Commercial_Policy::SHIPPING_REPLICATE_TO_EACH_CHILD === $commercial_policy['shipping']
+				? __('Every historical shipping row will be replicated to each child; the source shipping remains unchanged.', 'wc-order-splitter')
+				: __('Shipping remains only on the source order.', 'wc-order-splitter');
 
         ob_start();
         ?>
@@ -307,7 +315,7 @@ final class WCOS_Split_Admin_Controller {
                 <div class="wcos-split-dialog__header">
                     <div>
                         <h2 id="<?php echo esc_attr($title_id); ?>"><?php esc_html_e('Review quantity split', 'wc-order-splitter'); ?></h2>
-						<p id="<?php echo esc_attr($description_id); ?>"><?php esc_html_e('Enter the quantity from each source line to move into each pending child order. The source order must retain positive product quantity after all allocations.', 'wc-order-splitter'); ?></p>
+							<p id="<?php echo esc_attr($description_id); ?>"><?php esc_html_e('Enter the quantity from each source line to move into each child order. The source order must retain positive product quantity after all allocations.', 'wc-order-splitter'); ?></p>
                     </div>
                     <button type="button" class="button-link wcos-split-close" aria-label="<?php esc_attr_e('Close Split dialog', 'wc-order-splitter'); ?>"><span aria-hidden="true">×</span></button>
                 </div>
@@ -358,11 +366,11 @@ final class WCOS_Split_Admin_Controller {
                     <div class="wcos-split-policy" aria-labelledby="<?php echo esc_attr($dialog_id . '-policy-title'); ?>">
                         <h3 id="<?php echo esc_attr($dialog_id . '-policy-title'); ?>"><?php esc_html_e('Current safety policy', 'wc-order-splitter'); ?></h3>
                         <ul>
-                            <li><?php esc_html_e('Shipping and positive fees remain on the source order.', 'wc-order-splitter'); ?></li>
-                            <li><?php esc_html_e('Child orders are created as Pending payment and do not inherit the payment transaction.', 'wc-order-splitter'); ?></li>
+							<li class="wcos-split-commercial-summary"><?php echo esc_html(sprintf(__('Frozen source and child status: %1$s. %2$s', 'wc-order-splitter'), wc_get_order_status_name($commercial_policy['source_status']), $shipping_label)); ?></li>
+							<li><?php esc_html_e('Positive and negative fees, coupon rows, refund records, and payment transactions remain only on the source order.', 'wc-order-splitter'); ?></li>
                             <li><?php esc_html_e('Historical line taxes are preserved; current catalog prices and tax rates are not recalculated.', 'wc-order-splitter'); ?></li>
                             <li><?php esc_html_e('The Split request must not write physical product stock.', 'wc-order-splitter'); ?></li>
-                            <li><?php esc_html_e('Coupons, refunds, negative fees, nested splits, and unclassified private line metadata are rejected before mutation.', 'wc-order-splitter'); ?></li>
+							<li><?php echo esc_html(sprintf(__('Refund-affected product lines pinned to the source: %d. Nested Split preserves the actual source as the immediate parent.', 'wc-order-splitter'), count($commercial_policy['refund_affected_item_ids']))); ?></li>
                             <li><?php esc_html_e('Extensions that change stock directly in the database instead of WooCommerce stock APIs are unsupported unless they provide an explicit compatibility adapter.', 'wc-order-splitter'); ?></li>
 							<li><?php echo esc_html(sprintf(__('Manual allocation steps are enforced per line: %s.', 'wc-order-splitter'), implode(', ', $step_labels))); ?></li>
 							<li><?php esc_html_e('A complete source line may move, but the source order must retain positive product quantity.', 'wc-order-splitter'); ?></li>
@@ -374,7 +382,7 @@ final class WCOS_Split_Admin_Controller {
                         <p class="wcos-split-review-summary"></p>
                         <label class="wcos-split-confirm-label">
                             <input type="checkbox" class="wcos-split-confirm-checkbox" />
-                            <span><?php esc_html_e('I reviewed the quantities and understand that this will create new pending orders and modify the source order.', 'wc-order-splitter'); ?></span>
+							<span><?php esc_html_e('I reviewed the quantities and frozen commercial policy and understand that this will create child orders and modify the source order.', 'wc-order-splitter'); ?></span>
                         </label>
                     </div>
 
@@ -394,7 +402,7 @@ final class WCOS_Split_Admin_Controller {
         return (string) ob_get_clean();
     }
 
-    private function authorized_order(array $request, $order_id) {
+    private function authorized_order(array $request, $order_id, $operation_id = '') {
         if (!$order_id) {
             throw new WCOS_Split_Transport_Exception('invalid_order', __('A valid order ID is required.', 'wc-order-splitter'), 400, false);
         }
@@ -412,14 +420,15 @@ final class WCOS_Split_Admin_Controller {
         } catch (Throwable $throwable) {
             throw new WCOS_Split_Transport_Exception('authorization_failed', __('You are not allowed to split this order.', 'wc-order-splitter'), 403, false);
         }
-        $this->assert_status_enabled($order);
+		if ('' === sanitize_key((string) $operation_id) || !is_array(WCOS_Operation_Journal::get($order, $operation_id))) {
+			$this->assert_status_enabled($order);
+		}
         return $order;
     }
 
     private function assert_status_enabled(WC_Order $order) {
-        $allowed = (array) get_option('order_splitter_status_allowed', array('wc-processing'));
-        $status = 'wc-' . $order->get_status();
-        if (!in_array($status, $allowed, true)) {
+        $policy = WCOS_Split_Commercial_Policy::freeze($order);
+        if (!in_array($order->get_status(), (array) $policy['allowed_statuses'], true)) {
             throw new WCOS_Split_Transport_Exception('status_disabled', __('This order status is disabled in the Order Splitter settings.', 'wc-order-splitter'), 409, false);
         }
     }

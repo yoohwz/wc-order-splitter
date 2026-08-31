@@ -2,6 +2,9 @@
 
 if (!defined('ABSPATH')) { exit(1); }
 
+require_once __DIR__ . '/split-status-fixture-authority.php';
+WCOS_Test_Split_Status_Fixture_Authority::allow(array('wc-pending'));
+
 $fixture_key = 'wcos_return_confirm_race_fixture';
 if (!function_exists('wp_delete_user')) { require_once ABSPATH . 'wp-admin/includes/user.php'; }
 $user_id = wp_insert_user(array(

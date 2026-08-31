@@ -1,6 +1,9 @@
 <?php
 
 if (!defined('ABSPATH')) { exit(1); }
+
+require_once __DIR__ . '/split-status-fixture-authority.php';
+WCOS_Test_Split_Status_Fixture_Authority::allow(array('wc-pending'));
 if (!function_exists('wp_delete_user')) { require_once ABSPATH . 'wp-admin/includes/user.php'; }
 $key = 'wcos_bulk_return_confirm_race_fixture';
 $user_id = wp_insert_user(array('user_login' => 'wcos_bulk_confirm_' . wp_generate_password(8, false), 'user_pass' => wp_generate_password(24, true), 'user_email' => 'bulk-confirm-' . wp_generate_uuid4() . '@example.test', 'role' => 'administrator'));

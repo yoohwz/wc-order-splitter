@@ -23,7 +23,7 @@ final class WCOS_Split_Strategy_Confirmation_Exception extends RuntimeException 
  * truth. No second persistent strategy-operation store is introduced.
  */
 final class WCOS_Split_Strategy_Confirmation_Store {
-	const SCHEMA_VERSION = 1;
+	const SCHEMA_VERSION = 2;
 	const TTL = 1800;
 
 	private static $verified_source_signatures = array();
@@ -110,6 +110,15 @@ final class WCOS_Split_Strategy_Confirmation_Store {
 		if (!$split_policy_version) {
 			throw new WCOS_Split_Strategy_Confirmation_Exception('review_incomplete', __('The Split safety policy version is missing from strategy confirmation.', 'wc-order-splitter'));
 		}
+		try {
+			$commercial_policy = WCOS_Split_Commercial_Policy::assert_current(
+				$scoped_source,
+				isset($review['commercial_policy']) && is_array($review['commercial_policy']) ? $review['commercial_policy'] : array()
+			);
+			WCOS_Split_Commercial_Policy::assert_plan($plan, $commercial_policy);
+		} catch (Throwable $throwable) {
+			throw new WCOS_Split_Strategy_Confirmation_Exception('commercial_policy_changed', $throwable->getMessage());
+		}
 
 		$now = time();
 		$record = array(
@@ -126,7 +135,8 @@ final class WCOS_Split_Strategy_Confirmation_Store {
 			'plan' => WCOS_Split_Plan::canonicalize_request($plan),
 			'execution_policy' => WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER,
 			'price_precision' => $precision,
-			'split_policy_version' => $split_policy_version,
+				'split_policy_version' => $split_policy_version,
+				'commercial_policy' => $commercial_policy,
 			'created_at' => $now,
 			'expires_at' => $now + self::TTL,
 		);
@@ -181,6 +191,16 @@ final class WCOS_Split_Strategy_Confirmation_Store {
 		if (absint(isset($record['split_policy_version']) ? $record['split_policy_version'] : 0) !== (int) WCOS_Split_Preflight::POLICY_VERSION) {
 			throw new WCOS_Split_Strategy_Confirmation_Exception('split_policy_changed', __('The Split safety policy changed after strategy confirmation. Review the strategy again.', 'wc-order-splitter'));
 		}
+		if (!isset($record['schema_version']) || self::SCHEMA_VERSION !== (int) $record['schema_version']) {
+			throw new WCOS_Split_Strategy_Confirmation_Exception('commercial_policy_changed', __('The Split strategy confirmation predates commercial policy authority. Review the strategy again.', 'wc-order-splitter'));
+		}
+		try {
+			$commercial_policy = WCOS_Split_Commercial_Policy::assert_valid(
+				isset($record['commercial_policy']) && is_array($record['commercial_policy']) ? $record['commercial_policy'] : array()
+			);
+		} catch (Throwable $throwable) {
+			throw new WCOS_Split_Strategy_Confirmation_Exception('commercial_policy_changed', $throwable->getMessage());
+		}
 
 		$precision = WCOS_Price_Precision_Scope::validate(isset($record['price_precision']) ? $record['price_precision'] : null);
 		$precision_token = WCOS_Price_Precision_Scope::begin($precision);
@@ -191,9 +211,15 @@ final class WCOS_Split_Strategy_Confirmation_Store {
 			}
 			$expected = isset($record['source_signature']) ? (string) $record['source_signature'] : '';
 			$actual = WCOS_Order_Contract_Snapshot::source_signature($scoped_source);
-			if ('' === $expected || !hash_equals($expected, $actual)) {
+				if ('' === $expected || !hash_equals($expected, $actual)) {
 				throw new WCOS_Split_Strategy_Confirmation_Exception('source_changed', __('The source order changed after strategy confirmation. Review the strategy again.', 'wc-order-splitter'));
-			}
+				}
+				try {
+					WCOS_Split_Commercial_Policy::assert_current($scoped_source, $commercial_policy);
+					WCOS_Split_Commercial_Policy::assert_plan($record['plan'], $commercial_policy);
+				} catch (Throwable $throwable) {
+					throw new WCOS_Split_Strategy_Confirmation_Exception('commercial_policy_changed', $throwable->getMessage());
+				}
 			self::$verified_source_signatures[$operation_id] = $expected;
 		} finally {
 			WCOS_Price_Precision_Scope::end($precision_token);
@@ -201,6 +227,7 @@ final class WCOS_Split_Strategy_Confirmation_Store {
 
 		$record['plan'] = WCOS_Split_Plan::canonicalize_request(isset($record['plan']) && is_array($record['plan']) ? $record['plan'] : array());
 		$record['price_precision'] = $precision;
+		$record['commercial_policy'] = $commercial_policy;
 		$record['replay_authority'] = 'confirmation';
 		return $record;
 	}
@@ -257,8 +284,10 @@ final class WCOS_Split_Strategy_Confirmation_Store {
 			|| !array_key_exists('policy_version', $context)) {
 			throw new WCOS_Split_Strategy_Confirmation_Exception('journal_incomplete', __('The durable Split strategy operation is missing replay authority.', 'wc-order-splitter'));
 		}
-		if ((int) $context['policy_version'] !== (int) WCOS_Split_Preflight::POLICY_VERSION) {
-			throw new WCOS_Split_Strategy_Confirmation_Exception('split_policy_changed', __('The Split safety policy changed after this strategy operation started.', 'wc-order-splitter'));
+		try {
+			$commercial_policy = WCOS_Split_Commercial_Policy::from_journal($journal);
+		} catch (Throwable $throwable) {
+			throw new WCOS_Split_Strategy_Confirmation_Exception('commercial_policy_changed', $throwable->getMessage());
 		}
 		if (WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER !== WCOS_Split_Execution_Policy::normalize(isset($context['execution_policy']) ? $context['execution_policy'] : '')) {
 			throw new WCOS_Split_Strategy_Confirmation_Exception('execution_policy_mismatch', __('The durable Split strategy operation lost whole-line execution authority.', 'wc-order-splitter'));
@@ -277,7 +306,8 @@ final class WCOS_Split_Strategy_Confirmation_Store {
 			'plan' => WCOS_Split_Plan::canonicalize_request($context['plan']),
 			'execution_policy' => WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER,
 			'price_precision' => WCOS_Price_Precision_Scope::validate($context['price_precision']),
-			'split_policy_version' => (int) $context['policy_version'],
+				'split_policy_version' => (int) $context['policy_version'],
+				'commercial_policy' => $commercial_policy,
 			'replay_authority' => 'journal',
 		);
 	}
@@ -307,6 +337,15 @@ final class WCOS_Split_Strategy_Confirmation_Store {
 		}
 		if (WCOS_Split_Plan::canonicalize_request($record['plan']) !== WCOS_Split_Plan::canonicalize_request($durable['plan'])) {
 			throw new WCOS_Split_Strategy_Confirmation_Exception('journal_mismatch', __('The temporary Split strategy plan no longer matches durable journal authority.', 'wc-order-splitter'));
+		}
+		if (!isset($record['commercial_policy']) || !is_array($record['commercial_policy'])
+			|| !isset($durable['commercial_policy']) || !is_array($durable['commercial_policy'])) {
+			throw new WCOS_Split_Strategy_Confirmation_Exception('journal_mismatch', __('The Split strategy confirmation is missing commercial policy authority.', 'wc-order-splitter'));
+		}
+		$temporary_policy = WCOS_Split_Commercial_Policy::assert_valid($record['commercial_policy']);
+		$durable_policy = WCOS_Split_Commercial_Policy::assert_valid($durable['commercial_policy']);
+		if (!hash_equals((string) $temporary_policy['policy_fingerprint'], (string) $durable_policy['policy_fingerprint'])) {
+			throw new WCOS_Split_Strategy_Confirmation_Exception('journal_mismatch', __('The temporary Split strategy commercial policy no longer matches durable journal authority.', 'wc-order-splitter'));
 		}
 	}
 

@@ -92,6 +92,14 @@ assert_contains "$ci_workflow" 'bulk-return-confirm-race-worker.php'
 assert_contains "$ci_workflow" 'bulk-return-enabled-controller-smoke.php'
 assert_contains "$ci_workflow" 'bulk-return-execute-race-worker.php'
 assert_contains "$ci_workflow" 'Verify real concurrent overlapping Bulk Return current-row authority'
+assert_contains "$ci_workflow" 'name: Resolve wp-env CLI container for concurrent workers'
+assert_contains "$ci_workflow" "--filter 'label=com.docker.compose.service=cli'"
+assert_contains "$ci_workflow" 'docker inspect --format '\''{{.State.Status}}'\'' "$cli_container"'
+assert_occurrences "$ci_workflow" 'docker exec --workdir /var/www/html "$WCOS_WP_ENV_CLI_CONTAINER" wp eval-file "$worker"' 11
+assert_occurrences "$ci_workflow" 'worker_a_status=$?' 5
+assert_occurrences "$ci_workflow" 'worker_b_status=$?' 5
+assert_occurrences "$ci_workflow" 'printf '\''worker-a-status=%s\nworker-b-status=%s\n'\'' "$worker_a_status" "$worker_b_status"' 5
+assert_absent "$ci_workflow" 'npx wp-env run cli wp eval-file "$worker"'
 assert_contains "$ci_workflow" 'bulk-return-ui-readiness-smoke.php'
 assert_contains "$ci_workflow" 'name: Required CI'
 assert_contains "$ci_workflow" 'CLASSIFIER_RESULT: ${{ needs['"'"'classify-pr-scope'"'"'].result }}'

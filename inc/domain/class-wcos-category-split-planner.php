@@ -27,6 +27,7 @@ final class WCOS_Category_Split_Planner {
 			'buckets' => array(),
 			'classification_fingerprint' => '',
 			'execution_policy' => WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER,
+			'commercial_policy' => isset($base['policy']) && is_array($base['policy']) ? $base['policy'] : array(),
 		);
 
 		if (empty($base['supported'])) {
@@ -119,8 +120,12 @@ final class WCOS_Category_Split_Planner {
 		if (count($buckets) < 2) {
 			return self::reject($report, 'single_category_bucket', __('Category Split requires at least two deterministic category buckets.', 'wc-order-splitter'));
 		}
+		$buckets = WCOS_Split_Commercial_Policy::annotate_strategy_buckets($buckets, $report['commercial_policy']);
 
 		$report['buckets'] = $buckets;
+		if (!WCOS_Split_Commercial_Policy::has_eligible_strategy_source_bucket($buckets)) {
+			return self::reject($report, 'refund_source_bucket_unavailable', __('Refund-affected product lines span multiple category buckets, so no single safe source bucket is available.', 'wc-order-splitter'));
+		}
 		$report['classification_fingerprint'] = self::classification_fingerprint(
 			$source->get_id(),
 			$report['source_signature'],
@@ -159,6 +164,9 @@ final class WCOS_Category_Split_Planner {
 		$source_bucket_key = sanitize_key((string) $source_bucket_key);
 		if ('' === $source_bucket_key || !isset($buckets[$source_bucket_key])) {
 			throw new InvalidArgumentException(__('Choose one reviewed category bucket to remain on the source order.', 'wc-order-splitter'));
+		}
+		if (empty($buckets[$source_bucket_key]['source_eligible'])) {
+			throw new InvalidArgumentException(isset($buckets[$source_bucket_key]['source_restriction']) ? (string) $buckets[$source_bucket_key]['source_restriction'] : __('The selected category bucket cannot keep every refund-affected line on the source.', 'wc-order-splitter'));
 		}
 
 		$plan = array();
@@ -213,6 +221,8 @@ final class WCOS_Category_Split_Planner {
 			$evidence[$bucket_key] = array(
 				'term_id' => isset($bucket['term_id']) ? absint($bucket['term_id']) : 0,
 				'items' => isset($bucket['items']) && is_array($bucket['items']) ? $bucket['items'] : array(),
+				'source_eligible' => !empty($bucket['source_eligible']),
+				'refund_affected_item_ids' => isset($bucket['refund_affected_item_ids']) ? array_values(array_map('absint', (array) $bucket['refund_affected_item_ids'])) : array(),
 			);
 		}
 		return WCOS_Mutation_Fingerprint::create(

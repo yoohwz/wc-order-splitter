@@ -146,6 +146,7 @@
         var table = null;
         var tableWrap = null;
         var policyBox = null;
+		var policySummary = null;
         var addChildButton = null;
         var removeChildButton = null;
         var childCountLabel = null;
@@ -296,7 +297,9 @@
             list.hidden = true;
             var summary = document.createElement('p');
             summary.className = 'wcos-split-policy-summary';
-            summary.textContent = 'Child orders are created as Pending payment. Shipping stays on the source order, historical prices and taxes are preserved, and this Split does not change physical product stock.';
+			var commercialSummary = list.querySelector('.wcos-split-commercial-summary');
+			summary.textContent = commercialSummary ? commercialSummary.textContent : '';
+			policySummary = summary;
             var toggle = document.createElement('button');
             toggle.type = 'button';
             toggle.className = 'button-link wcos-split-policy-toggle';
@@ -311,6 +314,24 @@
                 list.hidden = expanded;
             });
         }
+
+		function renderFrozenPolicy(policy) {
+			if (!policy || !policyBox) {
+				return;
+			}
+			var status = String(policy.child_status || policy.source_status || '').replace(/^wc-/, '');
+			var shipping = policy.shipping === 'replicate_to_each_child'
+				? text('shippingReplicated', 'Every historical shipping row will be replicated to each child; the source shipping remains unchanged.')
+				: text('shippingSourceOnly', 'Shipping remains only on the source order.');
+			var message = text('frozenStatus', 'Frozen source and child status:') + ' ' + status + '. ' + shipping;
+			var commercialSummary = policyBox.querySelector('.wcos-split-commercial-summary');
+			if (commercialSummary) {
+				commercialSummary.textContent = message;
+			}
+			if (policySummary) {
+				policySummary.textContent = message;
+			}
+		}
 
         function createEditButton() {
             editButton = document.createElement('button');
@@ -550,6 +571,7 @@
                 plan: JSON.stringify(plan)
             }).then(function (data) {
                 state = { operationId: data.operation_id, token: data.confirmation_token };
+				renderFrozenPolicy(data.preflight && data.preflight.policy ? data.preflight.policy : null);
                 var summary = data.summary || {};
                 var childCount = Number(summary.child_count || 0);
                 var lineCount = Number(summary.affected_line_count || 0);

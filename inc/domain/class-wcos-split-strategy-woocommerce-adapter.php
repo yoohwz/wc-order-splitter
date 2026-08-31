@@ -97,6 +97,11 @@ final class WCOS_Split_Strategy_WooCommerce_Adapter {
 		);
 		$normalized_plan = $this->assert_whole_line_bucket_plan($source, $canonical_plan, $operation_id);
 		$authority = WCOS_Split_Strategy_Confirmation_Store::operation_authority($confirmation);
+		$commercial_policy = WCOS_Split_Commercial_Policy::assert_valid(
+			isset($confirmation['commercial_policy']) && is_array($confirmation['commercial_policy'])
+				? $confirmation['commercial_policy']
+				: array()
+		);
 
 		$record = WCOS_Operation_Journal::get($source, $operation_id);
 		if (is_array($record)) {
@@ -109,7 +114,10 @@ final class WCOS_Split_Strategy_WooCommerce_Adapter {
 			$operation_id,
 			$confirmed_precision,
 			WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER,
-			array('strategy_authority' => $authority)
+			array(
+				'strategy_authority' => $authority,
+				'commercial_policy' => $commercial_policy,
+			)
 		);
 	}
 
@@ -154,8 +162,17 @@ final class WCOS_Split_Strategy_WooCommerce_Adapter {
 		if ($precision !== $authority_precision) {
 			throw new RuntimeException(__('The Split strategy confirmation precision does not match the requested operation precision.', 'wc-order-splitter'));
 		}
-		if (absint(isset($confirmation['split_policy_version']) ? $confirmation['split_policy_version'] : 0) !== (int) WCOS_Split_Preflight::POLICY_VERSION) {
+		$commercial_policy = WCOS_Split_Commercial_Policy::assert_valid(
+			isset($confirmation['commercial_policy']) && is_array($confirmation['commercial_policy'])
+				? $confirmation['commercial_policy']
+				: array()
+		);
+		$split_policy_version = absint(isset($confirmation['split_policy_version']) ? $confirmation['split_policy_version'] : 0);
+		if ('journal' !== $replay_authority && $split_policy_version !== (int) WCOS_Split_Preflight::POLICY_VERSION) {
 			throw new RuntimeException(__('The Split strategy confirmation safety policy no longer matches the current Split policy.', 'wc-order-splitter'));
+		}
+		if ('journal' === $replay_authority && $split_policy_version !== (int) $commercial_policy['policy_version']) {
+			throw new RuntimeException(__('The durable Split strategy policy versions do not match.', 'wc-order-splitter'));
 		}
 	}
 

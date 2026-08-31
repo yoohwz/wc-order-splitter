@@ -6,10 +6,12 @@ defined('ABSPATH') || exit;
  * Shared quantity-split saga.
  *
  * Safety policy:
- * - shipping, fees, and coupons are never duplicated;
+ * - the frozen commercial policy either keeps shipping on the source or
+ *   replicates every historical shipping row to every child;
+ * - fees, coupons, refunds, and payment ownership remain on the source;
  * - legacy Manual authority keeps a positive residual on every affected line;
  * - current Manual and explicit server-built strategy authority may transfer a whole line;
- * - child orders are persisted as pending review;
+ * - child orders inherit the exact frozen source status;
  * - historical amounts/tax arrays are allocated at currency precision;
  * - reduced-stock markers are redistributed without touching physical stock;
  * - persisted children are reusable after a crash, preventing duplicate retry output.
@@ -17,7 +19,9 @@ defined('ABSPATH') || exit;
 final class WCOS_Split_Order_Service {
 
 	const TYPE = 'split';
-	const POLICY_VERSION = 2;
+	const POLICY_VERSION = 3;
+	const LEGACY_POLICY_VERSION = 2;
+	const SHIPPING_AUTHORITY_SCHEMA_VERSION = 1;
 	const RELATION_PARENT_META = '_wcos_parent_order_id';
 	const RELATION_CHILDREN_META = '_wcos_child_order_ids';
 	const OPERATION_META = '_wcos_operation_id';
@@ -46,19 +50,32 @@ final class WCOS_Split_Order_Service {
 			);
 		}
 		$existing = WCOS_Operation_Journal::get($source, $operation_id);
+		if (is_array($existing)) {
+			$commercial_policy = WCOS_Split_Commercial_Policy::from_journal($existing);
+		} else {
+			$commercial_policy = isset($operation_context['commercial_policy'])
+				? WCOS_Split_Commercial_Policy::assert_current($source, $operation_context['commercial_policy'])
+				: WCOS_Split_Commercial_Policy::freeze($source);
+		}
+		WCOS_Split_Commercial_Policy::assert_plan($canonical_plan, $commercial_policy);
 		$legacy_journal = is_array($existing)
 			&& (!isset($existing['context']) || !is_array($existing['context']) || !array_key_exists('execution_policy', $existing['context']));
 		if ($legacy_journal && WCOS_Split_Execution_Policy::PARTIAL_LINES_ONLY !== $execution_policy) {
 			throw new RuntimeException(__('A legacy Split journal cannot be resumed under the whole-line transfer policy.', 'wc-order-splitter'));
 		}
 
+		$legacy_commercial_journal = is_array($existing)
+			&& (empty($existing['context']['commercial_policy']) || !is_array($existing['context']['commercial_policy']));
 		$fingerprint_context = array(
-			'policy_version' => self::POLICY_VERSION,
+			'policy_version' => $legacy_commercial_journal ? self::LEGACY_POLICY_VERSION : self::POLICY_VERSION,
 			'plan' => $canonical_plan,
-			'shipping_policy' => 'keep_on_source',
+			'shipping_policy' => $commercial_policy['shipping'],
 			'fee_policy' => 'keep_on_source',
-			'child_status' => 'pending',
+			'child_status' => $commercial_policy['child_status'],
 		);
+		if (!$legacy_commercial_journal) {
+			$fingerprint_context['commercial_policy'] = $commercial_policy;
+		}
 		if (!$legacy_journal) {
 			$fingerprint_context['execution_policy'] = $execution_policy;
 		}
@@ -134,15 +151,19 @@ final class WCOS_Split_Order_Service {
 				$before_contract = isset($record['context']['before_contract']) && is_array($record['context']['before_contract'])
 					? $record['context']['before_contract']
 					: WCOS_Order_Contract_Snapshot::aggregate(array($source));
+				$shipping_authority = $this->shipping_authority_from_record($record);
 				$source_stock_reduced = !empty($record['context']['source_stock_reduced']);
 				$fully_moved_item_ids = isset($record['context']['fully_moved_item_ids'])
 					? array_values(array_unique(array_filter(array_map('absint', (array) $record['context']['fully_moved_item_ids']))))
 					: array();
 			} else {
-				$this->assert_supported_source($source);
+				WCOS_Split_Commercial_Policy::assert_current($source, $commercial_policy);
+				$this->assert_supported_source($source, $commercial_policy);
 				$normalized_plan = WCOS_Split_Plan::normalize($source, $canonical_plan, $execution_policy);
+				WCOS_Split_Commercial_Policy::assert_plan($normalized_plan, $commercial_policy);
 				$fully_moved_item_ids = WCOS_Split_Plan::fully_moved_item_ids($source, $normalized_plan, $execution_policy);
 				$before_contract = WCOS_Order_Contract_Snapshot::aggregate(array($source));
+				$shipping_authority = $this->capture_shipping_authority($source, $before_contract);
 				$source_stock_reduced = (bool) $source->get_data_store()->get_stock_reduced($source_id);
 				$context = array(
 					'plan' => $normalized_plan,
@@ -151,7 +172,9 @@ final class WCOS_Split_Order_Service {
 					'fully_moved_item_ids' => $fully_moved_item_ids,
 					'source_signature' => WCOS_Order_Contract_Snapshot::source_signature($source),
 					'before_contract' => $before_contract,
+					'shipping_authority' => $shipping_authority,
 					'source_stock_reduced' => $source_stock_reduced,
+					'commercial_policy' => $commercial_policy,
 				);
 				if (isset($operation_context['strategy_authority'])) {
 					$context['strategy_authority'] = $operation_context['strategy_authority'];
@@ -168,21 +191,22 @@ final class WCOS_Split_Order_Service {
 				throw new RuntimeException(__('The split operation lease was lost before allocation.', 'wc-order-splitter'));
 			}
 
-			$this->assert_supported_source($source);
+			$this->assert_supported_source($source, $commercial_policy);
 			$execution_stock_before = WCOS_Order_Contract_Snapshot::product_stock($source);
 			$tax_templates = WCOS_Tax_Item_Synchronizer::templates($source);
-			$expected_children = $this->build_mutation($source, $normalized_plan, $operation_id, $tax_templates, $execution_policy);
+			$expected_children = $this->build_mutation($source, $normalized_plan, $operation_id, $tax_templates, $execution_policy, $commercial_policy);
 			$existing_children = $this->discover_children($source, $operation_id);
 			$children = $this->persist_or_reuse_children(
 				$source,
 				$operation_id,
 				$normalized_plan,
 				$expected_children,
-				$existing_children
+				$existing_children,
+				$commercial_policy
 			);
 
 			$this->apply_relations($source, $children);
-			$this->assert_conserved($before_contract, array_merge(array($source), array_values($children)));
+			$this->assert_split_contract($before_contract, $source, $children, $commercial_policy, $shipping_authority);
 			WCOS_Order_Contract_Snapshot::assert_product_stock_equal(
 				$execution_stock_before,
 				WCOS_Order_Contract_Snapshot::product_stock($source)
@@ -215,12 +239,19 @@ final class WCOS_Split_Order_Service {
 
 			$source = wc_get_order($source_id);
 			$children = $this->reload_children($children);
-			$this->verify_persisted_split($source, $children, $normalized_plan, $operation_id, $before_contract, $source_stock_reduced, $fully_moved_item_ids);
+			$this->verify_persisted_split($source, $children, $normalized_plan, $operation_id, $before_contract, $source_stock_reduced, $fully_moved_item_ids, $commercial_policy, $shipping_authority);
 			WCOS_Order_Contract_Snapshot::assert_product_stock_equal(
 				$execution_stock_before,
 				WCOS_Order_Contract_Snapshot::product_stock($source)
 			);
 			do_action('wcos_split_mutation_checkpoint', 'after_persisted_verify', $source, $children, $operation_id);
+			$source = wc_get_order($source_id);
+			$children = $this->reload_children($children);
+			$this->verify_persisted_split($source, $children, $normalized_plan, $operation_id, $before_contract, $source_stock_reduced, $fully_moved_item_ids, $commercial_policy, $shipping_authority);
+			WCOS_Order_Contract_Snapshot::assert_product_stock_equal(
+				$execution_stock_before,
+				WCOS_Order_Contract_Snapshot::product_stock($source)
+			);
 
 			if (!WCOS_Operation_Journal::mark_committed($source, $operation_id, array('target_order_ids' => $this->child_ids($children)))) {
 				throw new RuntimeException(__('The split passed verification but its commit point could not be recorded.', 'wc-order-splitter'));
@@ -229,7 +260,7 @@ final class WCOS_Split_Order_Service {
 				throw new RuntimeException(__('The split committed but its operation journal could not be finalized.', 'wc-order-splitter'));
 			}
 
-			$this->add_notes_best_effort($source, $children);
+			$this->add_notes_best_effort($source, $children, $commercial_policy);
 			return array_values($children);
 		} catch (Throwable $throwable) {
 			$fresh_source = wc_get_order($source_id);
@@ -280,7 +311,7 @@ final class WCOS_Split_Order_Service {
 
 	private function normalize_operation_context(array $operation_context, $execution_policy) {
 		foreach (array_keys($operation_context) as $key) {
-			if (!in_array($key, array('strategy_authority', 'manual_quantity_authority'), true)) {
+			if (!in_array($key, array('strategy_authority', 'manual_quantity_authority', 'commercial_policy'), true)) {
 				throw new InvalidArgumentException(__('Unknown Split operation authority context.', 'wc-order-splitter'));
 			}
 		}
@@ -289,8 +320,12 @@ final class WCOS_Split_Order_Service {
 		if ($has_strategy && $has_manual) {
 			throw new InvalidArgumentException(__('A Split operation cannot carry both strategy and Manual quantity authority.', 'wc-order-splitter'));
 		}
+		$normalized = array();
+		if (isset($operation_context['commercial_policy'])) {
+			$normalized['commercial_policy'] = WCOS_Split_Commercial_Policy::assert_valid($operation_context['commercial_policy']);
+		}
 		if (!$has_strategy && !$has_manual) {
-			return array();
+			return $normalized;
 		}
 		if ($has_strategy && (WCOS_Split_Execution_Policy::ALLOW_WHOLE_LINE_TRANSFER !== $execution_policy
 			|| !is_array($operation_context['strategy_authority'])
@@ -298,7 +333,8 @@ final class WCOS_Split_Order_Service {
 			throw new InvalidArgumentException(__('Semantic Split strategy authority requires the whole-line execution policy.', 'wc-order-splitter'));
 		}
 		if ($has_strategy) {
-			return array('strategy_authority' => $operation_context['strategy_authority']);
+			$normalized['strategy_authority'] = $operation_context['strategy_authority'];
+			return $normalized;
 		}
 		if (!is_array($operation_context['manual_quantity_authority'])) {
 			throw new InvalidArgumentException(__('Manual quantity authority is malformed.', 'wc-order-splitter'));
@@ -308,27 +344,15 @@ final class WCOS_Split_Order_Service {
 		if ($expected_policy !== $execution_policy) {
 			throw new InvalidArgumentException(__('Manual quantity authority does not match the requested Split execution policy.', 'wc-order-splitter'));
 		}
-		return array(
-			'manual_quantity_authority' => $manual_authority,
-		);
+		$normalized['manual_quantity_authority'] = $manual_authority;
+		return $normalized;
 	}
 
-	private function assert_supported_source(WC_Order $source) {
+	private function assert_supported_source(WC_Order $source, array $commercial_policy) {
 		if (!$source->get_id() || 'shop_order' !== $source->get_type()) {
 			throw new InvalidArgumentException(__('Only persisted WooCommerce shop orders can be split.', 'wc-order-splitter'));
 		}
-		if (!in_array($source->get_status(), array('pending', 'on-hold', 'processing'), true)) {
-			throw new RuntimeException(__('This order status is not supported by the hardened split engine.', 'wc-order-splitter'));
-		}
-		if (!empty($source->get_items('coupon'))) {
-			throw new RuntimeException(__('Orders containing coupon rows are not supported until a coupon allocation policy is implemented.', 'wc-order-splitter'));
-		}
-		if ($source->get_total_refunded() != 0 || !empty($source->get_refunds())) {
-			throw new RuntimeException(__('Refunded orders are not supported by the hardened split engine.', 'wc-order-splitter'));
-		}
-		if (!empty($source->get_meta(self::RELATION_PARENT_META, true)) || !empty($source->get_meta('yoos_original_order', true))) {
-			throw new RuntimeException(__('Nested splitting of a child order is not supported.', 'wc-order-splitter'));
-		}
+		WCOS_Split_Commercial_Policy::assert_source_supported($source, $commercial_policy);
 		if (empty($source->get_items('line_item'))) {
 			throw new RuntimeException(__('An order without product line items cannot be split.', 'wc-order-splitter'));
 		}
@@ -352,11 +376,11 @@ final class WCOS_Split_Order_Service {
 		}
 	}
 
-	private function build_mutation(WC_Order $source, array $plan, $operation_id, array $tax_templates, $execution_policy) {
+	private function build_mutation(WC_Order $source, array $plan, $operation_id, array $tax_templates, $execution_policy, array $commercial_policy) {
 		$precision = wc_get_price_decimals();
 		$children = array();
 		foreach (WCOS_Split_Plan::child_keys($plan) as $child_key) {
-			$children[$child_key] = $this->build_child_shell($source, $operation_id, $child_key);
+			$children[$child_key] = $this->build_child_shell($source, $operation_id, $child_key, $commercial_policy);
 		}
 
 		foreach ($source->get_items('line_item') as $item_id => $source_item) {
@@ -365,6 +389,13 @@ final class WCOS_Split_Order_Service {
 
 		if (empty($source->get_items('line_item'))) {
 			throw new RuntimeException(__('Whole-line Split may not remove every product line from the source order.', 'wc-order-splitter'));
+		}
+		if (WCOS_Split_Commercial_Policy::SHIPPING_REPLICATE_TO_EACH_CHILD === $commercial_policy['shipping']) {
+			foreach ($children as $child) {
+				foreach ($source->get_items('shipping') as $shipping_item) {
+					$child->add_item(WCOS_Order_Item_Cloner::shipping($shipping_item, WCOS_Order_Item_Meta_Policy::CONTEXT_SPLIT));
+				}
+			}
 		}
 
 		WCOS_Tax_Item_Synchronizer::synchronize($source, $tax_templates, $precision, true);
@@ -377,10 +408,10 @@ final class WCOS_Split_Order_Service {
 		return $children;
 	}
 
-	private function build_child_shell(WC_Order $source, $operation_id, $child_key) {
+	private function build_child_shell(WC_Order $source, $operation_id, $child_key, array $commercial_policy) {
 		$child = new WC_Order();
 		$result = $child->set_props(array(
-			'status' => 'pending',
+			'status' => $commercial_policy['child_status'],
 			'customer_id' => $source->get_customer_id(),
 			'currency' => $source->get_currency(),
 			'prices_include_tax' => $source->get_prices_include_tax(),
@@ -391,6 +422,12 @@ final class WCOS_Split_Order_Service {
 		));
 		if (is_wp_error($result)) {
 			throw new RuntimeException($result->get_error_message());
+		}
+		if ('source_only' === $commercial_policy['payment']
+			&& 'keep_on_source' === $commercial_policy['payment_transaction']) {
+			/* Paid-class status setters may infer a paid date; Split children own neither. */
+			$child->set_date_paid(null);
+			$child->set_transaction_id('');
 		}
 		$child->set_address($source->get_address('billing'), 'billing');
 		$child->set_address($source->get_address('shipping'), 'shipping');
@@ -528,7 +565,7 @@ final class WCOS_Split_Order_Service {
 		$item->add_meta_data('_reduced_stock', WCOS_Decimal::normalize($value, 6), true);
 	}
 
-	private function persist_or_reuse_children(WC_Order $source, $operation_id, array $plan, array $expected, array $existing) {
+	private function persist_or_reuse_children(WC_Order $source, $operation_id, array $plan, array $expected, array $existing, array $commercial_policy) {
 		foreach ($existing as $child_key => $child) {
 			if (!isset($expected[$child_key])) {
 				throw new RuntimeException(__('An unexpected persisted child was found for this split operation.', 'wc-order-splitter'));
@@ -538,19 +575,19 @@ final class WCOS_Split_Order_Service {
 		$children = array();
 		foreach (WCOS_Split_Plan::child_keys($plan) as $child_key) {
 			if (isset($existing[$child_key])) {
-				$this->verify_child_matches_expected($source, $existing[$child_key], $expected[$child_key], $operation_id, $child_key);
+				$this->verify_child_matches_expected($source, $existing[$child_key], $expected[$child_key], $operation_id, $child_key, $commercial_policy);
 				$children[$child_key] = $existing[$child_key];
 				continue;
 			}
 
 			$child = $expected[$child_key];
 			do_action('wcos_split_mutation_checkpoint', 'before_child_save', $source, array($child_key => $child), $operation_id);
-			$child->save();
+			$this->save_child_without_transactional_email($child);
 			$child = wc_get_order($child->get_id());
 			if (!$child) {
 				throw new RuntimeException(__('A split child could not be reloaded after persistence.', 'wc-order-splitter'));
 			}
-			$this->verify_child_matches_expected($source, $child, $expected[$child_key], $operation_id, $child_key);
+			$this->verify_child_matches_expected($source, $child, $expected[$child_key], $operation_id, $child_key, $commercial_policy);
 			$children[$child_key] = $child;
 
 			if (!WCOS_Operation_Journal::checkpoint(
@@ -567,17 +604,29 @@ final class WCOS_Split_Order_Service {
 		return $children;
 	}
 
-	private function verify_child_matches_expected(WC_Order $source, WC_Order $child, WC_Order $expected, $operation_id, $child_key) {
+	private function verify_child_matches_expected(WC_Order $source, WC_Order $child, WC_Order $expected, $operation_id, $child_key, array $commercial_policy) {
 		if ((int) $child->get_meta(self::RELATION_PARENT_META, true) !== $source->get_id()
 			|| (string) $child->get_meta(self::OPERATION_META, true) !== $operation_id
 			|| (string) $child->get_meta(self::CHILD_KEY_META, true) !== $child_key) {
 			throw new RuntimeException(__('A persisted split child has invalid operation relations.', 'wc-order-splitter'));
 		}
-		if ('pending' !== $child->get_status()) {
-			throw new RuntimeException(__('Split children must remain pending until a later explicit workflow changes status.', 'wc-order-splitter'));
+		if ((string) $commercial_policy['child_status'] !== $child->get_status()) {
+			throw new RuntimeException(__('A Split child does not have the frozen source status.', 'wc-order-splitter'));
 		}
-		if (!empty($child->get_items('shipping')) || !empty($child->get_items('fee')) || !empty($child->get_items('coupon'))) {
-			throw new RuntimeException(__('Shipping, fees, or coupons were duplicated to a split child.', 'wc-order-splitter'));
+		if ('source_only' === $commercial_policy['payment']
+			&& 'keep_on_source' === $commercial_policy['payment_transaction']
+			&& (null !== $child->get_date_paid('edit') || '' !== (string) $child->get_transaction_id('edit'))) {
+			throw new RuntimeException(__('A Split child unexpectedly owns payment transaction or paid-date evidence.', 'wc-order-splitter'));
+		}
+		$expected_shipping_count = WCOS_Split_Commercial_Policy::SHIPPING_REPLICATE_TO_EACH_CHILD === $commercial_policy['shipping']
+			? count($source->get_items('shipping'))
+			: 0;
+		if ($expected_shipping_count !== count($child->get_items('shipping'))
+			|| !empty($child->get_items('fee')) || !empty($child->get_items('coupon'))) {
+			throw new RuntimeException(__('A Split child does not match frozen shipping, fee, or coupon ownership.', 'wc-order-splitter'));
+		}
+		if ($this->shipping_evidence($expected) !== $this->shipping_evidence($child)) {
+			throw new RuntimeException(__('A Split child shipping row differs from the frozen historical shipping evidence.', 'wc-order-splitter'));
 		}
 		$this->assert_conserved(
 			WCOS_Order_Contract_Snapshot::aggregate(array($expected)),
@@ -601,6 +650,7 @@ final class WCOS_Split_Order_Service {
 	}
 
 	private function try_finalize_persisted(WC_Order $source, $operation_id, array $canonical_plan, array $record) {
+		$commercial_policy = WCOS_Split_Commercial_Policy::from_journal($record);
 		$children = $this->discover_children($source, $operation_id);
 		if (empty($children)) {
 			return null;
@@ -615,9 +665,10 @@ final class WCOS_Split_Order_Service {
 		if (!$before_contract) {
 			return null;
 		}
+		$shipping_authority = $this->shipping_authority_from_record($record);
 
 		try {
-			$this->assert_conserved($before_contract, array_merge(array($source), array_values($children)));
+			$this->assert_split_contract($before_contract, $source, $children, $commercial_policy, $shipping_authority);
 		} catch (Throwable $throwable) {
 			return null;
 		}
@@ -629,7 +680,7 @@ final class WCOS_Split_Order_Service {
 		$this->apply_relations($source, $children);
 		$source->save_meta_data();
 		$this->synchronize_child_stock_flags($children, $source_stock_reduced);
-		$this->verify_persisted_split($source, $children, $canonical_plan, $operation_id, $before_contract, $source_stock_reduced, $fully_moved_item_ids);
+		$this->verify_persisted_split($source, $children, $canonical_plan, $operation_id, $before_contract, $source_stock_reduced, $fully_moved_item_ids, $commercial_policy, $shipping_authority);
 
 		if (!WCOS_Operation_Journal::mark_committed($source, $operation_id, array('target_order_ids' => $this->child_ids($children), 'recovered' => true))) {
 			throw new RuntimeException(__('Unable to record the recovered split commit point.', 'wc-order-splitter'));
@@ -637,11 +688,11 @@ final class WCOS_Split_Order_Service {
 		if (!WCOS_Operation_Journal::complete($source, $operation_id, array('target_order_ids' => $this->child_ids($children), 'recovered' => true))) {
 			throw new RuntimeException(__('Unable to finalize the recovered split operation.', 'wc-order-splitter'));
 		}
-		$this->add_notes_best_effort($source, $children);
+		$this->add_notes_best_effort($source, $children, $commercial_policy);
 		return array_values($children);
 	}
 
-	private function verify_persisted_split(WC_Order $source, array $children, array $plan, $operation_id, array $before_contract, $source_stock_reduced, array $fully_moved_item_ids = array()) {
+	private function verify_persisted_split(WC_Order $source, array $children, array $plan, $operation_id, array $before_contract, $source_stock_reduced, array $fully_moved_item_ids = array(), array $commercial_policy = array(), array $shipping_authority = array()) {
 		if (!$source) {
 			throw new RuntimeException(__('The source order could not be reloaded after split persistence.', 'wc-order-splitter'));
 		}
@@ -656,7 +707,8 @@ final class WCOS_Split_Order_Service {
 				throw new RuntimeException(__('A whole-line Split source item remained persisted after full transfer.', 'wc-order-splitter'));
 			}
 		}
-		$this->assert_conserved($before_contract, array_merge(array($source), array_values($children)));
+		$commercial_policy = empty($commercial_policy) ? WCOS_Split_Commercial_Policy::legacy() : WCOS_Split_Commercial_Policy::assert_valid($commercial_policy);
+		$this->assert_split_contract($before_contract, $source, $children, $commercial_policy, $shipping_authority);
 
 		$relation_ids = array_filter(array_map('absint', (array) $source->get_meta(self::RELATION_CHILDREN_META, true)));
 		foreach ($children as $child_key => $child) {
@@ -667,6 +719,9 @@ final class WCOS_Split_Order_Service {
 				|| (string) $child->get_meta(self::OPERATION_META, true) !== $operation_id
 				|| (string) $child->get_meta(self::CHILD_KEY_META, true) !== $child_key) {
 				throw new RuntimeException(__('A split child has an invalid persisted relation graph.', 'wc-order-splitter'));
+			}
+			if ((string) $commercial_policy['child_status'] !== $child->get_status()) {
+				throw new RuntimeException(__('A persisted Split child lost its frozen source status.', 'wc-order-splitter'));
 			}
 			$flag = (bool) $child->get_data_store()->get_stock_reduced($child->get_id());
 			if ($flag !== (bool) $source_stock_reduced) {
@@ -722,6 +777,413 @@ final class WCOS_Split_Order_Service {
 		WCOS_Mutation_Contract::assert_conserved($before_contract, $after_contract, wc_get_price_decimals());
 	}
 
+	private function assert_split_contract(array $before_contract, WC_Order $source, array $children, array $commercial_policy, array $shipping_authority = array()) {
+		$orders = array_merge(array($source), array_values($children));
+		$expected = $before_contract;
+		if (!empty($shipping_authority)) {
+			$this->assert_shipping_state($source, $children, $commercial_policy, $shipping_authority, $before_contract);
+		}
+		if (WCOS_Split_Commercial_Policy::SHIPPING_REPLICATE_TO_EACH_CHILD === $commercial_policy['shipping']) {
+			$precision = wc_get_price_decimals();
+			$multiplier = count($children);
+			$shipping_total = !empty($shipping_authority)
+				? $shipping_authority['totals']['shipping_total']
+				: $source->get_shipping_total();
+			$shipping_tax = !empty($shipping_authority)
+				? $shipping_authority['totals']['shipping_tax']
+				: $source->get_shipping_tax();
+			$shipping_units = $this->checked_multiply(WCOS_Decimal::to_units($shipping_total, $precision), $multiplier);
+			$shipping_tax_units = $this->checked_multiply(WCOS_Decimal::to_units($shipping_tax, $precision), $multiplier);
+			$expected['shipping_total'] = WCOS_Decimal::from_units(
+				$this->checked_add(WCOS_Decimal::to_units(isset($expected['shipping_total']) ? $expected['shipping_total'] : 0, $precision), $shipping_units),
+				$precision
+			);
+			$expected['tax_total'] = WCOS_Decimal::from_units(
+				$this->checked_add(WCOS_Decimal::to_units(isset($expected['tax_total']) ? $expected['tax_total'] : 0, $precision), $shipping_tax_units),
+				$precision
+			);
+			$expected['grand_total'] = WCOS_Decimal::from_units(
+				$this->checked_add(
+					$this->checked_add(WCOS_Decimal::to_units(isset($expected['grand_total']) ? $expected['grand_total'] : 0, $precision), $shipping_units),
+					$shipping_tax_units
+				),
+				$precision
+			);
+			$shipping_tax_by_rate = !empty($shipping_authority)
+				? $shipping_authority['totals']['tax_by_rate']
+				: $this->shipping_tax_by_rate($source, $precision);
+			foreach ($shipping_tax_by_rate as $rate_id => $amount) {
+					$rate_id = (string) $rate_id;
+					if (!isset($expected['tax_by_rate'][$rate_id])) {
+						$expected['tax_by_rate'][$rate_id] = array('cart' => '0', 'shipping' => '0');
+					}
+					$units = $this->checked_add(
+						WCOS_Decimal::to_units($expected['tax_by_rate'][$rate_id]['shipping'], $precision),
+						$this->checked_multiply(WCOS_Decimal::to_units($amount, $precision), $multiplier)
+					);
+					$expected['tax_by_rate'][$rate_id]['shipping'] = WCOS_Decimal::from_units($units, $precision);
+			}
+		}
+		$this->assert_conserved($expected, $orders);
+	}
+
+	private function shipping_authority_from_record(array $record) {
+		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
+		if (isset($context['shipping_authority']) && is_array($context['shipping_authority'])) {
+			$this->assert_shipping_authority_document($context['shipping_authority']);
+			return $context['shipping_authority'];
+		}
+		if (empty($context['commercial_policy'])) {
+			/* Pre-WOS-COMPAT-002 journals retain their original replay semantics. */
+			return array();
+		}
+		throw new RuntimeException(__('A current Split journal is missing immutable shipping authority.', 'wc-order-splitter'));
+	}
+
+	private function capture_shipping_authority(WC_Order $source, array $before_contract) {
+		$precision = wc_get_price_decimals();
+		$rows = array();
+		foreach ($source->get_items('shipping') as $item_id => $item) {
+			$item_id = absint($item_id);
+			if (!$item_id || !$item instanceof WC_Order_Item_Shipping) {
+				throw new RuntimeException(__('Split shipping authority requires persisted source shipping rows.', 'wc-order-splitter'));
+			}
+			$template = WCOS_Order_Item_Cloner::shipping($item, WCOS_Order_Item_Meta_Policy::CONTEXT_SPLIT);
+			$rows[$item_id] = array(
+				'source_item_id' => $item_id,
+				'source' => $this->shipping_row_state($item, $precision),
+				'child' => $this->shipping_row_state($template, $precision),
+			);
+		}
+		ksort($rows, SORT_NUMERIC);
+		$source_rows = array();
+		foreach ($rows as $row) {
+			$source_rows[] = $row['source'];
+		}
+		$totals = $this->shipping_totals_from_rows($source_rows, $precision);
+		if ($totals['shipping_total'] !== WCOS_Decimal::normalize($source->get_shipping_total(), $precision)
+			|| $totals['shipping_tax'] !== WCOS_Decimal::normalize($source->get_shipping_tax(), $precision)) {
+			throw new RuntimeException(__('Source shipping rows do not match the persisted order shipping totals.', 'wc-order-splitter'));
+		}
+
+		$authority = array(
+			'schema_version' => self::SHIPPING_AUTHORITY_SCHEMA_VERSION,
+			'source_order_id' => absint($source->get_id()),
+			'price_precision' => $precision,
+			'rows' => $rows,
+			'totals' => $totals,
+		);
+		$authority['authority_fingerprint'] = $this->shipping_authority_fingerprint($authority);
+		$this->assert_shipping_authority_document($authority, $before_contract);
+		return $authority;
+	}
+
+	private function assert_shipping_state(WC_Order $source, array $children, array $commercial_policy, array $authority, array $before_contract) {
+		$this->assert_shipping_authority_document($authority, $before_contract);
+		$precision = (int) $authority['price_precision'];
+		if (absint($authority['source_order_id']) !== absint($source->get_id())) {
+			throw new RuntimeException(__('Split shipping authority does not belong to this source order.', 'wc-order-splitter'));
+		}
+
+		$current_source_rows = array();
+		foreach ($source->get_items('shipping') as $item_id => $item) {
+			$current_source_rows[absint($item_id)] = $this->shipping_row_state($item, $precision);
+		}
+		ksort($current_source_rows, SORT_NUMERIC);
+		$expected_source_rows = array();
+		$expected_child_rows = array();
+		foreach ($authority['rows'] as $item_id => $row) {
+			$expected_source_rows[absint($item_id)] = $row['source'];
+			$expected_child_rows[] = $row['child'];
+		}
+		ksort($expected_source_rows, SORT_NUMERIC);
+		if ($current_source_rows !== $expected_source_rows
+			|| WCOS_Decimal::normalize($source->get_shipping_total(), $precision) !== $authority['totals']['shipping_total']
+			|| WCOS_Decimal::normalize($source->get_shipping_tax(), $precision) !== $authority['totals']['shipping_tax']) {
+			throw new RuntimeException(__('The persisted Split source shipping rows changed from immutable historical authority.', 'wc-order-splitter'));
+		}
+
+		$replicate = WCOS_Split_Commercial_Policy::SHIPPING_REPLICATE_TO_EACH_CHILD === $commercial_policy['shipping'];
+		$expected_child_rows = $replicate ? $this->canonical_shipping_rows($expected_child_rows) : array();
+		$expected_total = $replicate ? $authority['totals']['shipping_total'] : WCOS_Decimal::from_units(0, $precision);
+		$expected_tax = $replicate ? $authority['totals']['shipping_tax'] : WCOS_Decimal::from_units(0, $precision);
+		foreach ($children as $child) {
+			if (!$child instanceof WC_Order) {
+				throw new RuntimeException(__('Split shipping verification requires WooCommerce child orders.', 'wc-order-splitter'));
+			}
+			$current_child_rows = array();
+			foreach ($child->get_items('shipping') as $item) {
+				$current_child_rows[] = $this->shipping_row_state($item, $precision);
+			}
+			if ($this->canonical_shipping_rows($current_child_rows) !== $expected_child_rows
+				|| WCOS_Decimal::normalize($child->get_shipping_total(), $precision) !== $expected_total
+				|| WCOS_Decimal::normalize($child->get_shipping_tax(), $precision) !== $expected_tax) {
+				throw new RuntimeException(__('A persisted Split child shipping row differs from immutable historical authority.', 'wc-order-splitter'));
+			}
+		}
+	}
+
+	private function assert_shipping_authority_document(array $authority, array $before_contract = array()) {
+		$required = array('schema_version', 'source_order_id', 'price_precision', 'rows', 'totals', 'authority_fingerprint');
+		$keys = array_keys($authority);
+		sort($keys, SORT_STRING);
+		$expected_keys = $required;
+		sort($expected_keys, SORT_STRING);
+		$fingerprint = isset($authority['authority_fingerprint']) ? sanitize_key((string) $authority['authority_fingerprint']) : '';
+		if ($keys !== $expected_keys
+			|| self::SHIPPING_AUTHORITY_SCHEMA_VERSION !== (int) $authority['schema_version']
+			|| !absint($authority['source_order_id'])
+			|| !is_array($authority['rows'])
+			|| !is_array($authority['totals'])
+			|| '' === $fingerprint
+			|| !hash_equals($fingerprint, $this->shipping_authority_fingerprint($authority))) {
+			throw new RuntimeException(__('Split shipping authority failed schema or integrity verification.', 'wc-order-splitter'));
+		}
+
+		$precision = (int) $authority['price_precision'];
+		if ($precision < 0 || $precision > 8) {
+			throw new RuntimeException(__('Split shipping authority uses an unsupported price precision.', 'wc-order-splitter'));
+		}
+		if (array('shipping_total', 'shipping_tax', 'tax_by_rate') !== array_keys($authority['totals'])
+			|| !is_array($authority['totals']['tax_by_rate'])) {
+			throw new RuntimeException(__('Split shipping authority contains malformed aggregate evidence.', 'wc-order-splitter'));
+		}
+		$source_rows = array();
+		$child_rows = array();
+		foreach ($authority['rows'] as $item_id => $row) {
+			if (!is_array($row)
+				|| array('source_item_id', 'source', 'child') !== array_keys($row)
+				|| absint($item_id) !== absint($row['source_item_id'])
+				|| !absint($row['source_item_id'])
+				|| !is_array($row['source'])
+				|| !is_array($row['child'])) {
+				throw new RuntimeException(__('Split shipping authority contains an invalid row binding.', 'wc-order-splitter'));
+			}
+			$this->assert_shipping_row_state($row['source'], $precision);
+			$this->assert_shipping_row_state($row['child'], $precision);
+			$source_rows[] = $row['source'];
+			$child_rows[] = $row['child'];
+		}
+		$source_totals = $this->shipping_totals_from_rows($source_rows, $precision);
+		$child_totals = $this->shipping_totals_from_rows($child_rows, $precision);
+		if ($source_totals !== $authority['totals'] || $child_totals !== $authority['totals']) {
+			throw new RuntimeException(__('Split shipping authority totals do not match its immutable rows.', 'wc-order-splitter'));
+		}
+		if (!empty($before_contract)) {
+			$before_shipping = WCOS_Decimal::normalize(isset($before_contract['shipping_total']) ? $before_contract['shipping_total'] : 0, $precision);
+			if ($before_shipping !== $authority['totals']['shipping_total']) {
+				throw new RuntimeException(__('Split shipping authority does not match the pre-Split commercial contract.', 'wc-order-splitter'));
+			}
+			$before_rates = array();
+			foreach (isset($before_contract['tax_by_rate']) && is_array($before_contract['tax_by_rate']) ? $before_contract['tax_by_rate'] : array() as $rate_id => $taxes) {
+				$amount = WCOS_Decimal::normalize(isset($taxes['shipping']) ? $taxes['shipping'] : 0, $precision);
+				if (0 !== WCOS_Decimal::to_units($amount, $precision)) {
+					$before_rates[(string) $rate_id] = $amount;
+				}
+			}
+			ksort($before_rates, SORT_STRING);
+			$authority_rates = array_filter(
+				$authority['totals']['tax_by_rate'],
+				static function($amount) use ($precision) { return 0 !== WCOS_Decimal::to_units($amount, $precision); }
+			);
+			ksort($authority_rates, SORT_STRING);
+			if ($before_rates !== $authority_rates) {
+				throw new RuntimeException(__('Split shipping authority tax rates do not match the pre-Split commercial contract.', 'wc-order-splitter'));
+			}
+		}
+	}
+
+	private function assert_shipping_row_state(array $state, $precision) {
+		$keys = array('name_fingerprint', 'method_title_fingerprint', 'method_id_fingerprint', 'instance_id', 'total', 'total_tax', 'taxes', 'meta_fingerprint');
+		if ($keys !== array_keys($state)
+			|| !is_array($state['taxes'])
+			|| 64 !== strlen(sanitize_key((string) $state['name_fingerprint']))
+			|| 64 !== strlen(sanitize_key((string) $state['method_title_fingerprint']))
+			|| 64 !== strlen(sanitize_key((string) $state['method_id_fingerprint']))
+			|| 64 !== strlen(sanitize_key((string) $state['meta_fingerprint']))
+			|| absint($state['instance_id']) !== (int) $state['instance_id']
+			|| WCOS_Decimal::normalize($state['total'], $precision) !== $state['total']
+			|| WCOS_Decimal::normalize($state['total_tax'], $precision) !== $state['total_tax']
+			|| $this->normalize_shipping_taxes($state['taxes'], $precision) !== $state['taxes']) {
+			throw new RuntimeException(__('Split shipping authority contains malformed historical row evidence.', 'wc-order-splitter'));
+		}
+		$tax_units = 0;
+		foreach (isset($state['taxes']['total']) ? $state['taxes']['total'] : array() as $amount) {
+			$tax_units = $this->checked_add($tax_units, WCOS_Decimal::to_units($amount, $precision));
+		}
+		if (WCOS_Decimal::to_units($state['total_tax'], $precision) !== $tax_units) {
+			throw new RuntimeException(__('Split shipping authority row tax totals are inconsistent.', 'wc-order-splitter'));
+		}
+	}
+
+	private function shipping_authority_fingerprint(array $authority) {
+		$copy = $authority;
+		unset($copy['authority_fingerprint']);
+		return WCOS_Mutation_Fingerprint::create(
+			'split_shipping_authority_v' . self::SHIPPING_AUTHORITY_SCHEMA_VERSION,
+			isset($copy['source_order_id']) ? absint($copy['source_order_id']) : 0,
+			$copy
+		);
+	}
+
+	private function shipping_row_state(WC_Order_Item_Shipping $item, $precision) {
+		return array(
+			'name_fingerprint' => WCOS_Mutation_Fingerprint::create('split_shipping_name', 0, array('value' => (string) $item->get_name())),
+			'method_title_fingerprint' => WCOS_Mutation_Fingerprint::create('split_shipping_method_title', 0, array('value' => (string) $item->get_method_title())),
+			'method_id_fingerprint' => WCOS_Mutation_Fingerprint::create('split_shipping_method_id', 0, array('value' => (string) $item->get_method_id())),
+			'instance_id' => absint($item->get_instance_id()),
+			'total' => WCOS_Decimal::normalize($item->get_total(), $precision),
+			'total_tax' => WCOS_Decimal::normalize($item->get_total_tax(), $precision),
+			'taxes' => $this->normalize_shipping_taxes($item->get_taxes(), $precision),
+			'meta_fingerprint' => WCOS_Mutation_Fingerprint::create(
+				'split_shipping_business_metadata',
+				0,
+				array('metadata' => WCOS_Order_Item_Meta_Policy::business_metadata($item))
+			),
+		);
+	}
+
+	private function normalize_shipping_taxes(array $taxes, $precision) {
+		$normalized = array();
+		foreach ($taxes as $bucket => $amounts) {
+			$normalized[(string) $bucket] = array();
+			foreach ((array) $amounts as $rate_id => $amount) {
+				$normalized[(string) $bucket][(string) $rate_id] = WCOS_Decimal::normalize($amount, $precision);
+			}
+			ksort($normalized[(string) $bucket], SORT_STRING);
+		}
+		ksort($normalized, SORT_STRING);
+		return $normalized;
+	}
+
+	private function shipping_totals_from_rows(array $rows, $precision) {
+		$total_units = 0;
+		$tax_units = 0;
+		$tax_by_rate = array();
+		foreach ($rows as $row) {
+			$this->assert_shipping_row_state($row, $precision);
+			$total_units = $this->checked_add($total_units, WCOS_Decimal::to_units($row['total'], $precision));
+			foreach (isset($row['taxes']['total']) ? $row['taxes']['total'] : array() as $rate_id => $amount) {
+				$rate_id = (string) $rate_id;
+				$amount_units = WCOS_Decimal::to_units($amount, $precision);
+				$tax_units = $this->checked_add($tax_units, $amount_units);
+				$tax_by_rate[$rate_id] = $this->checked_add(isset($tax_by_rate[$rate_id]) ? $tax_by_rate[$rate_id] : 0, $amount_units);
+			}
+		}
+		ksort($tax_by_rate, SORT_STRING);
+		foreach ($tax_by_rate as $rate_id => $units) {
+			$tax_by_rate[$rate_id] = WCOS_Decimal::from_units($units, $precision);
+		}
+		return array(
+			'shipping_total' => WCOS_Decimal::from_units($total_units, $precision),
+			'shipping_tax' => WCOS_Decimal::from_units($tax_units, $precision),
+			'tax_by_rate' => $tax_by_rate,
+		);
+	}
+
+	private function canonical_shipping_rows(array $rows) {
+		$canonical = array();
+		foreach ($rows as $row) {
+			$canonical[] = array(
+				'fingerprint' => WCOS_Mutation_Fingerprint::create('split_shipping_row', 0, $row),
+				'row' => $row,
+			);
+		}
+		usort($canonical, static function(array $left, array $right) {
+			return strcmp($left['fingerprint'], $right['fingerprint']);
+		});
+		return array_map(static function(array $entry) { return $entry['row']; }, $canonical);
+	}
+
+	private function shipping_tax_by_rate(WC_Order $source, $precision) {
+		$tax_by_rate = array();
+		foreach ($source->get_items('shipping') as $item) {
+			$taxes = $item->get_taxes();
+			foreach (isset($taxes['total']) ? (array) $taxes['total'] : (array) $taxes as $rate_id => $amount) {
+				$rate_id = (string) $rate_id;
+				$units = WCOS_Decimal::to_units($amount, $precision);
+				$tax_by_rate[$rate_id] = $this->checked_add(isset($tax_by_rate[$rate_id]) ? $tax_by_rate[$rate_id] : 0, $units);
+			}
+		}
+		ksort($tax_by_rate, SORT_STRING);
+		foreach ($tax_by_rate as $rate_id => $units) {
+			$tax_by_rate[$rate_id] = WCOS_Decimal::from_units($units, $precision);
+		}
+		return $tax_by_rate;
+	}
+
+	private function checked_multiply($value, $multiplier) {
+		$value = (int) $value;
+		$multiplier = absint($multiplier);
+		if (0 === $value || 0 === $multiplier) {
+			return 0;
+		}
+		$minimum = -PHP_INT_MAX - 1;
+		if (($value > 0 && $value > intdiv(PHP_INT_MAX, $multiplier))
+			|| ($value < 0 && $value < intdiv($minimum, $multiplier))) {
+			throw new OverflowException('Replicated shipping amount exceeds the supported integer range.');
+		}
+		return $value * $multiplier;
+	}
+
+	private function checked_add($left, $right) {
+		$left = (int) $left;
+		$right = (int) $right;
+		$minimum = -PHP_INT_MAX - 1;
+		if (($right > 0 && $left > PHP_INT_MAX - $right)
+			|| ($right < 0 && $left < $minimum - $right)) {
+			throw new OverflowException('Replicated shipping amount exceeds the supported integer range.');
+		}
+		return $left + $right;
+	}
+
+	private function save_child_without_transactional_email(WC_Order $child) {
+		$operation_id = (string) $child->get_meta(self::OPERATION_META, true);
+		$callback = static function($enabled, $object = null) use ($operation_id) {
+			return $object instanceof WC_Order
+				&& 'wc-order-splitter-split' === $object->get_created_via()
+				&& $operation_id === (string) $object->get_meta(WCOS_Split_Order_Service::OPERATION_META, true)
+				? false
+				: $enabled;
+		};
+		$email_ids = array(
+			'new_order',
+			'cancelled_order',
+			'failed_order',
+			'customer_on_hold_order',
+			'customer_processing_order',
+			'customer_completed_order',
+			'customer_refunded_order',
+		);
+		foreach ($email_ids as $email_id) {
+			add_filter('woocommerce_email_enabled_' . $email_id, $callback, PHP_INT_MAX, 2);
+		}
+		try {
+			$child->save();
+		} finally {
+			foreach ($email_ids as $email_id) {
+				remove_filter('woocommerce_email_enabled_' . $email_id, $callback, PHP_INT_MAX);
+			}
+		}
+	}
+
+	private function shipping_evidence(WC_Order $order) {
+		$evidence = array();
+		foreach ($order->get_items('shipping') as $item) {
+			$evidence[] = array(
+				'name' => (string) $item->get_name(),
+				'method_title' => (string) $item->get_method_title(),
+				'method_id' => (string) $item->get_method_id(),
+				'instance_id' => absint($item->get_instance_id()),
+				'total' => (string) $item->get_total(),
+				'total_tax' => (string) $item->get_total_tax(),
+				'taxes' => $item->get_taxes(),
+				'meta' => WCOS_Order_Item_Meta_Policy::business_metadata($item),
+			);
+		}
+		return $evidence;
+	}
+
 	private function child_ids(array $children) {
 		$ids = array();
 		foreach ($children as $child) {
@@ -753,7 +1215,7 @@ final class WCOS_Split_Order_Service {
 		return false;
 	}
 
-	private function mark_whole_line_manual_reconciliation(WC_Order $source, $operation_id, array $record, $reason, Throwable $throwable = null) {
+	private function mark_whole_line_manual_reconciliation(WC_Order $source, $operation_id, array $record, $reason, $throwable = null) {
 		if (!class_exists('WCOS_Manual_Reconciliation_Blocker') || !WCOS_Manual_Reconciliation_Blocker::block($source, $operation_id)) {
 			return false;
 		}
@@ -770,23 +1232,26 @@ final class WCOS_Split_Order_Service {
 		return WCOS_Operation_Journal::mark_manual_reconciliation($source, $operation_id, $context);
 	}
 
-	private function add_notes_best_effort(WC_Order $source, array $children) {
+	private function add_notes_best_effort(WC_Order $source, array $children, array $commercial_policy) {
 		try {
+			$status = wc_get_order_status_name((string) $commercial_policy['child_status']);
 			$numbers = array();
 			foreach ($children as $child) {
 				$numbers[] = '#' . $child->get_order_number();
 				$child->add_order_note(
 					sprintf(
-						/* translators: %s: source order number. */
-						__('This pending-review order was split safely from order #%s.', 'wc-order-splitter'),
-						$source->get_order_number()
+						/* translators: 1: source order number, 2: preserved order status. */
+						__('This order was split safely from order #%1$s with source status %2$s preserved.', 'wc-order-splitter'),
+						$source->get_order_number(),
+						$status
 					)
 				);
 			}
 			$source->add_order_note(
 				sprintf(
-					/* translators: %s: comma-separated child order numbers. */
-					__('Order split safely into pending-review children: %s', 'wc-order-splitter'),
+					/* translators: 1: preserved order status, 2: comma-separated child order numbers. */
+					__('Order split safely into %1$s children: %2$s', 'wc-order-splitter'),
+					$status,
 					implode(', ', $numbers)
 				)
 			);

@@ -1,6 +1,9 @@
 <?php
 
 if (!defined('ABSPATH')) { exit(1); }
+
+require_once __DIR__ . '/split-status-fixture-authority.php';
+WCOS_Test_Split_Status_Fixture_Authority::allow(array('wc-processing'));
 $key = 'wcos_bulk_return_local_ui_fixture';
 if (get_option($key, false)) { fwrite(STDERR, "BULK_UI_FIXTURE_EXISTS\n"); exit(2); }
 $admins = get_users(array('role' => 'administrator', 'number' => 1, 'fields' => 'ID'));

@@ -4,6 +4,9 @@ if (!defined('ABSPATH')) {
 	exit(1);
 }
 
+$source_crash_previous_allowed = get_option('order_splitter_status_allowed', array('wc-processing'));
+update_option('order_splitter_status_allowed', array('wc-pending'));
+
 function wcos_source_crash_assert($condition, $message) {
 	if (!$condition) {
 		throw new RuntimeException($message);
@@ -140,5 +143,6 @@ WCOS_Operation_Journal::delete($source, $operation_id);
 wc_get_order($child->get_id())->delete(true);
 $source->delete(true);
 wp_delete_post($product_id, true);
+update_option('order_splitter_status_allowed', $source_crash_previous_allowed);
 
 echo "split-source-save-crash-recovery-ok\n";

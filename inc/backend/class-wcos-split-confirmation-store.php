@@ -23,7 +23,7 @@ final class WCOS_Split_Confirmation_Exception extends RuntimeException {
  * interrupted operation can be resumed after the confirmation TTL expires.
  */
 final class WCOS_Split_Confirmation_Store {
-    const SCHEMA_VERSION = 2;
+    const SCHEMA_VERSION = 3;
     const TTL = 1800;
 
     private static $verified_source_signatures = array();
@@ -40,6 +40,15 @@ final class WCOS_Split_Confirmation_Store {
         $precision_token = WCOS_Price_Precision_Scope::begin($precision);
         try {
             $reviewed_signature = isset($preflight['source_signature']) ? (string) $preflight['source_signature'] : '';
+			try {
+				$commercial_policy = WCOS_Split_Commercial_Policy::assert_current(
+					$source,
+					isset($preflight['policy']) && is_array($preflight['policy']) ? $preflight['policy'] : array()
+				);
+				WCOS_Split_Commercial_Policy::assert_plan($plan, $commercial_policy);
+			} catch (Throwable $throwable) {
+				throw new WCOS_Split_Confirmation_Exception('commercial_policy_changed', $throwable->getMessage());
+			}
 			try {
 				$manual_authority = WCOS_Manual_Split_Quantity_Authority::assert_valid(
 					isset($preflight['manual_quantity_authority']) && is_array($preflight['manual_quantity_authority'])
@@ -101,6 +110,7 @@ final class WCOS_Split_Confirmation_Store {
                 'policy_version' => isset($preflight['policy']['policy_version']) ? absint($preflight['policy']['policy_version']) : 0,
 				'manual_quantity_authority' => $manual_authority,
 				'manual_quantity_authority_fingerprint' => $manual_authority['authority_fingerprint'],
+				'commercial_policy' => $commercial_policy,
                 'created_at' => $now,
                 'expires_at' => $now + self::TTL,
             );
@@ -143,11 +153,22 @@ final class WCOS_Split_Confirmation_Store {
             self::delete($operation_id);
             return self::durable_replay($source, $operation_id);
         }
+		$existing_journal = WCOS_Operation_Journal::get($source, $operation_id);
+		if (is_array($existing_journal)) {
+			return self::durable_replay($source, $operation_id);
+		}
         if (!isset($record['policy_version']) || (int) $record['policy_version'] !== (int) WCOS_Split_Preflight::POLICY_VERSION) {
             throw new WCOS_Split_Confirmation_Exception('policy_changed', __('The Split safety policy changed after this plan was reviewed. Review the plan again before executing it.', 'wc-order-splitter'));
         }
 		if (!isset($record['schema_version']) || self::SCHEMA_VERSION !== (int) $record['schema_version']) {
-			throw new WCOS_Split_Confirmation_Exception('quantity_authority_incomplete', __('The Split confirmation predates the required Manual quantity-step authority. Review the plan again.', 'wc-order-splitter'));
+			throw new WCOS_Split_Confirmation_Exception('commercial_policy_changed', __('The Split confirmation predates the required commercial policy authority. Review the plan again.', 'wc-order-splitter'));
+		}
+		try {
+			$commercial_policy = WCOS_Split_Commercial_Policy::assert_valid(
+				isset($record['commercial_policy']) && is_array($record['commercial_policy']) ? $record['commercial_policy'] : array()
+			);
+		} catch (Throwable $throwable) {
+			throw new WCOS_Split_Confirmation_Exception('commercial_policy_changed', $throwable->getMessage());
 		}
 		try {
 			$manual_authority = WCOS_Manual_Split_Quantity_Authority::assert_valid(
@@ -173,6 +194,11 @@ final class WCOS_Split_Confirmation_Store {
 
             $journal = WCOS_Operation_Journal::get($scoped_source, $operation_id);
             if (!is_array($journal)) {
+				try {
+					WCOS_Split_Commercial_Policy::assert_current($scoped_source, $commercial_policy);
+				} catch (Throwable $throwable) {
+					throw new WCOS_Split_Confirmation_Exception('commercial_policy_changed', $throwable->getMessage());
+				}
                 $expected = isset($record['source_signature']) ? (string) $record['source_signature'] : '';
                 $actual = WCOS_Order_Contract_Snapshot::source_signature($scoped_source);
                 if ('' === $expected || !hash_equals($expected, $actual)) {
@@ -215,12 +241,21 @@ final class WCOS_Split_Confirmation_Store {
 					throw new WCOS_Split_Confirmation_Exception('quantity_authority_incomplete', __('The durable Split quantity-step authority does not match its confirmation.', 'wc-order-splitter'));
 				}
 				self::assert_manual_execution_policy($journal_context, $journal_authority);
+				try {
+					$journal_commercial = WCOS_Split_Commercial_Policy::from_journal($journal);
+				} catch (Throwable $throwable) {
+					throw new WCOS_Split_Confirmation_Exception('commercial_policy_changed', $throwable->getMessage());
+				}
+				if ((string) $commercial_policy['policy_fingerprint'] !== (string) $journal_commercial['policy_fingerprint']) {
+					throw new WCOS_Split_Confirmation_Exception('commercial_policy_changed', __('The durable Split commercial policy does not match its confirmation.', 'wc-order-splitter'));
+				}
             }
 
             $record['operation_id'] = $operation_id;
             $record['plan'] = WCOS_Split_Plan::canonicalize_request(isset($record['plan']) && is_array($record['plan']) ? $record['plan'] : array());
             $record['price_precision'] = $precision;
 			$record['manual_quantity_authority'] = $manual_authority;
+			$record['commercial_policy'] = $commercial_policy;
             $record['replay_authority'] = is_array($journal) ? 'journal' : 'confirmation';
             return $record;
         } finally {
@@ -270,9 +305,11 @@ final class WCOS_Split_Confirmation_Store {
             || !array_key_exists('policy_version', $context)) {
             throw new WCOS_Split_Confirmation_Exception('journal_incomplete', __('The durable Split operation is missing replay information and requires manual review.', 'wc-order-splitter'));
         }
-        if ((int) $context['policy_version'] !== (int) WCOS_Split_Preflight::POLICY_VERSION) {
-            throw new WCOS_Split_Confirmation_Exception('policy_changed', __('The Split safety policy changed after this durable operation started. Review the operation manually before continuing it.', 'wc-order-splitter'));
-        }
+		try {
+			$commercial_policy = WCOS_Split_Commercial_Policy::from_journal($journal);
+		} catch (Throwable $throwable) {
+			throw new WCOS_Split_Confirmation_Exception('commercial_policy_changed', $throwable->getMessage());
+		}
 
         $result = array(
             'schema_version' => self::SCHEMA_VERSION,
@@ -280,7 +317,8 @@ final class WCOS_Split_Confirmation_Store {
             'source_order_id' => $source->get_id(),
             'plan' => WCOS_Split_Plan::canonicalize_request($context['plan']),
             'price_precision' => WCOS_Price_Precision_Scope::validate($context['price_precision']),
-            'policy_version' => (int) $context['policy_version'],
+			'policy_version' => (int) $context['policy_version'],
+			'commercial_policy' => $commercial_policy,
             'replay_authority' => 'journal',
         );
 		if (!isset($context['manual_quantity_authority']) || !is_array($context['manual_quantity_authority'])) {

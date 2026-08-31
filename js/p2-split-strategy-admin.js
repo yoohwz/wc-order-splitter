@@ -109,6 +109,7 @@
             var errorBox = null;
             var resultBox = null;
             var feedbackBox = null;
+			var commercialSummary = null;
 
             function showReviewAction() {
                 reviewButton.hidden = false;
@@ -232,6 +233,7 @@
                     radio.value = bucketKey;
                     radio.className = 'wcos-strategy-bucket-radio';
                     radio.id = sourceDialogId + '-bucket-' + String(index + 1);
+					radio.disabled = bucket.source_eligible === false;
                     var content = document.createElement('span');
                     content.className = 'wcos-strategy-bucket-content';
                     var title = document.createElement('strong');
@@ -240,6 +242,9 @@
                     detail.className = 'description';
                     detail.textContent = String(Object.keys(items).length) + ' ' + text('bucketLines', 'product lines') +
                         ' · ' + String(bucketQuantity(items)) + ' ' + text('bucketQuantity', 'total quantity');
+					if (bucket.source_restriction) {
+						detail.textContent += ' · ' + String(bucket.source_restriction);
+					}
                     content.appendChild(title);
                     content.appendChild(detail);
                     option.appendChild(radio);
@@ -247,6 +252,20 @@
                     bucketOptions.appendChild(option);
                 });
             }
+
+			function renderFrozenPolicy(policy) {
+				if (!policy || !commercialSummary) {
+					return;
+				}
+				var status = String(policy.child_status || policy.source_status || '').replace(/^wc-/, '');
+				var shipping = policy.shipping === 'replicate_to_each_child'
+					? text('shippingReplicated', 'Historical shipping rows are replicated to every child.')
+					: text('shippingSourceOnly', 'Shipping remains only on the source.');
+				commercialSummary.textContent = text('frozenStatus', 'Frozen source and child status:') + ' ' + status + '. ' + shipping + ' ' +
+					text('sourceOwnership', 'Fees, coupons, refunds, and payment context remain source-owned.') + ' ' +
+					String((policy.refund_affected_item_ids || []).length) + ' ' + text('refundLinesPinned', 'refund-affected line(s) are pinned to the source.') + ' ' +
+					text('nestedParent', 'Nested Split records the actual source as immediate parent.');
+			}
 
             function reviewStrategy() {
                 if (busy || completed || confirmationState) {
@@ -264,6 +283,7 @@
                     strategy: sourceDialog.getAttribute('data-strategy')
                 }).then(function (data) {
                     reviewState = { reviewId: data.review_id, token: data.review_token };
+					renderFrozenPolicy(data.review && data.review.commercial_policy ? data.review.commercial_policy : null);
                     renderBuckets(data.review || {});
                     reviewSummary.textContent = data.review && data.review.message ? String(data.review.message) : '';
                     reviewSection.hidden = false;
@@ -418,6 +438,7 @@
                     reviewButton = requireRef(clonedForm.querySelector('.wcos-strategy-review-button'), 'Review button');
                     reviewSection = requireRef(clonedForm.querySelector('.wcos-strategy-review'), 'Review section');
                     reviewSummary = requireRef(clonedForm.querySelector('.wcos-strategy-review-summary'), 'Review summary');
+					commercialSummary = clonedForm.querySelector('.wcos-strategy-commercial-summary');
                     bucketOptions = requireRef(clonedForm.querySelector('.wcos-strategy-bucket-options'), 'bucket options');
                     confirmButton = requireRef(clonedForm.querySelector('.wcos-strategy-confirm-button'), 'Confirm button');
                     confirmationSection = requireRef(clonedForm.querySelector('.wcos-strategy-confirmation'), 'confirmation section');

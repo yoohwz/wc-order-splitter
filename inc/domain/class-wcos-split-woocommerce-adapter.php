@@ -38,8 +38,24 @@ final class WCOS_Split_WooCommerce_Adapter {
             }
 
             $this->assert_verified_confirmation_source($source, $operation_id);
-            $this->assert_supported($source, $precision);
 			$existing_journal = WCOS_Operation_Journal::get($source, $operation_id);
+			if (!is_array($existing_journal)) {
+				$this->assert_supported($source, $precision);
+			} else {
+				if ('manual_reconciliation' === sanitize_key((string) (isset($existing_journal['status']) ? $existing_journal['status'] : ''))) {
+					throw new WCOS_Split_Preflight_Exception(
+						'manual_reconciliation_required',
+						__('This order has an unresolved mutation incident that requires manual stock reconciliation before another split can run.', 'wc-order-splitter'),
+						array(
+							'supported' => false,
+							'reason' => 'manual_reconciliation_required',
+							'order_id' => absint($source_id),
+							'manual_reconciliation_operation_ids' => array($operation_id),
+						)
+					);
+				}
+				WCOS_Split_Commercial_Policy::from_journal($existing_journal);
+			}
 			if (!is_array($existing_journal) && isset($operation_context['manual_quantity_authority'])) {
 				$manual_authority = WCOS_Manual_Split_Quantity_Authority::assert_current(
 					$source,
