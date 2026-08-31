@@ -423,6 +423,30 @@ try {
 
 	$whole = wcos_legacy_return_fixture('whole', true, false, false);
 	$fixtures[] =& $whole;
+	$whole_child = wc_get_order($whole['child_id']);
+	$whole_line = $whole_child->get_item($whole['child_item_id']);
+	$whole_rate_id = 812;
+	$whole_line_result = $whole_line->set_props(array(
+		'subtotal_tax' => '2.00',
+		'total_tax' => '1.80',
+		'taxes' => array(
+			'subtotal' => array($whole_rate_id => '2.00'),
+			'total' => array($whole_rate_id => '1.80'),
+		),
+	));
+	wcos_legacy_return_assert(!is_wp_error($whole_line_result), 'Taxed whole-line fixture could not bind persisted product taxes.');
+	$whole_line->save();
+	$whole_tax = new WC_Order_Item_Tax();
+	$whole_tax->set_props(array(
+		'rate_id' => $whole_rate_id,
+		'label' => 'Legacy product tax',
+		'tax_total' => '1.80',
+		'shipping_tax_total' => '0.00',
+		'compound' => false,
+		'rate_percent' => 10,
+	));
+	$whole_child->add_item($whole_tax);
+	$whole_child = wcos_legacy_return_rebuild($whole_child);
 	$whole_report = WCOS_Return_Preflight::report(wc_get_order($whole['child_id']), true);
 	wcos_legacy_return_assert(!empty($whole_report['supported']) && WCOS_Return_Plan::DESTINATION_FRESH_SOURCE_ITEM === reset($whole_report['return_plan']['lines'])['destination'], 'Legacy whole-line movement did not bind a fresh destination.');
 	list($whole_review, $whole_confirm, $whole_result) = wcos_legacy_return_execute($whole, $controller);
@@ -431,6 +455,21 @@ try {
 	wcos_legacy_return_assert('completed' === $whole_result['status'] && 1 === count($restored), 'Legacy whole-line Return did not create exactly one fresh source item.');
 	wcos_legacy_return_assert((int) $restored[0]->get_id() !== (int) $whole['child_item_id'], 'Legacy whole-line Return re-parented a persisted child item.');
 	wcos_legacy_return_assert('whole' === $restored[0]->get_meta('legacy_configuration', true), 'Legacy whole-line Return lost approved business metadata.');
+	$restored_taxes = $restored[0]->get_taxes();
+	wcos_legacy_return_assert(
+		'2.00' === WCOS_Decimal::normalize($restored[0]->get_subtotal_tax(), 2)
+		&& '1.80' === WCOS_Decimal::normalize($restored[0]->get_total_tax(), 2)
+		&& '2.00' === WCOS_Decimal::normalize($restored_taxes['subtotal'][$whole_rate_id], 2)
+		&& '1.80' === WCOS_Decimal::normalize($restored_taxes['total'][$whole_rate_id], 2),
+		'Legacy taxed whole-line Return did not restore exact persisted per-rate product taxes.'
+	);
+	$whole_source_tax_templates = WCOS_Tax_Item_Synchronizer::templates($whole_source);
+	wcos_legacy_return_assert(
+		isset($whole_source_tax_templates[$whole_rate_id])
+		&& '1.80' === WCOS_Decimal::normalize($whole_source_tax_templates[$whole_rate_id]->get_tax_total(), 2)
+		&& '0.00' === WCOS_Decimal::normalize($whole_source_tax_templates[$whole_rate_id]->get_shipping_tax_total(), 2),
+		'Legacy taxed whole-line Return did not import only its sealed historical product tax template.'
+	);
 
 	$one_sided = wcos_legacy_return_fixture('one-sided');
 	$fixtures[] =& $one_sided;
@@ -474,6 +513,21 @@ try {
 	$structured_source->update_meta_data(WCOS_Split_Order_Service::RELATION_CHILDREN_META, array($structured_conflict['child_id']));
 	$structured_source->save_meta_data();
 	wcos_legacy_return_assert('hardened_lineage_partial' === wcos_legacy_return_reason(wc_get_order($structured_conflict['child_id'])), 'Conflicting structured source evidence did not block legacy fallback.');
+
+	$duplicate_structured = wcos_legacy_return_fixture('duplicate-structured-conflict');
+	$fixtures[] =& $duplicate_structured;
+	$duplicate_structured_source = wc_get_order($duplicate_structured['source_id']);
+	$duplicate_structured_source->add_meta_data(WCOS_Split_Order_Service::RELATION_CHILDREN_META, array(999997), false);
+	$duplicate_structured_source->add_meta_data(WCOS_Split_Order_Service::RELATION_CHILDREN_META, array($duplicate_structured['child_id']), false);
+	$duplicate_structured_source->save_meta_data();
+	wcos_legacy_return_assert('hardened_relation_ambiguous' === wcos_legacy_return_reason(wc_get_order($duplicate_structured['child_id'])), 'Duplicate structured source rows did not block legacy fallback.');
+	$duplicate_signature_rejected = false;
+	try {
+		WCOS_Order_Mutation_Snapshot::split_owned_signature(wc_get_order($duplicate_structured['source_id']));
+	} catch (RuntimeException $exception) {
+		$duplicate_signature_rejected = false !== strpos($exception->getMessage(), 'Duplicate source relationship metadata');
+	}
+	wcos_legacy_return_assert($duplicate_signature_rejected, 'Source relation signature hid duplicate structured relation rows.');
 
 	$ambiguous = wcos_legacy_return_fixture('ambiguous');
 	$fixtures[] =& $ambiguous;

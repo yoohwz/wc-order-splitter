@@ -81,17 +81,22 @@ final class WCOS_Return_Order_Service {
 
 			$original_templates = WCOS_Tax_Item_Synchronizer::templates($original);
 			$child_templates = WCOS_Tax_Item_Synchronizer::templates($child);
-			$required_child_rate_ids = WCOS_Return_Plan::is_legacy_compatibility($plan)
-				? $this->plan_tax_rate_ids($plan)
-				: array_keys($child_templates);
+			$is_legacy_compatibility = WCOS_Return_Plan::is_legacy_compatibility($plan);
+			$required_child_rate_ids = $is_legacy_compatibility ? $this->plan_tax_rate_ids($plan) : array_keys($child_templates);
+			$templates = $original_templates;
 			foreach ($required_child_rate_ids as $rate_id) {
-				if (!isset($original_templates[$rate_id])) {
+				if (isset($original_templates[$rate_id])) {
+					continue;
+				}
+				if (!$is_legacy_compatibility || !isset($child_templates[$rate_id])) {
 					throw new RuntimeException(__('A Return historical tax template disappeared from the original order.', 'wc-order-splitter'));
 				}
+				/* Import only a sealed product-line rate, never child shipping-only authority. */
+				$templates[$rate_id] = $child_templates[$rate_id];
 			}
-			$templates = WCOS_Return_Plan::is_legacy_compatibility($plan)
-				? $original_templates
-				: $original_templates + $child_templates;
+			if (!$is_legacy_compatibility) {
+				$templates = $original_templates + $child_templates;
+			}
 			$added_ids = array();
 			$destination_ids = array();
 

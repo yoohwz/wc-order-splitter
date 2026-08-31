@@ -211,7 +211,14 @@ final class WCOS_Legacy_Return_Compatibility_Authority {
 	}
 
 	public static function structured_child_ids(WC_Order $source) {
-		$raw = $source->get_meta(WCOS_Split_Order_Service::RELATION_CHILDREN_META, true);
+		$values = self::meta_values($source, WCOS_Split_Order_Service::RELATION_CHILDREN_META);
+		if (empty($values)) {
+			return array();
+		}
+		if (1 !== count($values)) {
+			self::reject('hardened_relation_ambiguous', __('The structured original relation is duplicated or contradictory.', 'wc-order-splitter'));
+		}
+		$raw = reset($values);
 		if ('' === $raw || null === $raw) {
 			return array();
 		}
