@@ -141,14 +141,19 @@ final class WCOS_Merge_Order_Service {
 			$this->event('after_all_target_lines_before_target_money', $source, $target, $operation_id);
 			list($source, $target, $record) = $this->boundary($lease, $source_id, $target_id, $operation_id, 'before_target_money_tax_write');
 			$tax_ids_before = array_map('intval', array_keys($target->get_items('tax')));
-			WCOS_Tax_Item_Synchronizer::synchronize(
-				$target,
-				WCOS_Tax_Item_Synchronizer::templates_for_rates($source, $plan['tax_template_rate_ids']),
-				$precision,
-				true,
-				WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE,
-				'import_source_product_rates' === sanitize_key(isset($plan['tax_template_policy']) ? (string) $plan['tax_template_policy'] : '')
-			);
+			$tax_template_policy = sanitize_key(isset($plan['tax_template_policy']) ? (string) $plan['tax_template_policy'] : '');
+			if ('import_source_product_rates' === $tax_template_policy) {
+				WCOS_Tax_Item_Synchronizer::synchronize(
+					$target,
+					WCOS_Tax_Item_Synchronizer::templates_for_rates($source, $plan['tax_template_rate_ids']),
+					$precision,
+					true,
+					WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE,
+					true
+				);
+			} elseif ('preserve_target_rows_only' !== $tax_template_policy) {
+				throw new RuntimeException(__('The Merge tax-template policy is not executable.', 'wc-order-splitter'));
+			}
 			WCOS_Order_Totals_Rebuilder::rebuild($target, $precision);
 			$target->save();
 			$target = $this->load_order($target_id, 'target');

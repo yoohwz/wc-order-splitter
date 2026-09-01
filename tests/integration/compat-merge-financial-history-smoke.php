@@ -37,6 +37,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			self::ordinary_regression();
 			self::payment_evidence_success_matrix();
 			self::multi_line_archival_success();
+			self::target_tax_row_distribution_preservation();
 			self::refund_success_matrix();
 			self::financial_rejection_matrix();
 			self::financial_drift_and_transient_authority();
@@ -432,6 +433,70 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			'refund_kinds' => $kinds,
 			'references_preserved' => true,
 			'payment_refund_events' => 0,
+		);
+	}
+
+	private static function target_tax_row_distribution_preservation() {
+		$product = self::product('target-tax-row-distribution');
+		$source = self::order('target-tax-row-distribution-source');
+		$target = self::order('target-tax-row-distribution-target', 'on-hold');
+		self::line($source, $product, array(
+			'name' => 'Exact zero-tax source line',
+			'subtotal' => '0.00',
+			'total' => '0.00',
+			'subtotal_tax' => '0.00',
+			'total_tax' => '0.00',
+		));
+		$target_line = self::line($target, $product, array(
+			'name' => 'Historical target per-rate allocation',
+			'subtotal' => '10.00',
+			'total' => '10.00',
+			'subtotal_tax' => '0.30',
+			'total_tax' => '0.30',
+			'taxes' => array(
+				'subtotal' => array(609 => '0.10', 610 => '0.20'),
+				'total' => array(609 => '0.10', 610 => '0.20'),
+			),
+		));
+		self::tax($target, 609, '0.20', '0.00');
+		self::tax($target, 610, '0.10', '0.00');
+		$source = self::finalize($source);
+		$target = self::finalize($target);
+		$target->set_transaction_id('compat-006-target-tax-row-distribution');
+		$target->save();
+		$source = wc_get_order($source->get_id());
+		$target = wc_get_order($target->get_id());
+		WCOS_Order_Totals_Rebuilder::assert_consistent($target, 2);
+		$before = self::target_immutable_snapshot($target, array($target_line->get_id()));
+		$report = WCOS_Merge_Preflight::assert_supported($source, $target, 2);
+		self::assert('preserve_target_rows_only' === $report['plan']['tax_template_policy']
+			&& empty($report['plan']['tax_template_rate_ids']), 'Financial target plan did not bind exact target tax-row preservation.');
+		$policy_tamper = $report['plan'];
+		$policy_tamper['tax_template_policy'] = 'import_source_product_rates';
+		$policy_tamper_rejected = false;
+		try {
+			WCOS_Merge_Plan::canonicalize_current($policy_tamper);
+		} catch (InvalidArgumentException $exception) {
+			$policy_tamper_rejected = false !== strpos($exception->getMessage(), 'financial plan');
+		}
+		self::assert($policy_tamper_rejected, 'Durable financial-target plan allowed tax-row preservation policy tampering.');
+		list($review, $confirmation, $result) = self::execute_controller($source, $target);
+		$source = wc_get_order($source->get_id());
+		$target = wc_get_order($target->get_id());
+		$journal = WCOS_Operation_Journal::get($source, $confirmation['operation_id']);
+		self::assert('completed' === $result['status']
+			&& 'completed' === sanitize_key(isset($journal['status']) ? (string) $journal['status'] : ''), 'Financial target with historical per-rate distribution did not complete.');
+		self::assert($before === self::target_immutable_snapshot($target, array($target_line->get_id())), 'Financial Merge normalized pre-existing target tax rows.');
+		self::assert(empty(WCOS_Manual_Reconciliation_Blocker::active_operation_ids($source))
+			&& empty(WCOS_Manual_Reconciliation_Blocker::active_operation_ids($target)), 'Successful tax-row-preserving Merge left manual authority behind.');
+		self::assert(!empty($review['summary']['target_financial_history_retained'])
+			&& 'unchanged' === $review['summary']['target_payable_tax_disposition'], 'Review did not disclose exact target tax-row preservation.');
+
+		self::$results['target_tax_row_distribution'] = array(
+			'cases' => '59',
+			'aggregate_consistent_per_rate_distribution_preserved' => true,
+			'production_gateway_completed' => true,
+			'manual_reconciliation' => false,
 		);
 	}
 
