@@ -28,6 +28,11 @@ final class WCOS_Merge_Confirmation_Store {
 		if (!$user_id || !$source_id || !$target_id || $source_id === $target_id) {
 			throw new WCOS_Merge_Confirmation_Exception('invalid_identity', __('Merge Confirmation requires a signed-in operator and two distinct persisted orders.', 'wc-order-splitter'));
 		}
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source_id, $target_id);
+		if (!is_array($participants)) {
+			throw new WCOS_Merge_Confirmation_Exception('participant_missing', __('A Merge participant is no longer available.', 'wc-order-splitter'));
+		}
+		list($source, $target) = $participants;
 		if (absint(isset($review_authority['source_order_id']) ? $review_authority['source_order_id'] : 0) !== $source_id
 			|| absint(isset($review_authority['target_order_id']) ? $review_authority['target_order_id'] : 0) !== $target_id) {
 			throw new WCOS_Merge_Confirmation_Exception('review_mismatch', __('The Merge Review does not match this participant pair.', 'wc-order-splitter'));
@@ -66,6 +71,11 @@ final class WCOS_Merge_Confirmation_Store {
 		if (!self::is_uuid($operation_id) || !$user_id) {
 			throw new WCOS_Merge_Confirmation_Exception('invalid_identity', __('The Merge Confirmation identity is invalid.', 'wc-order-splitter'));
 		}
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source->get_id(), $target->get_id());
+		if (!is_array($participants)) {
+			throw new WCOS_Merge_Confirmation_Exception('participant_missing', __('A Merge participant is no longer available.', 'wc-order-splitter'));
+		}
+		list($source, $target) = $participants;
 
 		$journal = WCOS_Operation_Journal::get($source, $operation_id);
 		$record = get_transient(self::key($operation_id));
@@ -94,13 +104,13 @@ final class WCOS_Merge_Confirmation_Store {
 
 		self::assert_complete($record);
 		$precision = WCOS_Price_Precision_Scope::validate($record['price_precision']);
-		$report = WCOS_Merge_Preflight::report(WCOS_Merge_Canonical_Reader::order($source->get_id()), WCOS_Merge_Canonical_Reader::order($target->get_id()), $precision);
+		$report = WCOS_Merge_Preflight::report($source, $target, $precision);
 		if (empty($report['supported'])) {
 			throw new WCOS_Merge_Confirmation_Exception('pair_changed', __('The Merge pair changed after Confirmation. Review it again.', 'wc-order-splitter'));
 		}
 		$current_context = WCOS_Merge_Journal_Context::create_executable(
-			WCOS_Merge_Canonical_Reader::order($source->get_id()),
-			WCOS_Merge_Canonical_Reader::order($target->get_id()),
+			$source,
+			$target,
 			$report['plan'],
 			$report['context_authority'],
 			$precision
@@ -120,8 +130,12 @@ final class WCOS_Merge_Confirmation_Store {
 	public static function operation_authority(array $record) {
 		$durable_replay = 'journal' === sanitize_key(isset($record['replay_authority']) ? (string) $record['replay_authority'] : '');
 		if ($durable_replay) {
-			$source = WCOS_Merge_Canonical_Reader::order(absint(isset($record['source_order_id']) ? $record['source_order_id'] : 0));
-			$target = WCOS_Merge_Canonical_Reader::order(absint(isset($record['target_order_id']) ? $record['target_order_id'] : 0));
+			$participants = WCOS_Merge_Canonical_Reader::shop_order_pair(
+				absint(isset($record['source_order_id']) ? $record['source_order_id'] : 0),
+				absint(isset($record['target_order_id']) ? $record['target_order_id'] : 0)
+			);
+			$source = is_array($participants) ? $participants[0] : false;
+			$target = is_array($participants) ? $participants[1] : false;
 			$operation_id = sanitize_key(isset($record['operation_id']) ? (string) $record['operation_id'] : '');
 			$journal = $source instanceof WC_Order ? WCOS_Operation_Journal::get($source, $operation_id) : null;
 			if (!$source instanceof WC_Order || !$target instanceof WC_Order || !is_array($journal)
@@ -176,7 +190,7 @@ final class WCOS_Merge_Confirmation_Store {
 		$status = sanitize_key(isset($journal['status']) ? (string) $journal['status'] : '');
 		if (in_array($status, array('recovery_required', 'recovering', 'started', 'committed', 'failed', 'compensating'), true)) {
 			WCOS_Operation_Journal::require_recovery($source, $operation_id, array('reason' => 'confirmation_replay'));
-			$source = WCOS_Merge_Canonical_Reader::order($source->get_id());
+			$source = WCOS_Merge_Canonical_Reader::shop_order($source->get_id());
 			$journal = $source instanceof WC_Order ? WCOS_Operation_Journal::get($source, $operation_id) : null;
 			if (!is_array($journal)) {
 				throw new WCOS_Merge_Confirmation_Exception('journal_mismatch', __('The authoritative Merge journal disappeared during recovery dispatch.', 'wc-order-splitter'));

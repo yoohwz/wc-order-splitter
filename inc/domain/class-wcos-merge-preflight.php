@@ -90,12 +90,17 @@ final class WCOS_Merge_Preflight {
 
 		$source_id = $report['source_order_id'];
 		$target_id = $report['target_order_id'];
-		if (!$source_id || !$target_id || 'shop_order' !== $source->get_type() || 'shop_order' !== $target->get_type()) {
+		if (!$source_id || !$target_id) {
 			return self::reject($report, 'unsupported_order_type', __('Merge requires two persisted WooCommerce shop orders.', 'wc-order-splitter'));
 		}
 		if ($source_id === $target_id) {
 			return self::reject($report, 'same_order', __('An order cannot be merged into itself.', 'wc-order-splitter'));
 		}
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source_id, $target_id);
+		if (!is_array($participants)) {
+			return self::reject($report, 'unsupported_order_type', __('Merge requires two persisted WooCommerce shop orders.', 'wc-order-splitter'));
+		}
+		list($source, $target) = $participants;
 
 		$blocked = array_values(array_unique(array_merge(
 			WCOS_Manual_Reconciliation_Blocker::active_operation_ids($source),

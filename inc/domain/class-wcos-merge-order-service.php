@@ -20,6 +20,11 @@ final class WCOS_Merge_Order_Service {
 		if ('' === $operation_id || !$source_id || !$target_id || $source_id === $target_id) {
 			throw new InvalidArgumentException(__('Merge requires two distinct persisted orders and an operation ID.', 'wc-order-splitter'));
 		}
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source_id, $target_id);
+		if (!is_array($participants)) {
+			throw new RuntimeException(__('A Merge participant is no longer available.', 'wc-order-splitter'));
+		}
+		list($source, $target) = $participants;
 
 		$existing = WCOS_Operation_Journal::get($source, $operation_id);
 		if (is_array($existing)) {
@@ -534,8 +539,8 @@ final class WCOS_Merge_Order_Service {
 	}
 
 	private function load_order($order_id, $role) {
-		$order = WCOS_Merge_Canonical_Reader::order(absint($order_id));
-		if (!$order instanceof WC_Order || 'shop_order' !== $order->get_type()) {
+		$order = WCOS_Merge_Canonical_Reader::shop_order(absint($order_id));
+		if (!$order instanceof WC_Order) {
 			throw new RuntimeException('target' === $role
 				? __('The Merge target is no longer available.', 'wc-order-splitter')
 				: __('The Merge source is no longer available.', 'wc-order-splitter'));

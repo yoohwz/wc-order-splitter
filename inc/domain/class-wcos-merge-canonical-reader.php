@@ -65,6 +65,38 @@ final class WCOS_Merge_Canonical_Reader {
 		});
 	}
 
+	/** Exact persisted shop-order participant for a current/fresh Merge decision. */
+	public static function shop_order($order_id) {
+		$order_id = absint($order_id);
+		$order = self::order($order_id);
+		return $order instanceof WC_Order
+			&& $order_id === absint($order->get_id())
+			&& 'shop_order' === (string) $order->get_type()
+			? $order
+			: false;
+	}
+
+	/**
+	 * Rehydrate both current/fresh Merge participants from their persisted IDs.
+	 * Caller-hydrated objects are presentation inputs and must not cross this
+	 * authority boundary.
+	 */
+	public static function shop_order_pair($source_order_id, $target_order_id) {
+		$source_order_id = absint($source_order_id);
+		$target_order_id = absint($target_order_id);
+		if (!$source_order_id || !$target_order_id) {
+			return false;
+		}
+		$source = self::shop_order($source_order_id);
+		$target = self::shop_order($target_order_id);
+		if (!$source instanceof WC_Order || !$target instanceof WC_Order
+			|| $source_order_id !== absint($source->get_id())
+			|| $target_order_id !== absint($target->get_id())) {
+			return false;
+		}
+		return array($source, $target);
+	}
+
 	/** Fresh persisted refund collection with unfiltered object hydration. */
 	public static function refunds(WC_Order $order) {
 		$refund_ids = self::order_ids($order, array(

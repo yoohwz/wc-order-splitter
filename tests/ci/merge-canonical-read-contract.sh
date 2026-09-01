@@ -19,6 +19,7 @@ authority_surface_files=(
   inc/domain/class-wcos-merge-commit-guard.php
   inc/domain/class-wcos-merge-compensator.php
   inc/domain/class-wcos-merge-participation.php
+  inc/domain/class-wcos-mutation-gateway.php
   inc/domain/class-wcos-merge-woocommerce-adapter.php
   inc/domain/class-wcos-order-item-cloner.php
   inc/domain/class-wcos-order-totals-rebuilder.php
@@ -39,6 +40,7 @@ strict_current_files=(
   inc/domain/class-wcos-merge-order-service.php
   inc/domain/class-wcos-merge-commit-guard.php
   inc/domain/class-wcos-merge-participation.php
+  inc/domain/class-wcos-mutation-gateway.php
   inc/domain/class-wcos-merge-woocommerce-adapter.php
   inc/backend/class-wcos-merge-review-store.php
   inc/backend/class-wcos-merge-confirmation-store.php
@@ -84,13 +86,18 @@ for relative in "${canonical_reload_files[@]}"; do
 done
 
 reader="$repo_root/inc/domain/class-wcos-merge-canonical-reader.php"
+preflight="$repo_root/inc/domain/class-wcos-merge-preflight.php"
 commercial="$repo_root/inc/domain/class-wcos-merge-commercial-policy.php"
 context="$repo_root/inc/domain/class-wcos-merge-context-signature.php"
 recovery="$repo_root/inc/domain/class-wcos-merge-recovery-snapshot.php"
 commit_guard="$repo_root/inc/domain/class-wcos-merge-commit-guard.php"
 compensator="$repo_root/inc/domain/class-wcos-merge-compensator.php"
 participation="$repo_root/inc/domain/class-wcos-merge-participation.php"
+gateway="$repo_root/inc/domain/class-wcos-mutation-gateway.php"
 adapter="$repo_root/inc/domain/class-wcos-merge-woocommerce-adapter.php"
+service="$repo_root/inc/domain/class-wcos-merge-order-service.php"
+review="$repo_root/inc/backend/class-wcos-merge-review-store.php"
+confirmation="$repo_root/inc/backend/class-wcos-merge-confirmation-store.php"
 admin="$repo_root/inc/backend/class-wcos-merge-admin-controller.php"
 totals="$repo_root/inc/domain/class-wcos-order-totals-rebuilder.php"
 tax_sync="$repo_root/inc/domain/class-wcos-tax-item-synchronizer.php"
@@ -109,6 +116,7 @@ grep -Fq "'parse_query'" "$reader"
 grep -Fq "'pre_get_posts'" "$reader"
 grep -Fq "'posts_pre_query'" "$reader"
 grep -Fq 'new $class($order_id)' "$reader"
+grep -Fq 'public static function shop_order_pair(' "$reader"
 grep -Fq 'without_presentation_filters' "$reader"
 grep -Fq 'unset($wp_filter[$hook]);' "$reader"
 grep -Fq "get_order_id('edit')" "$reader"
@@ -136,7 +144,14 @@ grep -Fq 'participant_order($order_id, $snapshot_schema)' "$compensator"
 grep -Fq "\$snapshot['schema_version']" "$commit_guard"
 grep -Fq 'participant_order($order_id, $snapshot_schema)' "$commit_guard"
 grep -Fq 'WCOS_Merge_Canonical_Reader::order(' "$participation"
-grep -Fq 'WCOS_Merge_Canonical_Reader::order(' "$adapter"
+grep -Fq 'WCOS_Merge_Canonical_Reader::shop_order_pair(' "$preflight"
+grep -Fq 'WCOS_Merge_Canonical_Reader::shop_order_pair(' "$gateway"
+grep -Fq 'WCOS_Merge_Canonical_Reader::shop_order_pair(' "$adapter"
+grep -Fq 'WCOS_Merge_Canonical_Reader::shop_order_pair(' "$service"
+grep -Fq 'WCOS_Merge_Canonical_Reader::shop_order_pair(' "$review"
+grep -Fq 'WCOS_Merge_Canonical_Reader::shop_order_pair(' "$confirmation"
+grep -Fq 'WCOS_Merge_Canonical_Reader::shop_order(' "$admin"
+grep -Fq '$order = WCOS_Merge_Canonical_Reader::shop_order($order->get_id());' "$admin"
 grep -Fq "WCOS_Merge_Canonical_Reader::address(\$order, \$type)" "$context"
 grep -Fq 'const PREVIOUS_SCHEMA_VERSION = 2;' "$context"
 grep -Fq 'previous_disposition' "$context"

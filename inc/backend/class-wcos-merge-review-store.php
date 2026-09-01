@@ -27,6 +27,11 @@ final class WCOS_Merge_Review_Store {
 		if (!$source_id || !$target_id || $source_id === $target_id || !$user_id) {
 			throw new WCOS_Merge_Review_Exception('invalid_identity', __('Merge Review requires two distinct persisted orders and a signed-in operator.', 'wc-order-splitter'));
 		}
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source_id, $target_id);
+		if (!is_array($participants)) {
+			throw new WCOS_Merge_Review_Exception('participant_missing', __('A Merge participant is no longer available.', 'wc-order-splitter'));
+		}
+		list($source, $target) = $participants;
 
 		$authority = self::authority_from_report($report, $source_id, $target_id);
 		self::assert_current($source, $target, $authority);
@@ -60,6 +65,11 @@ final class WCOS_Merge_Review_Store {
 		if (!self::is_uuid($review_id) || !$user_id) {
 			throw new WCOS_Merge_Review_Exception('invalid_identity', __('The Merge Review identity is invalid.', 'wc-order-splitter'));
 		}
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source->get_id(), $target->get_id());
+		if (!is_array($participants)) {
+			throw new WCOS_Merge_Review_Exception('participant_missing', __('A Merge participant is no longer available.', 'wc-order-splitter'));
+		}
+		list($source, $target) = $participants;
 		$record = get_transient(self::key($review_id));
 		if (!is_array($record)) {
 			throw new WCOS_Merge_Review_Exception('expired', __('The Merge Review expired. Review the pair again.', 'wc-order-splitter'));
@@ -103,9 +113,13 @@ final class WCOS_Merge_Review_Store {
 		}
 		$precision = WCOS_Price_Precision_Scope::validate(isset($report['price_precision']) ? $report['price_precision'] : null);
 		$plan = WCOS_Merge_Plan::canonicalize_current($report['plan']);
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source_id, $target_id);
+		if (!is_array($participants)) {
+			throw new WCOS_Merge_Review_Exception('participant_missing', __('A Merge participant is no longer available.', 'wc-order-splitter'));
+		}
 		$context = WCOS_Merge_Journal_Context::create_executable(
-			WCOS_Merge_Canonical_Reader::order($source_id),
-			WCOS_Merge_Canonical_Reader::order($target_id),
+			$participants[0],
+			$participants[1],
 			$plan,
 			$report['context_authority'],
 			$precision
@@ -135,11 +149,11 @@ final class WCOS_Merge_Review_Store {
 	private static function assert_current(WC_Order $source, WC_Order $target, array $authority) {
 		self::assert_authority_complete($authority);
 		$precision = WCOS_Price_Precision_Scope::validate(isset($authority['price_precision']) ? $authority['price_precision'] : null);
-		$source = WCOS_Merge_Canonical_Reader::order($source->get_id());
-		$target = WCOS_Merge_Canonical_Reader::order($target->get_id());
-		if (!$source instanceof WC_Order || !$target instanceof WC_Order) {
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source->get_id(), $target->get_id());
+		if (!is_array($participants)) {
 			throw new WCOS_Merge_Review_Exception('participant_missing', __('A Merge participant is no longer available.', 'wc-order-splitter'));
 		}
+		list($source, $target) = $participants;
 		$report = WCOS_Merge_Preflight::report($source, $target, $precision);
 		if (empty($report['supported'])) {
 			throw new WCOS_Merge_Review_Exception('pair_changed', __('The Merge pair is no longer supported. Review it again.', 'wc-order-splitter'));

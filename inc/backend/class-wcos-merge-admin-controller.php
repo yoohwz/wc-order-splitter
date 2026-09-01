@@ -89,7 +89,7 @@ final class WCOS_Merge_Admin_Controller {
 		$term = strtolower(trim((string) $term));
 		$page = max(1, min(self::SEARCH_MAX_PAGE, (int) $page));
 		if (preg_match('/^#?([1-9][0-9]*)$/D', $term, $matches)) {
-			$target = WCOS_Merge_Canonical_Reader::order(absint($matches[1]));
+			$target = WCOS_Merge_Canonical_Reader::shop_order(absint($matches[1]));
 			return array(
 				'results' => $this->is_searchable_target($source, $target) ? array($this->search_result($target)) : array(),
 				'more' => false,
@@ -112,7 +112,7 @@ final class WCOS_Merge_Admin_Controller {
 		);
 		$matches = array();
 		foreach ($order_ids as $order_id) {
-			$order = WCOS_Merge_Canonical_Reader::order($order_id);
+			$order = WCOS_Merge_Canonical_Reader::shop_order($order_id);
 			if (!$this->is_searchable_target($source, $order)) {
 				continue;
 			}
@@ -218,7 +218,7 @@ final class WCOS_Merge_Admin_Controller {
 		}
 
 		$target_id = absint(isset($result['target_order_id']) ? $result['target_order_id'] : $target->get_id());
-		$persisted_target = WCOS_Merge_Canonical_Reader::order($target_id);
+		$persisted_target = WCOS_Merge_Canonical_Reader::shop_order($target_id);
 		if (!$persisted_target instanceof WC_Order) {
 			$persisted_target = $target;
 		}
@@ -243,7 +243,12 @@ final class WCOS_Merge_Admin_Controller {
 	public function ajax_execute() { $this->send_ajax('execute_request'); }
 
 	public function render_launcher($order) {
+		$this->current_order = null;
 		if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE) || !$order instanceof WC_Order) {
+			return;
+		}
+		$order = WCOS_Merge_Canonical_Reader::shop_order($order->get_id());
+		if (!$order instanceof WC_Order) {
 			return;
 		}
 		try {
@@ -361,7 +366,7 @@ final class WCOS_Merge_Admin_Controller {
 		if (!wp_verify_nonce($nonce, 'wcos_merge_order_' . $source_id)) {
 			throw new WCOS_Merge_Transport_Exception('invalid_nonce', __('The Merge request failed nonce verification.', 'wc-order-splitter'), 403, false);
 		}
-		$source = WCOS_Merge_Canonical_Reader::order($source_id);
+		$source = WCOS_Merge_Canonical_Reader::shop_order($source_id);
 		if (!$source instanceof WC_Order) {
 			throw new WCOS_Merge_Transport_Exception('participant_not_found', __('The Merge source order could not be found.', 'wc-order-splitter'), 404, false);
 		}
@@ -382,7 +387,7 @@ final class WCOS_Merge_Admin_Controller {
 		if (!$target_id || $source->get_id() === $target_id) {
 			throw new WCOS_Merge_Transport_Exception('invalid_pair', __('Merge requires two distinct order IDs.', 'wc-order-splitter'), 400, false);
 		}
-		$target = WCOS_Merge_Canonical_Reader::order($target_id);
+		$target = WCOS_Merge_Canonical_Reader::shop_order($target_id);
 		if (!$target instanceof WC_Order) {
 			throw new WCOS_Merge_Transport_Exception('participant_not_found', __('A Merge participant could not be found.', 'wc-order-splitter'), 404, false);
 		}

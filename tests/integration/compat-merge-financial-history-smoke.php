@@ -4,7 +4,7 @@ if (!defined('ABSPATH')) {
 	exit(1);
 }
 
-/** Synthetic read-only order view used only to prove malformed refund totals fail closed. */
+/** Synthetic caller-only refund projection used to prove persisted authority wins. */
 final class WCOS_Compat_006_Malformed_Order extends WC_Order {
 	public function get_total_refunded() {
 		return '1.00';
@@ -1245,7 +1245,9 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			$filtered_source_line = $filtered_source->get_item($source_line->get_id());
 			$order_class = get_class($filtered_source);
 			$hydrated_under_filters = new $order_class($source->get_id());
+			$target_hydrated_under_filters = new $order_class($target->get_id());
 			$canonically_hydrated = WCOS_Merge_Canonical_Reader::order($source->get_id());
+			$canonical_target = WCOS_Merge_Canonical_Reader::order($target->get_id());
 			self::assert($filtered_source_line instanceof WC_Order_Item_Product
 				&& 'EUR' === $filtered_source->get_currency()
 				&& 'USD' === $filtered_source->get_currency('edit')
@@ -1264,16 +1266,23 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 				&& array() === $filtered_source->get_items('line_item')
 				&& array() === $filtered_target->get_items(array('line_item', 'shipping', 'fee', 'coupon', 'tax')), 'Representative Merge presentation filters were not active.');
 			self::assert($hydrated_under_filters instanceof WC_Order
+				&& $target_hydrated_under_filters instanceof WC_Order
 				&& $canonically_hydrated instanceof WC_Order
+				&& $canonical_target instanceof WC_Order
 				&& '1809.09' === WCOS_Decimal::normalize($hydrated_under_filters->get_total_tax('edit'), 2)
 				&& '0.00' === WCOS_Decimal::normalize($canonically_hydrated->get_total_tax('edit'), 2), 'Canonical order hydration did not isolate WooCommerce setter-time presentation getters.');
-			$filtered_report = WCOS_Merge_Preflight::assert_supported($filtered_source, $filtered_target, 2);
+			$filtered_report = WCOS_Merge_Preflight::assert_supported($hydrated_under_filters, $target_hydrated_under_filters, 2);
 			self::assert($baseline_report === $filtered_report
-				&& $baseline_source_signature === WCOS_Merge_Recovery_Snapshot::participant_signature($filtered_source)
-				&& $baseline_target_signature === WCOS_Merge_Recovery_Snapshot::participant_signature($filtered_target), 'Presentation filters changed current/fresh Merge authority.');
+				&& $baseline_source_signature === WCOS_Merge_Recovery_Snapshot::participant_signature($canonically_hydrated)
+				&& $baseline_target_signature === WCOS_Merge_Recovery_Snapshot::participant_signature($canonical_target)
+				&& $baseline_source_signature !== WCOS_Merge_Recovery_Snapshot::participant_signature($hydrated_under_filters), 'Presentation filters changed current/fresh Merge authority.');
 
 			$controller = WCOS_Merge_Admin_Controller::bootstrap();
-			$request = self::request($filtered_source, $filtered_target);
+			ob_start();
+			$controller->render_launcher($hydrated_under_filters);
+			$canonical_launcher = (string) ob_get_clean();
+			self::assert(false !== strpos($canonical_launcher, '>Merge</button>'), 'A poisoned safe caller hid the canonical Merge launcher.');
+			$request = self::request($hydrated_under_filters, $target_hydrated_under_filters);
 			$review = $controller->review_request($request);
 			self::$review_ids[] = $review['review_id'];
 			$confirmation = $controller->confirm_request(array_merge($request, array(
@@ -1315,10 +1324,15 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		};
 		add_filter('woocommerce_order_get_status', $terminal_status_filter, PHP_INT_MAX, 2);
 		try {
-			$terminal_source = wc_get_order($terminal_source->get_id());
+			$terminal_order_class = get_class($terminal_source);
+			$terminal_source = new $terminal_order_class($terminal_source->get_id());
 			self::assert('pending' === $terminal_source->get_status()
 				&& 'refunded' === WCOS_Merge_Canonical_Reader::status($terminal_source)
 				&& 'incompatible_status' === WCOS_Merge_Preflight::report($terminal_source, $terminal_target, 2)['reason'], 'A filtered terminal source status was not rejected from persisted authority.');
+			ob_start();
+			WCOS_Merge_Admin_Controller::bootstrap()->render_launcher($terminal_source);
+			$terminal_launcher = (string) ob_get_clean();
+			self::assert('' === $terminal_launcher, 'A poisoned terminal caller exposed the canonical Merge launcher.');
 			self::expect_transport_one_of(static function() use ($terminal_source, $terminal_target) {
 				WCOS_Merge_Admin_Controller::bootstrap()->review_request(self::request($terminal_source, $terminal_target));
 			}, array('status_disabled'));
@@ -1338,10 +1352,10 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		$prelease_confirmation = WCOS_Merge_Confirmation_Store::create($prelease_source, $prelease_target, $prelease_review['authority'], self::$operator_id);
 		self::$operation_ids[$prelease_source->get_id()][] = $prelease_confirmation['operation_id'];
 		$prelease_authority = WCOS_Merge_Confirmation_Store::operation_authority($prelease_confirmation['record']);
-		$prelease_target->set_status('cancelled');
+		$prelease_target->set_status('refunded');
 		$prelease_target->save();
 		$prelease_status_filter = static function($value, $object) use ($prelease_target) {
-			return $object instanceof WC_Order && absint($object->get_id()) === absint($prelease_target->get_id()) ? 'on-hold' : $value;
+			return $object instanceof WC_Order && absint($object->get_id()) === absint($prelease_target->get_id()) ? 'processing' : $value;
 		};
 		$lease_events = 0;
 		$lease_probe = static function() use (&$lease_events) { $lease_events++; };
@@ -1349,11 +1363,14 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		add_action('add_option_wcos_mutation_lock_' . $prelease_source->get_id(), $lease_probe, PHP_INT_MAX, 2);
 		add_action('add_option_wcos_mutation_lock_' . $prelease_target->get_id(), $lease_probe, PHP_INT_MAX, 2);
 		try {
+			$prelease_order_class = get_class($prelease_source);
+			$prelease_caller_source = new $prelease_order_class($prelease_source->get_id());
+			$prelease_caller_target = new $prelease_order_class($prelease_target->get_id());
 			$rejected_code = '';
 			try {
 				(new WCOS_Mutation_Gateway())->merge(
-					wc_get_order($prelease_source->get_id()),
-					wc_get_order($prelease_target->get_id()),
+					$prelease_caller_source,
+					$prelease_caller_target,
 					$prelease_confirmation['operation_id'],
 					2,
 					$prelease_authority
@@ -1363,8 +1380,8 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			} catch (WCOS_Merge_Preflight_Exception $exception) {
 				$rejected_code = 'merge_preflight_' . $exception->get_reason();
 			}
-			self::assert('on-hold' === wc_get_order($prelease_target->get_id())->get_status()
-				&& 'cancelled' === WCOS_Merge_Canonical_Reader::status(wc_get_order($prelease_target->get_id()))
+			self::assert('processing' === $prelease_caller_target->get_status()
+				&& 'refunded' === WCOS_Merge_Canonical_Reader::status(wc_get_order($prelease_target->get_id()))
 				&& 'merge_preflight_incompatible_status' === $rejected_code
 				&& 0 === $lease_events
 				&& null === WCOS_Operation_Journal::get(wc_get_order($prelease_source->get_id()), $prelease_confirmation['operation_id']), 'A filtered terminal target crossed the direct-gateway pre-lease boundary.');
@@ -1387,7 +1404,8 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		};
 		add_filter('woocommerce_order_get_currency', $currency_filter, PHP_INT_MAX, 2);
 		try {
-			$currency_target = wc_get_order($currency_target->get_id());
+			$currency_order_class = get_class($currency_target);
+			$currency_target = new $currency_order_class($currency_target->get_id());
 			self::assert('USD' === $currency_target->get_currency()
 				&& 'EUR' === WCOS_Merge_Canonical_Reader::currency($currency_target)
 				&& 'incompatible_currency' === WCOS_Merge_Preflight::report($currency_source, $currency_target, 2)['reason'], 'A filtered currency mismatch did not fail closed.');
@@ -1408,7 +1426,8 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		};
 		add_filter('woocommerce_order_get_prices_include_tax', $tax_mode_filter, PHP_INT_MAX, 2);
 		try {
-			$tax_target = wc_get_order($tax_target->get_id());
+			$tax_order_class = get_class($tax_target);
+			$tax_target = new $tax_order_class($tax_target->get_id());
 			self::assert(false === $tax_target->get_prices_include_tax()
 				&& true === WCOS_Merge_Canonical_Reader::prices_include_tax($tax_target)
 				&& 'incompatible_pricing_mode' === WCOS_Merge_Preflight::report($tax_source, $tax_target, 2)['reason'], 'A filtered tax-mode mismatch did not fail closed.');
@@ -1416,17 +1435,74 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			remove_filter('woocommerce_order_get_prices_include_tax', $tax_mode_filter, PHP_INT_MAX);
 		}
 
+		$masked_financial_reasons = array(
+			'money' => 'financial_target_nonzero_source_total',
+			'tax' => 'financial_target_nonzero_source_tax',
+		);
+		foreach ($masked_financial_reasons as $kind => $expected_reason) {
+			$masked_source = self::order('canonical-masked-' . $kind . '-source');
+			$masked_target = self::order('canonical-masked-' . $kind . '-target', 'on-hold');
+			$masked_line = self::line($masked_source, $product, 'money' === $kind
+				? array('subtotal' => '1.00', 'total' => '1.00')
+				: array(
+					'subtotal' => '0.00',
+					'total' => '0.00',
+					'subtotal_tax' => '0.01',
+					'total_tax' => '0.01',
+					'taxes' => array('subtotal' => array(8807 => '0.01'), 'total' => array(8807 => '0.01')),
+				));
+			self::line($masked_target, $product, array('subtotal' => '2.00', 'total' => '2.00'));
+			if ('tax' === $kind) {
+				self::tax($masked_source, 8807, '0.01', '0.00');
+			}
+			$masked_source = self::finalize($masked_source);
+			$masked_target = self::finalize($masked_target);
+			$masked_target->set_transaction_id('canonical-masked-' . $kind);
+			$masked_target->save();
+			$masked_item_filter = static function($value, $item) use ($masked_line, $kind) {
+				if (!$item instanceof WC_Order_Item_Product || absint($item->get_id()) !== absint($masked_line->get_id())) {
+					return $value;
+				}
+				return 'tax' === $kind && is_array($value)
+					? array('subtotal' => array(8807 => '0.00'), 'total' => array(8807 => '0.00'))
+					: '0.00';
+			};
+			$masked_hooks = 'money' === $kind
+				? array('woocommerce_order_item_get_total')
+				: array('woocommerce_order_item_get_subtotal_tax', 'woocommerce_order_item_get_total_tax', 'woocommerce_order_item_get_taxes');
+			foreach ($masked_hooks as $masked_hook) {
+				add_filter($masked_hook, $masked_item_filter, PHP_INT_MAX, 2);
+			}
+			try {
+				$masked_order_class = get_class($masked_source);
+				$masked_caller_source = new $masked_order_class($masked_source->get_id());
+				$masked_caller_target = new $masked_order_class($masked_target->get_id());
+				$masked_caller_line = $masked_caller_source->get_item($masked_line->get_id());
+				$mask_visible = 'money' === $kind
+					? '0.00' === WCOS_Decimal::normalize($masked_caller_line->get_total(), 2)
+					: '0.00' === WCOS_Decimal::normalize($masked_caller_line->get_total_tax(), 2);
+				self::assert($mask_visible
+					&& $expected_reason === WCOS_Merge_Preflight::report($masked_caller_source, $masked_caller_target, 2)['reason'], 'A presentation filter hid non-zero financial-target source ' . $kind . '.');
+			} finally {
+				foreach ($masked_hooks as $masked_hook) {
+					remove_filter($masked_hook, $masked_item_filter, PHP_INT_MAX);
+				}
+			}
+		}
+
 		self::$results['canonical_merge_authority_filters'] = array(
-			'cases' => '79-93',
+			'cases' => '79-95',
 			'order_and_item_view_filters_ignored' => true,
 			'collection_filters_ignored' => true,
 			'identity_address_payment_filters_ignored' => true,
 			'target_charges_and_tax_filters_ignored' => true,
 			'review_confirm_execute_under_filters' => true,
+			'launcher_reachability_uses_canonical_status' => true,
 			'current_hydration_filters_bypassed' => true,
 			'terminal_source_rejected' => true,
 			'terminal_target_rejected_pre_lease' => true,
 			'currency_and_tax_mode_masks_rejected' => true,
+			'nonzero_money_and_tax_masks_rejected' => true,
 			'exact_hook_registry_restored' => true,
 			'query_and_order_number_search_filters_ignored' => true,
 			'parent_managed_stock_filters_ignored' => true,
@@ -1803,9 +1879,9 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		$source = self::finalize($source);
 		$target = self::finalize($target);
 		$malformed_target = new WCOS_Compat_006_Malformed_Order($target->get_id());
-		self::assert('malformed_refund_authority' === WCOS_Merge_Preflight::report($source, $malformed_target, 2)['reason'], 'Malformed target refund total did not fail closed.');
+		self::assert(!empty(WCOS_Merge_Preflight::report($source, $malformed_target, 2)['supported']), 'Caller-only target refund projections crossed canonical participant rehydration.');
 
-		$source_history = array('transaction', 'paid_date', 'paid_status', 'refund', 'malformed_refund_total', 'neutral_transaction');
+		$source_history = array('transaction', 'paid_date', 'paid_status', 'refund', 'neutral_transaction');
 		foreach ($source_history as $kind) {
 			$source = self::order('source-financial-' . $kind);
 			$target = self::order('source-financial-' . $kind . '-target');
@@ -1826,8 +1902,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 				self::create_refund($source, '1.00');
 			}
 			$source = wc_get_order($source->get_id());
-			$source_view = 'malformed_refund_total' === $kind ? new WCOS_Compat_006_Malformed_Order($source->get_id()) : $source;
-			self::expect_reason($source_view, $target, 'source_financial_history_not_movable', $source);
+			self::expect_reason($source, $target, 'source_financial_history_not_movable', $source);
 		}
 
 		self::$results['financial_rejections'] = array(
@@ -1836,6 +1911,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			'per_rate_tax_neutrality' => true,
 			'production_service_pre_journal_rejection' => true,
 			'terminal_and_malformed_fail_closed' => true,
+			'caller_only_refund_projection_ignored' => true,
 			'source_financial_history' => $source_history,
 			'pre_journal_no_participation' => true,
 		);
