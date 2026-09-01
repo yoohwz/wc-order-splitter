@@ -20,7 +20,22 @@ final class WCOS_Tax_Item_Synchronizer {
 		return $templates;
 	}
 
-	public static function synchronize(WC_Order $order, array $templates, $precision = null, $preserve_existing_ids = false, $context = WCOS_Order_Item_Meta_Policy::CONTEXT_SPLIT) {
+	/** Restrict imported templates to rates sealed by source product-line taxes. */
+	public static function templates_for_rates(WC_Order $source, array $rate_ids) {
+		$all = self::templates($source);
+		$rate_ids = array_values(array_unique(array_map('intval', $rate_ids)));
+		sort($rate_ids, SORT_NUMERIC);
+		$templates = array();
+		foreach ($rate_ids as $rate_id) {
+			if (!isset($all[$rate_id])) {
+				throw new RuntimeException(__('A source product tax rate is missing its historical tax-row template.', 'wc-order-splitter'));
+			}
+			$templates[$rate_id] = $all[$rate_id];
+		}
+		return $templates;
+	}
+
+	public static function synchronize(WC_Order $order, array $templates, $precision = null, $preserve_existing_ids = false, $context = WCOS_Order_Item_Meta_Policy::CONTEXT_SPLIT, $materialize_zero_template_rows = false) {
 		$precision = null === $precision ? wc_get_price_decimals() : (int) $precision;
 		$context = sanitize_key((string) $context);
 		if (!in_array($context, array(
@@ -48,7 +63,7 @@ final class WCOS_Tax_Item_Synchronizer {
 
 			if (isset($existing[$rate_id])) {
 				$item = $existing[$rate_id];
-			} elseif (0 !== $cart_units || 0 !== $shipping_units) {
+			} elseif (0 !== $cart_units || 0 !== $shipping_units || ($materialize_zero_template_rows && isset($templates[$rate_id]))) {
 				if (!isset($templates[$rate_id])) {
 					throw new RuntimeException(__('A historical tax-rate template is missing from the source order.', 'wc-order-splitter'));
 				}

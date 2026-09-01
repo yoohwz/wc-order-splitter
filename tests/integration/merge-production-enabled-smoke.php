@@ -106,6 +106,8 @@ final class WCOS_Merge_Production_Enabled_Matrix {
 			$fee->set_name('Sandbox fee');
 			$fee->set_amount('1.00');
 			$fee->set_total('1.00');
+			$fee->set_total_tax('0.00');
+			$fee->set_taxes(array('total' => array()));
 			$order->add_item($fee);
 		}
 		if (!empty($overrides['shipping'])) {
@@ -113,6 +115,7 @@ final class WCOS_Merge_Production_Enabled_Matrix {
 			$shipping->set_method_title('Sandbox matrix shipping');
 			$shipping->set_method_id('flat_rate');
 			$shipping->set_total('2.00');
+			$shipping->set_taxes(array('total' => array()));
 			$order->add_item($shipping);
 		}
 		$order->calculate_totals(false);
@@ -362,22 +365,14 @@ final class WCOS_Merge_Production_Enabled_Matrix {
 	private static function unsupported_matrix() {
 		list($same_source, $same_target) = self::pair('same');
 		self::expect_review_failure('same_order', $same_source, $same_source, 'invalid_pair');
-		list($source, $target) = self::pair('status', array('status' => 'on-hold'), array('status' => 'processing'));
-		self::expect_review_failure('incompatible_status', $source, $target, 'preflight_incompatible_status');
+		list($source, $target) = self::pair('status', array('status' => 'cancelled'), array('status' => 'on-hold'));
+		self::expect_review_failure('incompatible_status', $source, $target, array('status_disabled', 'preflight_incompatible_status'));
 		list($source, $target) = self::pair('currency', array(), array('currency' => 'EUR'));
 		self::expect_review_failure('different_currency', $source, $target, 'preflight_incompatible_currency');
-		list($source, $target) = self::pair('context', array(), array('email' => 'different@example.test', 'address' => '99 Other Way'));
-		self::expect_review_failure('incompatible_context', $source, $target, 'preflight_incompatible_pair_context');
 		list($source, $target) = self::pair('paid', array(), array('transaction_id' => 'sandbox-transaction'));
 		self::expect_review_failure('paid_transaction', $source, $target, 'preflight_paid_order_unsupported');
 		list($source, $target) = self::pair('refund', array(), array('refund' => true));
 		self::expect_review_failure('refunded', $source, $target, 'preflight_refund_policy_missing');
-		list($source, $target) = self::pair('coupon', array(), array('coupon' => true));
-		self::expect_review_failure('coupon', $source, $target, 'preflight_coupon_policy_missing');
-		list($source, $target) = self::pair('fee', array(), array('fee' => true));
-		self::expect_review_failure('fee', $source, $target, 'preflight_fee_policy_missing');
-		list($source, $target) = self::pair('source-shipping', array('shipping' => true), array());
-		self::expect_review_failure('source_shipping', $source, $target, 'preflight_source_shipping_policy_missing');
 		list($source, $target) = self::pair('no-source-lines', array('no_lines' => true), array());
 		self::expect_review_failure('no_source_lines', $source, $target, 'preflight_no_source_lines');
 	}

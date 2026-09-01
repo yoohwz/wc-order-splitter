@@ -157,8 +157,11 @@ try {
 	wcos_merge_authority_assert('trash' === $source->get_status(), 'Enabled controller Execute did not retire the source.');
 	$target_line_ids_after = array_map('absint', array_keys($target->get_items('line_item')));
 	$fresh_line_ids = array_values(array_diff($target_line_ids_after, $target_line_ids_before));
-	wcos_merge_authority_assert(count($source_line_ids) === count($fresh_line_ids), 'Enabled controller Execute did not create one fresh target line per source line.');
-	wcos_merge_authority_assert(empty(array_intersect($source_line_ids, $fresh_line_ids)), 'Enabled controller Execute re-parented a persisted source line.');
+	wcos_merge_authority_assert(empty($fresh_line_ids) && empty($execute['target_item_ids']), 'Enabled controller Execute created a fresh line instead of using exact canonical coalescing authority.');
+	wcos_merge_authority_assert($target_line_ids_before === $target_line_ids_after, 'Enabled controller Execute replaced the exact canonical target line.');
+	wcos_merge_authority_assert(empty(array_intersect($source_line_ids, $target_line_ids_after)), 'Enabled controller Execute re-parented a persisted source line.');
+	$coalesced_line = $target->get_item($target_line_ids_before[0]);
+	wcos_merge_authority_assert($coalesced_line instanceof WC_Order_Item_Product && '3.000000' === WCOS_Decimal::normalize($coalesced_line->get_quantity(), 6), 'Enabled controller Execute did not preserve exact additive coalesced quantity.');
 	$source_after = WCOS_Merge_Recovery_Snapshot::participant_signature($source);
 	$target_after = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
 	$journal_after = wp_json_encode($journal);

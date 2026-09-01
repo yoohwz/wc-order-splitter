@@ -44,8 +44,13 @@ final class WCOS_Merge_Recovery_Snapshot {
 		);
 		$snapshot['archive_source_contract_before'] = self::archive_commercial_contract($source);
 		$snapshot['archive_source_signature_before'] = self::contract_signature('merge_archive_commercial_v1', $source->get_id(), $snapshot['archive_source_contract_before']);
-		$snapshot['active_economic_contract_before'] = self::active_economic_contract(array($source, $target), $pair['price_precision']);
-		$snapshot['active_ownership_before_signature'] = self::contract_signature('merge_active_economic_v1', $source->get_id(), $snapshot['active_economic_contract_before']);
+		if (WCOS_Merge_Preflight::LEGACY_POLICY_VERSION === (int) $pair['preflight_policy_version']) {
+			$snapshot['active_economic_contract_before'] = self::active_economic_contract(array($source, $target), $pair['price_precision']);
+			$snapshot['active_ownership_before_signature'] = self::contract_signature('merge_active_economic_v1', $source->get_id(), $snapshot['active_economic_contract_before']);
+		} else {
+			$snapshot['active_economic_contract_before'] = WCOS_Merge_Commercial_Policy::expected_target_contract($source, $target, $pair['price_precision']);
+			$snapshot['active_ownership_before_signature'] = WCOS_Merge_Commercial_Policy::expected_target_signature($source, $target, $pair['price_precision']);
+		}
 		$snapshot['recovery_fingerprint'] = self::fingerprint($snapshot);
 		return $snapshot;
 	}
@@ -78,8 +83,11 @@ final class WCOS_Merge_Recovery_Snapshot {
 		self::assert_participant_state($snapshot['target'], absint($snapshot['target_order_id']));
 		self::assert_immutable_guard($snapshot['source_immutable_context'], absint($snapshot['source_order_id']));
 		self::assert_immutable_guard($snapshot['target_immutable_context'], absint($snapshot['target_order_id']));
+		$active_namespace = WCOS_Merge_Preflight::LEGACY_POLICY_VERSION === (int) $snapshot['preflight_policy_version']
+			? 'merge_active_economic_v1'
+			: 'merge_ordinary_active_economic_v1';
 		if (!hash_equals((string) $snapshot['archive_source_signature_before'], self::contract_signature('merge_archive_commercial_v1', $snapshot['source_order_id'], $snapshot['archive_source_contract_before']))
-			|| !hash_equals((string) $snapshot['active_ownership_before_signature'], self::contract_signature('merge_active_economic_v1', $snapshot['source_order_id'], $snapshot['active_economic_contract_before']))) {
+			|| !hash_equals((string) $snapshot['active_ownership_before_signature'], self::contract_signature($active_namespace, $snapshot['source_order_id'], $snapshot['active_economic_contract_before']))) {
 			throw new RuntimeException(__('The Merge archive or active-ownership snapshot authority is invalid.', 'wc-order-splitter'));
 		}
 
@@ -165,9 +173,12 @@ final class WCOS_Merge_Recovery_Snapshot {
 
 	public static function assert_active_economic_conserved(array $snapshot, WC_Order $target) {
 		self::assert_valid($snapshot);
+		$actual = WCOS_Merge_Preflight::LEGACY_POLICY_VERSION === (int) $snapshot['preflight_policy_version']
+			? self::active_economic_signature(array($target), $snapshot['price_precision'], $snapshot['source_order_id'])
+			: WCOS_Merge_Commercial_Policy::target_signature($target, $snapshot['price_precision'], $snapshot['source_order_id']);
 		WCOS_Merge_Retirement_Policy::assert_active_ownership_conserved(
 			$snapshot['active_ownership_before_signature'],
-			self::active_economic_signature(array($target), $snapshot['price_precision'], $snapshot['source_order_id'])
+			$actual
 		);
 	}
 
@@ -188,8 +199,8 @@ final class WCOS_Merge_Recovery_Snapshot {
 		if (!is_array($pair) || !isset($pair['context_authority']) || !is_array($pair['context_authority'])) {
 			throw new RuntimeException(__('Immutable Merge context authority is unavailable.', 'wc-order-splitter'));
 		}
-		WCOS_Merge_Context_Signature::assert_current($source, $pair['context_authority']);
-		WCOS_Merge_Context_Signature::assert_current($target, $pair['context_authority']);
+		WCOS_Merge_Context_Signature::assert_current($source, $pair['context_authority'], 'source');
+		WCOS_Merge_Context_Signature::assert_current($target, $pair['context_authority'], 'target');
 		self::assert_immutable_participant($snapshot['source_immutable_context'], $source, array(), array());
 		self::assert_immutable_participant($snapshot['target_immutable_context'], $target, $target_item_ids, $target_tax_item_ids);
 		return true;

@@ -77,7 +77,10 @@ function wcos_merge_service_order(WC_Product $product, $email, array $reduced_ma
 		} else {
 			$item->set_product_id($product->get_id());
 		}
-		$item->set_quantity($target_amount ? '1' : ('fractional' === $marker ? '1.5' : '1'));
+		$source_quantity = 'fractional' === $marker
+			? '1.5'
+			: (is_numeric($marker) && (float) $marker > 1 ? (string) $marker : '1');
+		$item->set_quantity($target_amount ? '1' : $source_quantity);
 		$item->set_subtotal($target_amount ? '5.00' : '10.00');
 		$item->set_total($target_amount ? '5.00' : '10.00');
 		$item->set_subtotal_tax($target_amount ? '0.50' : '1.00');
@@ -180,6 +183,9 @@ try {
 	$products[] = $managed;
 
 	if (in_array($suite, array('all', 'core'), true)) {
+	remove_filter('woocommerce_stock_amount', 'intval');
+	add_filter('woocommerce_stock_amount', 'floatval');
+	try {
 	wcos_merge_service_assert(WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE), 'Production Merge gate is not enabled for adapter evidence.');
 
 	/* Success: identical source lines stay distinct, historical tax/shipping survive, retry is stable. */
@@ -258,6 +264,10 @@ try {
 	sort($target_reduced, SORT_STRING);
 	wcos_merge_service_assert(array('1.500000', '2.000000') === $target_reduced, 'Target did not receive exact line stock ownership.');
 	wcos_merge_service_cleanup($source, $target, $operation_id);
+	} finally {
+		remove_filter('woocommerce_stock_amount', 'floatval');
+		add_filter('woocommerce_stock_amount', 'intval');
+	}
 	}
 
 	if (in_array($suite, array('all', 'crash_pre'), true)) {
@@ -627,6 +637,12 @@ try {
 		'deleted_product' => array($deleted, array('1'), true),
 	);
 	foreach ($stock_cases as $label => $case) {
+		$uses_fractional_stock = 'backorder_fractional' === $label;
+		if ($uses_fractional_stock) {
+			remove_filter('woocommerce_stock_amount', 'intval');
+			add_filter('woocommerce_stock_amount', 'floatval');
+		}
+		try {
 		list($case_product, $markers, $delete_product) = $case;
 		list($source, $target) = wcos_merge_service_pair($case_product, 'stock-' . $label, $markers);
 		$operation_id = 'merge-service-stock-' . $label . '-' . wp_generate_uuid4();
@@ -641,6 +657,12 @@ try {
 		$fresh_target = wc_get_order($target->get_id());
 		wcos_merge_service_assert($stock_before === WCOS_Order_Contract_Snapshot::product_stock($fresh_target), 'Stock matrix changed physical stock: ' . $label);
 		wcos_merge_service_cleanup(wc_get_order($source->get_id()), $fresh_target, $operation_id);
+		} finally {
+			if ($uses_fractional_stock) {
+				remove_filter('woocommerce_stock_amount', 'floatval');
+				add_filter('woocommerce_stock_amount', 'intval');
+			}
+		}
 	}
 	}
 } finally {

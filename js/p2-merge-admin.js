@@ -131,10 +131,13 @@
 			var source = summary.source || {};
 			var target = summary.target || {};
 			reviewSummary.textContent = '';
-			addSummary('Source', '#' + String(source.number || source.id || '') + ' · ' + String(source.line_count || 0) + ' lines · ' + String(source.total || '0') + ' ' + String(summary.currency || ''));
-			addSummary('Target', '#' + String(target.number || target.id || '') + ' · ' + String(target.line_count || 0) + ' lines · ' + String(target.total || '0') + ' ' + String(summary.currency || ''));
+			addSummary('Source', '#' + String(source.number || source.id || '') + ' · ' + String(source.status || '') + ' · ' + String(source.line_count || 0) + ' lines · ' + String(source.total || '0') + ' ' + String(summary.currency || ''));
+			addSummary('Target', '#' + String(target.number || target.id || '') + ' · ' + String(target.status || '') + ' · ' + String(target.line_count || 0) + ' lines · ' + String(target.total || '0') + ' ' + String(summary.currency || ''));
 			addSummary('Transferable lines', String(summary.transferable_line_count || 0));
+			addSummary('Line actions', String(summary.coalesced_line_count || 0) + ' coalesce · ' + String(summary.fresh_line_count || 0) + ' fresh');
 			addSummary('Projected active-target historical aggregate', String(summary.projected_active_target_total || '0') + ' ' + String(summary.currency || ''));
+			addSummary('Source commercial history', (summary.source_shipping_retained ? 'shipping; ' : '') + (summary.source_fees_retained ? 'fees; ' : '') + (summary.source_coupons_retained ? 'coupons; ' : '') + 'retained on archived source');
+			addSummary('Target authority', 'Status, customer/address/payment context, shipping, fees and coupons stay with target');
 			addSummary('Price precision', String(summary.price_precision || 0));
 			addSummary('Retirement policy', String(summary.retirement_policy || 'non_force_trash_archive'));
 			reviewBox.hidden = false;
