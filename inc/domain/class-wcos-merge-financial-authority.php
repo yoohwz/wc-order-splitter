@@ -238,29 +238,23 @@ final class WCOS_Merge_Financial_Authority {
 				$refunded_item_id = absint($refund_item->get_meta('_refunded_item_id', true));
 				$referenced = $refunded_item_id ? $order->get_item($refunded_item_id) : false;
 				if (!$refund_item instanceof WC_Order_Item || !$refund_item_id || isset($seen_item_ids[$refund_item_id])
+					|| (int) $refund_item->get_id() !== $refund_item_id
 					|| (int) $refund_item->get_order_id() !== (int) $refund->get_id()
 					|| (string) $refund_item->get_type() !== $item_type
 					|| !$referenced instanceof WC_Order_Item
+					|| (int) $referenced->get_id() !== $refunded_item_id
 					|| (int) $referenced->get_order_id() !== (int) $order->get_id()
 					|| (string) $referenced->get_type() !== $item_type) {
 					self::malformed_refund();
 				}
 				$seen_item_ids[$refund_item_id] = true;
-				$items[$refund_item_id] = array(
-					'refund_item_id' => $refund_item_id,
-					'type' => $item_type,
-					'refunded_item_id' => $refunded_item_id,
-					'quantity' => method_exists($refund_item, 'get_quantity')
-						? WCOS_Decimal::normalize($refund_item->get_quantity(), 6)
-						: '0.000000',
-					'total' => method_exists($refund_item, 'get_total')
-						? WCOS_Decimal::normalize($refund_item->get_total(), $precision)
-						: WCOS_Decimal::from_units(0, $precision),
-					'total_tax' => method_exists($refund_item, 'get_total_tax')
-						? WCOS_Decimal::normalize($refund_item->get_total_tax(), $precision)
-						: WCOS_Decimal::from_units(0, $precision),
-					'taxes' => method_exists($refund_item, 'get_taxes') ? self::canonicalize($refund_item->get_taxes()) : array(),
-					'metadata_fingerprint' => self::metadata_fingerprint($refund_item->get_meta_data(), 'merge_refund_item_meta_v1'),
+				$items[$refund_item_id] = self::refund_item_structure(
+					$refund_item,
+					$referenced,
+					$item_type,
+					$refund_item_id,
+					$refunded_item_id,
+					$precision
 				);
 			}
 		}
@@ -280,6 +274,111 @@ final class WCOS_Merge_Financial_Authority {
 			'metadata_fingerprint' => self::metadata_fingerprint($refund->get_meta_data(), 'merge_refund_order_meta_v1'),
 			'items' => $items,
 		);
+	}
+
+	private static function refund_item_structure(WC_Order_Item $item, WC_Order_Item $referenced, $item_type, $item_id, $refunded_item_id, $precision) {
+		$structure = array(
+			'refund_item_id' => absint($item_id),
+			'type' => (string) $item_type,
+			'refunded_item_id' => absint($refunded_item_id),
+			'metadata_fingerprint' => self::metadata_fingerprint($item->get_meta_data(), 'merge_refund_item_meta_v1'),
+		);
+
+		if ('line_item' === $item_type) {
+			if (!$item instanceof WC_Order_Item_Product || !$referenced instanceof WC_Order_Item_Product) {
+				self::malformed_refund();
+			}
+			return array_merge($structure, array(
+				'name_fingerprint' => self::digest('merge_refund_item_name_v1', array('name' => (string) $item->get_name('edit'))),
+				'product_id' => absint($item->get_product_id('edit')),
+				'variation_id' => absint($item->get_variation_id('edit')),
+				'quantity' => WCOS_Decimal::normalize($item->get_quantity('edit'), 6),
+				'tax_class' => (string) $item->get_tax_class('edit'),
+				'subtotal' => WCOS_Decimal::normalize($item->get_subtotal('edit'), $precision),
+				'subtotal_tax' => WCOS_Decimal::normalize($item->get_subtotal_tax('edit'), $precision),
+				'total' => WCOS_Decimal::normalize($item->get_total('edit'), $precision),
+				'total_tax' => WCOS_Decimal::normalize($item->get_total_tax('edit'), $precision),
+				'taxes' => self::refund_item_taxes($item->get_taxes('edit'), array('subtotal', 'total'), $precision),
+			));
+		}
+
+		if ('shipping' === $item_type) {
+			if (!$item instanceof WC_Order_Item_Shipping || !$referenced instanceof WC_Order_Item_Shipping) {
+				self::malformed_refund();
+			}
+			return array_merge($structure, array(
+				'method_title_fingerprint' => self::digest('merge_refund_shipping_title_v1', array('method_title' => (string) $item->get_method_title('edit'))),
+				'method_id' => (string) $item->get_method_id('edit'),
+				'instance_id' => (string) $item->get_instance_id('edit'),
+				'tax_status' => (string) $item->get_tax_status('edit'),
+				'total' => WCOS_Decimal::normalize($item->get_total('edit'), $precision),
+				'total_tax' => WCOS_Decimal::normalize($item->get_total_tax('edit'), $precision),
+				'taxes' => self::refund_item_taxes($item->get_taxes('edit'), array('total'), $precision),
+			));
+		}
+
+		if ('fee' === $item_type) {
+			if (!$item instanceof WC_Order_Item_Fee || !$referenced instanceof WC_Order_Item_Fee) {
+				self::malformed_refund();
+			}
+			return array_merge($structure, array(
+				'name_fingerprint' => self::digest('merge_refund_item_name_v1', array('name' => (string) $item->get_name('edit'))),
+				'tax_class' => (string) $item->get_tax_class('edit'),
+				'tax_status' => (string) $item->get_tax_status('edit'),
+				'amount' => WCOS_Decimal::normalize($item->get_amount('edit'), $precision),
+				'total' => WCOS_Decimal::normalize($item->get_total('edit'), $precision),
+				'total_tax' => WCOS_Decimal::normalize($item->get_total_tax('edit'), $precision),
+				'taxes' => self::refund_item_taxes($item->get_taxes('edit'), array('total'), $precision),
+			));
+		}
+
+		if ('tax' === $item_type) {
+			if (!$item instanceof WC_Order_Item_Tax || !$referenced instanceof WC_Order_Item_Tax) {
+				self::malformed_refund();
+			}
+			$rate_percent = $item->get_rate_percent('edit');
+			return array_merge($structure, array(
+				'rate_id' => absint($item->get_rate_id('edit')),
+				'rate_code_fingerprint' => self::digest('merge_refund_tax_rate_code_v1', array('rate_code' => (string) $item->get_rate_code('edit'))),
+				'label_fingerprint' => self::digest('merge_refund_tax_label_v1', array('label' => (string) $item->get_label('edit'))),
+				'compound' => (bool) $item->get_compound('edit'),
+				'tax_total' => WCOS_Decimal::normalize($item->get_tax_total('edit'), $precision),
+				'shipping_tax_total' => WCOS_Decimal::normalize($item->get_shipping_tax_total('edit'), $precision),
+				'rate_percent' => null === $rate_percent ? null : WCOS_Decimal::normalize($rate_percent, 6),
+			));
+		}
+
+		self::malformed_refund();
+	}
+
+	private static function refund_item_taxes($taxes, array $expected_buckets, $precision) {
+		if (!is_array($taxes)) {
+			self::malformed_refund();
+		}
+		$actual_buckets = array_keys($taxes);
+		sort($actual_buckets, SORT_STRING);
+		sort($expected_buckets, SORT_STRING);
+		if ($actual_buckets !== $expected_buckets) {
+			self::malformed_refund();
+		}
+
+		$canonical = array();
+		foreach ($expected_buckets as $bucket) {
+			if (!is_array($taxes[$bucket])) {
+				self::malformed_refund();
+			}
+			$canonical[$bucket] = array();
+			foreach ($taxes[$bucket] as $rate_id => $amount) {
+				$rate_id = absint($rate_id);
+				if (!$rate_id || isset($canonical[$bucket][$rate_id])) {
+					self::malformed_refund();
+				}
+				$canonical[$bucket][$rate_id] = WCOS_Decimal::normalize($amount, $precision);
+			}
+			ksort($canonical[$bucket], SORT_NUMERIC);
+		}
+		ksort($canonical, SORT_STRING);
+		return $canonical;
 	}
 
 	private static function canonicalize_participant($participant) {
