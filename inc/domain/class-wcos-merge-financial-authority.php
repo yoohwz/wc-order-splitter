@@ -24,8 +24,8 @@ final class WCOS_Merge_Financial_Authority_Exception extends RuntimeException {
  */
 final class WCOS_Merge_Financial_Authority {
 
-	const SCHEMA_VERSION = 1;
-	const POLICY_VERSION = 1;
+	const SCHEMA_VERSION = 2;
+	const POLICY_VERSION = 2;
 	const ALGORITHM = 'hmac-sha256';
 
 	public static function has_history(WC_Order $order, $precision = null) {
@@ -37,9 +37,9 @@ final class WCOS_Merge_Financial_Authority {
 		} catch (Throwable $throwable) {
 			return true;
 		}
-		return (bool) $order->is_paid()
-			|| null !== $order->get_date_paid()
-			|| '' !== trim((string) $order->get_transaction_id())
+		return self::is_paid($order)
+			|| null !== $order->get_date_paid('edit')
+			|| '' !== trim((string) $order->get_transaction_id('edit'))
 			|| 0 !== $total_refunded
 			|| !empty($order->get_refunds());
 	}
@@ -173,7 +173,7 @@ final class WCOS_Merge_Financial_Authority {
 		$refund_total_units = 0;
 		foreach ($refunds as $refund) {
 			if (!$refund instanceof WC_Order_Refund || !absint($refund->get_id())
-				|| absint($refund->get_parent_id()) !== $order_id
+				|| absint($refund->get_parent_id('edit')) !== $order_id
 				|| 'shop_order_refund' !== (string) $refund->get_type()) {
 				self::malformed_refund();
 			}
@@ -182,7 +182,7 @@ final class WCOS_Merge_Financial_Authority {
 				self::malformed_refund();
 			}
 			$refund_ids[$refund_id] = true;
-			$amount_units = WCOS_Decimal::to_units($refund->get_amount(), $precision);
+			$amount_units = WCOS_Decimal::to_units($refund->get_amount('edit'), $precision);
 			if ($amount_units < 0 || $refund_total_units > PHP_INT_MAX - $amount_units) {
 				self::malformed_refund();
 			}
@@ -196,12 +196,12 @@ final class WCOS_Merge_Financial_Authority {
 			self::malformed_refund();
 		}
 
-		$date_paid = $order->get_date_paid();
-		$transaction_id = trim((string) $order->get_transaction_id());
+		$date_paid = $order->get_date_paid('edit');
+		$transaction_id = trim((string) $order->get_transaction_id('edit'));
 		$participant = array(
 			'order_id' => $order_id,
-			'status' => sanitize_key((string) $order->get_status()),
-			'is_paid' => (bool) $order->is_paid(),
+			'status' => sanitize_key((string) $order->get_status('edit')),
+			'is_paid' => self::is_paid($order),
 			'has_paid_date' => null !== $date_paid,
 			'paid_date_fingerprint' => null === $date_paid ? '' : self::digest(
 				'merge_paid_date_v1',
@@ -216,7 +216,7 @@ final class WCOS_Merge_Financial_Authority {
 			'refund_order_ids' => $refund_id_list,
 			'total_refunded' => $total_refunded,
 			'refund_structure_fingerprint' => self::digest(
-				'merge_refund_structure_v1',
+				'merge_refund_structure_v2',
 				array('order_id' => $order_id, 'refunds' => $refund_structures)
 			),
 		);
@@ -229,15 +229,19 @@ final class WCOS_Merge_Financial_Authority {
 		return self::canonicalize_participant($participant);
 	}
 
+	private static function is_paid(WC_Order $order) {
+		return in_array((string) $order->get_status('edit'), wc_get_is_paid_statuses(), true);
+	}
+
 	private static function refund_structure(WC_Order $order, WC_Order_Refund $refund, $precision) {
 		$items = array();
 		$seen_item_ids = array();
 		foreach (array('line_item', 'shipping', 'fee', 'tax') as $item_type) {
-			foreach ($refund->get_items($item_type) as $refund_item_id => $refund_item) {
+			foreach (self::persisted_items($refund, $item_type) as $refund_item_id => $refund_item) {
 				$refund_item_id = absint($refund_item_id);
 				if (!$refund_item instanceof WC_Order_Item || !$refund_item_id || isset($seen_item_ids[$refund_item_id])
 					|| (int) $refund_item->get_id() !== $refund_item_id
-					|| (int) $refund_item->get_order_id() !== (int) $refund->get_id()
+					|| (int) $refund_item->get_order_id('edit') !== (int) $refund->get_id()
 					|| (string) $refund_item->get_type() !== $item_type) {
 					self::malformed_refund();
 				}
@@ -246,11 +250,11 @@ final class WCOS_Merge_Financial_Authority {
 					$refunded_item_id = 0;
 					$referenced = self::resolve_refund_tax_reference($order, $refund_item);
 				} else {
-					$refunded_item_id = absint($refund_item->get_meta('_refunded_item_id', true));
+					$refunded_item_id = absint($refund_item->get_meta('_refunded_item_id', true, 'edit'));
 					$referenced = $refunded_item_id ? $order->get_item($refunded_item_id) : false;
 					if (!$referenced instanceof WC_Order_Item
 						|| (int) $referenced->get_id() !== $refunded_item_id
-						|| (int) $referenced->get_order_id() !== (int) $order->get_id()
+						|| (int) $referenced->get_order_id('edit') !== (int) $order->get_id()
 						|| (string) $referenced->get_type() !== $item_type) {
 						self::malformed_refund();
 					}
@@ -268,14 +272,24 @@ final class WCOS_Merge_Financial_Authority {
 			}
 		}
 		ksort($items, SORT_NUMERIC);
-		$date_created = $refund->get_date_created();
+		$date_created = $refund->get_date_created('edit');
 		return array(
 			'refund_id' => absint($refund->get_id()),
-			'parent_order_id' => absint($refund->get_parent_id()),
-			'status' => sanitize_key((string) $refund->get_status()),
-			'amount' => WCOS_Decimal::normalize($refund->get_amount(), $precision),
-			'reason_fingerprint' => self::digest('merge_refund_reason_v1', array('reason' => (string) $refund->get_reason())),
-			'refunded_by' => absint($refund->get_refunded_by()),
+			'parent_order_id' => absint($refund->get_parent_id('edit')),
+			'status' => sanitize_key((string) $refund->get_status('edit')),
+			'currency' => (string) $refund->get_currency('edit'),
+			'prices_include_tax' => (bool) $refund->get_prices_include_tax('edit'),
+			'amount' => WCOS_Decimal::normalize($refund->get_amount('edit'), $precision),
+			'total' => WCOS_Decimal::normalize($refund->get_total('edit'), $precision),
+			'discount_total' => WCOS_Decimal::normalize($refund->get_discount_total('edit'), $precision),
+			'discount_tax' => WCOS_Decimal::normalize($refund->get_discount_tax('edit'), $precision),
+			'shipping_total' => WCOS_Decimal::normalize($refund->get_shipping_total('edit'), $precision),
+			'shipping_tax' => WCOS_Decimal::normalize($refund->get_shipping_tax('edit'), $precision),
+			'cart_tax' => WCOS_Decimal::normalize($refund->get_cart_tax('edit'), $precision),
+			'total_tax' => WCOS_Decimal::normalize($refund->get_total_tax('edit'), $precision),
+			'reason_fingerprint' => self::digest('merge_refund_reason_v1', array('reason' => (string) $refund->get_reason('edit'))),
+			'refunded_by' => absint($refund->get_refunded_by('edit')),
+			'refunded_payment' => (bool) $refund->get_refunded_payment('edit'),
 			'date_created_fingerprint' => null === $date_created ? '' : self::digest(
 				'merge_refund_date_v1',
 				array('timestamp_utc' => (int) $date_created->getTimestamp())
@@ -296,11 +310,11 @@ final class WCOS_Merge_Financial_Authority {
 		}
 
 		$matches = array();
-		foreach ($order->get_items('tax') as $target_item_id => $target_item) {
+		foreach (self::persisted_items($order, 'tax') as $target_item_id => $target_item) {
 			$target_item_id = absint($target_item_id);
 			if (!$target_item instanceof WC_Order_Item_Tax || !$target_item_id
 				|| (int) $target_item->get_id() !== $target_item_id
-				|| (int) $target_item->get_order_id() !== (int) $order->get_id()
+				|| (int) $target_item->get_order_id('edit') !== (int) $order->get_id()
 				|| 'tax' !== (string) $target_item->get_type()) {
 				self::malformed_refund();
 			}
@@ -351,7 +365,7 @@ final class WCOS_Merge_Financial_Authority {
 				'method_title_fingerprint' => self::digest('merge_refund_shipping_title_v1', array('method_title' => (string) $item->get_method_title('edit'))),
 				'method_id' => (string) $item->get_method_id('edit'),
 				'instance_id' => (string) $item->get_instance_id('edit'),
-				'tax_status' => (string) $item->get_tax_status('edit'),
+				'tax_status' => self::shipping_tax_status($item),
 				'total' => WCOS_Decimal::normalize($item->get_total('edit'), $precision),
 				'total_tax' => WCOS_Decimal::normalize($item->get_total_tax('edit'), $precision),
 				'taxes' => self::refund_item_taxes($item->get_taxes('edit'), array('total'), $precision),
@@ -402,6 +416,27 @@ final class WCOS_Merge_Financial_Authority {
 		}
 
 		self::malformed_refund();
+	}
+
+	private static function shipping_tax_status(WC_Order_Item_Shipping $item) {
+		$shipping_method = WC_Shipping_Zones::get_shipping_method($item->get_instance_id('edit'));
+		return $shipping_method instanceof WC_Shipping_Method ? (string) $shipping_method->tax_status : 'taxable';
+	}
+
+	private static function persisted_items(WC_Abstract_Order $order, $item_type) {
+		$data_store = $order->get_data_store();
+		if (!is_object($data_store) || !is_callable(array($data_store, 'read_items'))) {
+			self::malformed_refund();
+		}
+		try {
+			$items = $data_store->read_items($order, (string) $item_type);
+		} catch (Throwable $throwable) {
+			self::malformed_refund();
+		}
+		if (!is_array($items)) {
+			self::malformed_refund();
+		}
+		return $items;
 	}
 
 	private static function refund_item_taxes($taxes, array $expected_buckets, $precision) {
@@ -493,12 +528,12 @@ final class WCOS_Merge_Financial_Authority {
 
 	private static function participant_fingerprint(array $participant) {
 		unset($participant['participant_financial_fingerprint']);
-		return self::digest('merge_participant_financial_v1', $participant);
+		return self::digest('merge_participant_financial_v2', $participant);
 	}
 
 	private static function pair_fingerprint(array $record) {
 		unset($record['pair_financial_policy_fingerprint']);
-		return self::digest('merge_pair_financial_policy_v1', $record);
+		return self::digest('merge_pair_financial_policy_v2', $record);
 	}
 
 	private static function metadata_fingerprint(array $metadata, $purpose) {

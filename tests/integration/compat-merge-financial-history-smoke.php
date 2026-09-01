@@ -22,6 +22,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 	private static $review_ids = array();
 	private static $operation_ids = array();
 	private static $tax_rate_ids = array();
+	private static $shipping_method_ids = array();
 	private static $operator_id = 0;
 	private static $old_statuses = array();
 	private static $results = array();
@@ -40,6 +41,9 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			self::multi_line_archival_success();
 			self::target_tax_row_distribution_preservation();
 			self::refund_success_matrix();
+			self::refunded_payment_authority();
+			self::refund_projection_drift_authority();
+			self::unfiltered_refund_projection_authority();
 			self::refund_tax_distribution_drift_authority();
 			self::financial_rejection_matrix();
 			self::financial_drift_and_transient_authority();
@@ -116,17 +120,26 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		return $order->get_item($item->get_id());
 	}
 
-	private static function shipping(WC_Order $order, $label, $total, array $taxes = array()) {
+	private static function shipping(WC_Order $order, $label, $total, array $taxes = array(), $instance_id = 6) {
 		$item = new WC_Order_Item_Shipping();
 		$item->set_method_title($label);
 		$item->set_method_id('flat_rate');
-		$item->set_instance_id(6);
+		$item->set_instance_id(absint($instance_id));
 		$item->set_total($total);
 		$item->set_taxes(array('total' => $taxes));
 		$item->add_meta_data('Carrier reference', 'financial-target-shipping', true);
 		$order->add_item($item);
 		$order->save();
 		return $order->get_item($item->get_id());
+	}
+
+	private static function shipping_method($tax_status) {
+		$zone = new WC_Shipping_Zone(0);
+		$instance_id = absint($zone->add_shipping_method('flat_rate'));
+		self::assert($instance_id > 0, 'Shipping-method fixture could not be created.');
+		update_option('woocommerce_flat_rate_' . $instance_id . '_settings', array('tax_status' => (string) $tax_status));
+		self::$shipping_method_ids[] = $instance_id;
+		return $instance_id;
 	}
 
 	private static function fee(WC_Order $order, $label, $total, array $taxes = array()) {
@@ -458,6 +471,456 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		);
 	}
 
+	private static function refunded_payment_authority() {
+		$product = self::product('refunded-payment-authority');
+		$eligible = array();
+		foreach (array(false, true) as $refunded_payment) {
+			$label = $refunded_payment ? 'true' : 'false';
+			$source = self::order('refunded-payment-' . $label . '-source');
+			$target = self::order('refunded-payment-' . $label . '-target', 'on-hold');
+			self::line($source, $product, array('subtotal' => '4.00', 'total' => '0.00'));
+			$existing = self::line($target, $product, array('subtotal' => '10.00', 'total' => '10.00'));
+			$source = self::finalize($source);
+			$target = self::finalize($target);
+			$refund = self::create_refund($target, '1.00', array(), 'Refunded-payment ' . $label . ' authority');
+			$refund = self::set_refunded_payment($refund, $refunded_payment);
+			$source = wc_get_order($source->get_id());
+			$target = wc_get_order($target->get_id());
+			$before = self::target_immutable_snapshot($target, array($existing->get_id()));
+			$before_authority = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, 2);
+			$projection = self::refund_financial_projection($target, $refund);
+			$projection_keys = array_keys($projection);
+			sort($projection_keys, SORT_STRING);
+			$expected_projection_keys = array(
+				'amount', 'cart_tax', 'currency', 'date_created_fingerprint', 'discount_tax', 'discount_total', 'items',
+				'metadata_fingerprint', 'parent_order_id', 'prices_include_tax', 'reason_fingerprint', 'refund_id',
+				'refunded_by', 'refunded_payment', 'shipping_tax', 'shipping_total', 'status', 'total', 'total_tax',
+			);
+			sort($expected_projection_keys, SORT_STRING);
+			self::assert($refunded_payment === $refund->get_refunded_payment('edit')
+				&& $expected_projection_keys === $projection_keys
+				&& WCOS_Merge_Preflight::assert_supported($source, $target, 2)['supported'], 'Persisted refunded_payment=' . $label . ' authority or explicit refund projection was not eligible.');
+
+			$api_events = 0;
+			$api_probe = static function() use (&$api_events) {
+				$api_events++;
+			};
+			$outbound_requests = 0;
+			$http_probe = static function() use (&$outbound_requests) {
+				$outbound_requests++;
+				return new WP_Error('wos_compat_006_refunded_payment_outbound_blocked', 'Unexpected outbound request during Merge.');
+			};
+			add_action('woocommerce_payment_complete', $api_probe, PHP_INT_MAX, 1);
+			add_action('woocommerce_order_refunded', $api_probe, PHP_INT_MAX, 2);
+			add_action('woocommerce_refund_created', $api_probe, PHP_INT_MAX, 2);
+			add_filter('pre_http_request', $http_probe, PHP_INT_MAX, 3);
+			try {
+				list($review, $confirmation, $result) = self::execute_controller($source, $target);
+			} finally {
+				remove_action('woocommerce_payment_complete', $api_probe, PHP_INT_MAX);
+				remove_action('woocommerce_order_refunded', $api_probe, PHP_INT_MAX);
+				remove_action('woocommerce_refund_created', $api_probe, PHP_INT_MAX);
+				remove_filter('pre_http_request', $http_probe, PHP_INT_MAX);
+			}
+			$source = wc_get_order($source->get_id());
+			$target = wc_get_order($target->get_id());
+			$persisted_refund = wc_get_order($refund->get_id());
+			$after_authority = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, 2);
+			self::assert('completed' === $result['status']
+				&& $persisted_refund instanceof WC_Order_Refund
+				&& $refunded_payment === $persisted_refund->get_refunded_payment('edit')
+				&& 0 === $api_events
+				&& 0 === $outbound_requests, 'Merge changed refunded-payment authority or invoked a payment/refund API: ' . $label);
+			self::assert($before === self::target_immutable_snapshot($target, array($existing->get_id()))
+				&& $before_authority['target'] === $after_authority['target'], 'Merge did not preserve refunded_payment=' . $label . ' authority exactly.');
+			$eligible[$label] = true;
+		}
+
+		$drifts = array();
+		foreach (array(
+			array(false, true),
+			array(true, false),
+		) as $direction) {
+			foreach (array('confirm', 'execute', 'direct_gateway') as $path) {
+				$key = ($direction[0] ? 'true' : 'false') . '_to_' . ($direction[1] ? 'true' : 'false') . '_' . $path;
+				self::refunded_payment_drift_case($product, $direction[0], $direction[1], $path);
+				$drifts[$key] = true;
+			}
+		}
+
+		self::$results['refunded_payment_authority'] = array(
+			'cases' => '61-68',
+			'eligible' => $eligible,
+			'explicit_projection_keyset' => true,
+			'drifts' => $drifts,
+			'payment_refund_events' => 0,
+			'pre_lease_gateway_rejection' => true,
+		);
+	}
+
+	private static function refunded_payment_drift_case(WC_Product $product, $from, $to, $path) {
+		$label = ($from ? 'true' : 'false') . '-to-' . ($to ? 'true' : 'false') . '-' . $path;
+		$source = self::order('refunded-payment-drift-' . $label . '-source');
+		$target = self::order('refunded-payment-drift-' . $label . '-target', 'on-hold');
+		self::line($source, $product, array('subtotal' => '3.00', 'total' => '0.00'));
+		self::line($target, $product, array('subtotal' => '10.00', 'total' => '10.00'));
+		$source = self::finalize($source);
+		$target = self::finalize($target);
+		$refund = self::set_refunded_payment(self::create_refund($target, '1.00'), $from);
+		$source = wc_get_order($source->get_id());
+		$target = wc_get_order($target->get_id());
+		$before_authority = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, 2);
+		$controller = WCOS_Merge_Admin_Controller::bootstrap();
+		$request = self::request($source, $target);
+		$review = $controller->review_request($request);
+		self::$review_ids[] = $review['review_id'];
+
+		$confirmation = null;
+		$direct_authority = array();
+		if ('confirm' !== $path) {
+			if ('direct_gateway' === $path) {
+				$report = WCOS_Merge_Preflight::assert_supported($source, $target, 2);
+				$stored_review = WCOS_Merge_Review_Store::create($source, $target, $report, self::$operator_id);
+				self::$review_ids[] = $stored_review['review_id'];
+				$confirmation = WCOS_Merge_Confirmation_Store::create($source, $target, $stored_review['authority'], self::$operator_id);
+				$direct_authority = WCOS_Merge_Confirmation_Store::operation_authority($confirmation['record']);
+			} else {
+				$confirmation = $controller->confirm_request(array_merge($request, array(
+					'review_id' => $review['review_id'],
+					'review_token' => $review['review_token'],
+				)));
+			}
+			self::$operation_ids[$source->get_id()][] = $confirmation['operation_id'];
+		}
+
+		self::set_refunded_payment($refund, $to);
+		$source = wc_get_order($source->get_id());
+		$target = wc_get_order($target->get_id());
+		$after_authority = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, 2);
+		self::assert($before_authority['target']['refund_structure_fingerprint'] !== $after_authority['target']['refund_structure_fingerprint']
+			&& $before_authority['target']['participant_financial_fingerprint'] !== $after_authority['target']['participant_financial_fingerprint'], 'refunded_payment drift did not change financial authority: ' . $label);
+		$source_before = WCOS_Merge_Recovery_Snapshot::participant_signature($source);
+		$target_before = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
+		$before_journals = self::journal_option_count();
+
+		if ('confirm' === $path) {
+			self::expect_transport_one_of(static function() use ($controller, $request, $review) {
+				$controller->confirm_request(array_merge($request, array(
+					'review_id' => $review['review_id'],
+					'review_token' => $review['review_token'],
+				)));
+			}, array('review_target_changed', 'review_pair_changed', 'review_authority_changed'));
+		} elseif ('execute' === $path) {
+			self::expect_transport_one_of(static function() use ($controller, $request, $confirmation) {
+				$controller->execute_request(array_merge($request, array(
+					'operation_id' => $confirmation['operation_id'],
+					'confirmation_token' => $confirmation['confirmation_token'],
+				)));
+			}, array('confirmation_authority_changed'));
+		} else {
+			$lease_events = 0;
+			$lease_probe = static function() use (&$lease_events) {
+				$lease_events++;
+			};
+			$source_lease_hook = 'add_option_wcos_mutation_lock_' . $source->get_id();
+			$target_lease_hook = 'add_option_wcos_mutation_lock_' . $target->get_id();
+			add_action($source_lease_hook, $lease_probe, PHP_INT_MAX, 2);
+			add_action($target_lease_hook, $lease_probe, PHP_INT_MAX, 2);
+			$rejected = false;
+			try {
+				(new WCOS_Mutation_Gateway())->merge($source, $target, $confirmation['operation_id'], 2, $direct_authority);
+			} catch (WCOS_Merge_Adapter_Exception $exception) {
+				$rejected = true;
+			} finally {
+				remove_action($source_lease_hook, $lease_probe, PHP_INT_MAX);
+				remove_action($target_lease_hook, $lease_probe, PHP_INT_MAX);
+			}
+			self::assert($rejected && 0 === $lease_events, 'Direct production gateway did not reject refunded_payment drift before lease: ' . $label);
+		}
+
+		self::assert($before_journals === self::journal_option_count()
+			&& $source_before === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($source->get_id()))
+			&& $target_before === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target->get_id()))
+			&& empty(WCOS_Merge_Participation::authorities(wc_get_order($source->get_id())))
+			&& empty(WCOS_Merge_Participation::authorities(wc_get_order($target->get_id())))
+			&& false === get_option('wcos_mutation_lock_' . $source->get_id(), false)
+			&& false === get_option('wcos_mutation_lock_' . $target->get_id(), false), 'refunded_payment drift crossed the pre-journal participant boundary: ' . $label);
+	}
+
+	private static function set_refunded_payment(WC_Order_Refund $refund, $value) {
+		$refund = wc_get_order($refund->get_id());
+		self::assert($refund instanceof WC_Order_Refund, 'Refunded-payment fixture is unavailable.');
+		$refund->set_refunded_payment((bool) $value);
+		$refund->save();
+		$refund = wc_get_order($refund->get_id());
+		self::assert($refund instanceof WC_Order_Refund
+			&& (bool) $value === $refund->get_refunded_payment('edit'), 'Refunded-payment fixture did not persist canonical authority.');
+		return $refund;
+	}
+
+	private static function refund_projection_drift_authority() {
+		$product = self::product('refund-projection-drift');
+		$drifts = array(
+			'currency' => static function(WC_Order_Refund $refund) {
+				$refund->set_currency('EUR');
+			},
+			'prices_include_tax' => static function(WC_Order_Refund $refund) {
+				$refund->set_prices_include_tax(!$refund->get_prices_include_tax('edit'));
+			},
+			'total' => static function(WC_Order_Refund $refund) {
+				$refund->set_total('-1.01');
+			},
+			'tax_aggregate' => static function(WC_Order_Refund $refund) {
+				$refund->set_cart_tax('-0.01');
+			},
+			'shipping_cart_tax_distribution' => static function(WC_Order_Refund $refund) {
+				$refund->set_cart_tax('-0.01');
+				$refund->set_shipping_tax('0.01');
+			},
+		);
+
+		foreach ($drifts as $kind => $mutate) {
+			$source = self::order('refund-projection-' . $kind . '-source');
+			$target = self::order('refund-projection-' . $kind . '-target', 'on-hold');
+			self::line($source, $product, array('subtotal' => '2.00', 'total' => '0.00'));
+			self::line($target, $product, array('subtotal' => '10.00', 'total' => '10.00'));
+			$source = self::finalize($source);
+			$target = self::finalize($target);
+			$refund = self::create_refund($target, '1.00', array(), 'Refund projection drift ' . $kind);
+			$source = wc_get_order($source->get_id());
+			$target = wc_get_order($target->get_id());
+			$before_authority = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, 2);
+			$controller = WCOS_Merge_Admin_Controller::bootstrap();
+			$request = self::request($source, $target);
+			$review = $controller->review_request($request);
+			self::$review_ids[] = $review['review_id'];
+
+			$refund = wc_get_order($refund->get_id());
+			self::assert($refund instanceof WC_Order_Refund, 'Refund projection drift fixture is unavailable: ' . $kind);
+			$mutate($refund);
+			$refund->save();
+			$refund = wc_get_order($refund->get_id());
+			$target = wc_get_order($target->get_id());
+			$after_authority = null;
+			$malformed_after_drift = false;
+			try {
+				$after_authority = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, 2);
+			} catch (WCOS_Merge_Financial_Authority_Exception $exception) {
+				$malformed_after_drift = 'malformed_refund_authority' === $exception->get_reason();
+			}
+			$authority_changed = $malformed_after_drift || (is_array($after_authority)
+				&& $before_authority['target']['refund_structure_fingerprint'] !== $after_authority['target']['refund_structure_fingerprint']
+				&& $before_authority['target']['participant_financial_fingerprint'] !== $after_authority['target']['participant_financial_fingerprint']);
+			self::assert($authority_changed, 'First-class refund projection drift did not change or invalidate authority: ' . $kind);
+			$source_before = WCOS_Merge_Recovery_Snapshot::participant_signature($source);
+			$target_before = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
+			$before_journals = self::journal_option_count();
+			self::expect_transport_one_of(static function() use ($controller, $request, $review) {
+				$controller->confirm_request(array_merge($request, array(
+					'review_id' => $review['review_id'],
+					'review_token' => $review['review_token'],
+				)));
+			}, array('review_target_changed', 'review_pair_changed', 'review_authority_changed'));
+			self::assert($before_journals === self::journal_option_count()
+				&& $source_before === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($source->get_id()))
+				&& $target_before === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target->get_id()))
+				&& empty(WCOS_Merge_Participation::authorities(wc_get_order($source->get_id())))
+				&& empty(WCOS_Merge_Participation::authorities(wc_get_order($target->get_id()))), 'First-class refund projection drift crossed the pre-journal boundary: ' . $kind);
+		}
+
+		self::$results['refund_projection_drift'] = array(
+			'cases' => '71-75',
+			'drifts' => array_keys($drifts),
+			'confirm_rejected_pre_journal' => true,
+		);
+	}
+
+	private static function refund_financial_projection(WC_Order $order, WC_Order_Refund $refund) {
+		$method = new ReflectionMethod(WCOS_Merge_Financial_Authority::class, 'refund_structure');
+		$method->setAccessible(true);
+		$projection = $method->invoke(null, $order, $refund, 2);
+		self::assert(is_array($projection), 'Refund financial projection could not be inspected.');
+		return $projection;
+	}
+
+	private static function unfiltered_refund_projection_authority() {
+		$product = self::product('unfiltered-refund-projection');
+		$source = self::order('unfiltered-refund-projection-source');
+		$target = self::order('unfiltered-refund-projection-target', 'on-hold');
+		self::line($source, $product, array('subtotal' => '2.00', 'total' => '0.00'));
+		$target_line = self::line($target, $product, array('subtotal' => '10.00', 'total' => '10.00'));
+		$canonical_shipping_method_id = self::shipping_method('none');
+		$filtered_shipping_method_id = self::shipping_method('taxable');
+		$target_shipping = self::shipping($target, 'Unfiltered refund shipping', '3.00', array(), $canonical_shipping_method_id);
+		$source = self::finalize($source);
+		$target = self::finalize($target);
+		$refund = self::create_refund($target, '1.50', array(
+			$target_line->get_id() => array('qty' => 1, 'refund_total' => '1.00', 'refund_tax' => array()),
+			$target_shipping->get_id() => array('qty' => 0, 'refund_total' => '0.50', 'refund_tax' => array()),
+		), 'Unfiltered refund projection authority');
+		$source = wc_get_order($source->get_id());
+		$target = wc_get_order($target->get_id());
+		$refund = wc_get_order($refund->get_id());
+		$refund_lines = $refund->get_items('line_item');
+		$refund_line = reset($refund_lines);
+		self::assert($refund_line instanceof WC_Order_Item_Product, 'Unfiltered refund-item fixture is missing.');
+		$refund_shipping_items = $refund->get_items('shipping');
+		$refund_shipping = reset($refund_shipping_items);
+		self::assert($refund_shipping instanceof WC_Order_Item_Shipping, 'Unfiltered refund-shipping fixture is missing.');
+		$baseline = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, 2);
+		$baseline_projection = self::refund_financial_projection($target, $refund);
+		$baseline_shipping_projection = array_values(array_filter($baseline_projection['items'], static function($item) {
+			return 'shipping' === $item['type'];
+		}));
+		self::assert(1 === count($baseline_shipping_projection)
+			&& 'none' === $baseline_shipping_projection[0]['tax_status'], 'Canonical shipping tax-status fixture was not projected from the persisted instance ID.');
+
+		$currency_filter = static function($value, $object) use ($refund) {
+			return $object instanceof WC_Order_Refund && $object->get_id() === $refund->get_id() ? 'EUR' : $value;
+		};
+		$amount_filter = static function($value, $object) use ($refund) {
+			return $object instanceof WC_Order_Refund && $object->get_id() === $refund->get_id() ? '999.99' : $value;
+		};
+		$payment_filter = static function($value, $object) use ($refund) {
+			return $object instanceof WC_Order_Refund && $object->get_id() === $refund->get_id() ? !$value : $value;
+		};
+		$item_total_filter = static function($value, $object) use ($refund_line) {
+			return $object instanceof WC_Order_Item_Product && $object->get_id() === $refund_line->get_id() ? '-999.99' : $value;
+		};
+		$order_status_filter = static function($value, $object) use ($target) {
+			return $object instanceof WC_Order && $object->get_id() === $target->get_id() ? 'processing' : $value;
+		};
+		$transaction_filter = static function($value, $object) use ($target) {
+			return $object instanceof WC_Order && $object->get_id() === $target->get_id() ? 'filtered-transaction-id' : $value;
+		};
+		$order_item_ids = array_map('absint', array(
+			$target_line->get_id(),
+			$target_shipping->get_id(),
+			$refund_line->get_id(),
+			$refund_shipping->get_id(),
+		));
+		$order_id_filter = static function($value, $object) use ($order_item_ids) {
+			return $object instanceof WC_Order_Item && in_array(absint($object->get_id()), $order_item_ids, true) ? 999999 : $value;
+		};
+		$refunded_item_filter = static function($value, $object) use ($refund_line, $refund_shipping) {
+			return $object instanceof WC_Order_Item
+				&& in_array(absint($object->get_id()), array(absint($refund_line->get_id()), absint($refund_shipping->get_id())), true)
+				? 999999
+				: $value;
+		};
+		$instance_id_filter = static function($value, $object) use ($refund_shipping, $filtered_shipping_method_id) {
+			return $object instanceof WC_Order_Item_Shipping && absint($object->get_id()) === absint($refund_shipping->get_id())
+				? $filtered_shipping_method_id
+				: $value;
+		};
+		$order_items_filter = static function($items, $order) use ($refund) {
+			return $order instanceof WC_Order_Refund && absint($order->get_id()) === absint($refund->get_id()) ? array() : $items;
+		};
+		add_filter('woocommerce_order_refund_get_currency', $currency_filter, PHP_INT_MAX, 2);
+		add_filter('woocommerce_order_refund_get_amount', $amount_filter, PHP_INT_MAX, 2);
+		add_filter('woocommerce_order_refund_get_refunded_payment', $payment_filter, PHP_INT_MAX, 2);
+		add_filter('woocommerce_order_item_get_total', $item_total_filter, PHP_INT_MAX, 2);
+		add_filter('woocommerce_order_get_status', $order_status_filter, PHP_INT_MAX, 2);
+		add_filter('woocommerce_order_get_transaction_id', $transaction_filter, PHP_INT_MAX, 2);
+		add_filter('woocommerce_order_item_get_order_id', $order_id_filter, PHP_INT_MAX, 2);
+		add_filter('woocommerce_order_item_get__refunded_item_id', $refunded_item_filter, PHP_INT_MAX, 2);
+		add_filter('woocommerce_order_item_get_instance_id', $instance_id_filter, PHP_INT_MAX, 2);
+		add_filter('woocommerce_order_get_items', $order_items_filter, PHP_INT_MAX, 2);
+		try {
+			$filtered_refund = wc_get_order($refund->get_id());
+			$filtered_line = $filtered_refund->get_item($refund_line->get_id());
+			$filtered_shipping = $filtered_refund->get_item($refund_shipping->get_id());
+			$filtered_target = wc_get_order($target->get_id());
+			self::assert('EUR' === $filtered_refund->get_currency()
+				&& '999.99' === WCOS_Decimal::normalize($filtered_refund->get_amount(), 2)
+				&& $filtered_refund->get_refunded_payment() !== $filtered_refund->get_refunded_payment('edit')
+				&& '-999.99' === WCOS_Decimal::normalize($filtered_line->get_total(), 2)
+				&& 'processing' === $filtered_target->get_status()
+				&& 'filtered-transaction-id' === $filtered_target->get_transaction_id()
+				&& 999999 === (int) $filtered_line->get_order_id()
+				&& (int) $refund->get_id() === (int) $filtered_line->get_order_id('edit')
+				&& 999999 === (int) $filtered_line->get_meta('_refunded_item_id', true)
+				&& (int) $target_line->get_id() === (int) $filtered_line->get_meta('_refunded_item_id', true, 'edit')
+				&& $filtered_shipping_method_id === absint($filtered_shipping->get_instance_id())
+				&& $canonical_shipping_method_id === absint($filtered_shipping->get_instance_id('edit'))
+				&& 'taxable' === (string) $filtered_shipping->get_tax_status('edit')
+				&& array() === $filtered_refund->get_items(array('line_item', 'shipping', 'fee', 'tax')), 'Representative view filters were not active for the unfiltered-authority regression.');
+			$with_filters = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, 2);
+			self::assert($baseline === $with_filters, 'Presentation filters changed canonical order, refund, or refund-item authority.');
+		} finally {
+			remove_filter('woocommerce_order_refund_get_currency', $currency_filter, PHP_INT_MAX);
+			remove_filter('woocommerce_order_refund_get_amount', $amount_filter, PHP_INT_MAX);
+			remove_filter('woocommerce_order_refund_get_refunded_payment', $payment_filter, PHP_INT_MAX);
+			remove_filter('woocommerce_order_item_get_total', $item_total_filter, PHP_INT_MAX);
+			remove_filter('woocommerce_order_get_status', $order_status_filter, PHP_INT_MAX);
+			remove_filter('woocommerce_order_get_transaction_id', $transaction_filter, PHP_INT_MAX);
+			remove_filter('woocommerce_order_item_get_order_id', $order_id_filter, PHP_INT_MAX);
+			remove_filter('woocommerce_order_item_get__refunded_item_id', $refunded_item_filter, PHP_INT_MAX);
+			remove_filter('woocommerce_order_item_get_instance_id', $instance_id_filter, PHP_INT_MAX);
+			remove_filter('woocommerce_order_get_items', $order_items_filter, PHP_INT_MAX);
+		}
+
+		$date_source = self::order('masked-refund-date-source');
+		$date_target = self::order('masked-refund-date-target', 'on-hold');
+		self::line($date_source, $product, array('subtotal' => '2.00', 'total' => '0.00'));
+		self::line($date_target, $product, array('subtotal' => '10.00', 'total' => '10.00'));
+		$date_source = self::finalize($date_source);
+		$date_target = self::finalize($date_target);
+		$date_refund = self::create_refund($date_target, '1.00', array(), 'Masked refund date authority');
+		$date_source = wc_get_order($date_source->get_id());
+		$date_target = wc_get_order($date_target->get_id());
+		$date_refund = wc_get_order($date_refund->get_id());
+		$old_date = $date_refund->get_date_created('edit');
+		self::assert($old_date instanceof WC_DateTime, 'Masked refund-date fixture lacks a persisted date.');
+		$old_timestamp = (int) $old_date->getTimestamp();
+		$before_authority = WCOS_Merge_Financial_Authority::freeze_pair($date_source, $date_target, 2);
+		$controller = WCOS_Merge_Admin_Controller::bootstrap();
+		$request = self::request($date_source, $date_target);
+		$review = $controller->review_request($request);
+		self::$review_ids[] = $review['review_id'];
+		$date_filter = static function($value, $object) use ($date_refund, $old_date) {
+			return $object instanceof WC_Order_Refund && $object->get_id() === $date_refund->get_id() ? clone $old_date : $value;
+		};
+		add_filter('woocommerce_order_refund_get_date_created', $date_filter, PHP_INT_MAX, 2);
+		try {
+			$date_refund = wc_get_order($date_refund->get_id());
+			$date_refund->set_date_created($old_timestamp + HOUR_IN_SECONDS);
+			$date_refund->save();
+			$date_refund = wc_get_order($date_refund->get_id());
+			$date_target = wc_get_order($date_target->get_id());
+			self::assert($old_timestamp + HOUR_IN_SECONDS === (int) $date_refund->get_date_created('edit')->getTimestamp()
+				&& $old_timestamp === (int) $date_refund->get_date_created()->getTimestamp(), 'Refund date filter did not mask the persisted drift in view context.');
+			$after_authority = WCOS_Merge_Financial_Authority::freeze_pair($date_source, $date_target, 2);
+			self::assert($before_authority['target']['refund_structure_fingerprint'] !== $after_authority['target']['refund_structure_fingerprint'], 'Masked persisted refund date drift did not change canonical authority.');
+			$before_journals = self::journal_option_count();
+			self::expect_transport_one_of(static function() use ($controller, $request, $review) {
+				$controller->confirm_request(array_merge($request, array(
+					'review_id' => $review['review_id'],
+					'review_token' => $review['review_token'],
+				)));
+			}, array('review_target_changed', 'review_pair_changed', 'review_authority_changed'));
+			self::assert($before_journals === self::journal_option_count()
+				&& empty(WCOS_Merge_Participation::authorities(wc_get_order($date_source->get_id())))
+				&& empty(WCOS_Merge_Participation::authorities(wc_get_order($date_target->get_id())))
+				&& false === get_option('wcos_mutation_lock_' . $date_source->get_id(), false)
+				&& false === get_option('wcos_mutation_lock_' . $date_target->get_id(), false), 'Masked refund date drift crossed the pre-lease or pre-journal boundary.');
+		} finally {
+			remove_filter('woocommerce_order_refund_get_date_created', $date_filter, PHP_INT_MAX);
+		}
+
+		self::$results['unfiltered_refund_projection'] = array(
+			'cases' => '76-78',
+			'order_view_filters_ignored' => true,
+			'refund_view_filters_ignored' => true,
+			'refund_item_view_filters_ignored' => true,
+			'refund_item_ownership_filters_ignored' => true,
+			'refund_reference_meta_filters_ignored' => true,
+			'shipping_instance_filters_ignored' => true,
+			'refund_item_collection_filters_ignored' => true,
+			'masked_date_drift_rejected_pre_lease' => true,
+		);
+	}
+
 	private static function refund_tax_distribution_drift_authority() {
 		$product = self::product('refund-tax-distribution-drift');
 		$source = self::order('refund-tax-distribution-drift-source');
@@ -511,6 +974,29 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		$review = $controller->review_request($request);
 		self::$review_ids[] = $review['review_id'];
 		$before_drift = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, 2);
+		$tax_total_filter = static function($value, $object) use ($refund_tax) {
+			return $object instanceof WC_Order_Item_Tax && $object->get_id() === $refund_tax->get_id() ? '-999.99' : $value;
+		};
+		$tax_collection_filter = static function($items, $order, $types) use ($target, $target_tax) {
+			if ($order instanceof WC_Order && absint($order->get_id()) === absint($target->get_id())
+				&& in_array('tax', (array) $types, true)) {
+				$items[999999] = $target_tax;
+			}
+			return $items;
+		};
+		add_filter('woocommerce_order_item_get_tax_total', $tax_total_filter, PHP_INT_MAX, 2);
+		add_filter('woocommerce_order_get_items', $tax_collection_filter, PHP_INT_MAX, 3);
+		try {
+			$filtered_refund_tax = wc_get_order($refund->get_id())->get_item($refund_tax->get_id());
+			$filtered_target_taxes = wc_get_order($target->get_id())->get_items('tax');
+			self::assert('-999.99' === WCOS_Decimal::normalize($filtered_refund_tax->get_tax_total(), 2)
+				&& '-0.13' === WCOS_Decimal::normalize($filtered_refund_tax->get_tax_total('edit'), 2)
+				&& isset($filtered_target_taxes[999999]), 'Refund-tax presentation filters were not active for the canonical-authority regression.');
+			self::assert($before_drift === WCOS_Merge_Financial_Authority::freeze_pair($source, $target, 2), 'Refund-tax presentation filter changed canonical authority.');
+		} finally {
+			remove_filter('woocommerce_order_item_get_tax_total', $tax_total_filter, PHP_INT_MAX);
+			remove_filter('woocommerce_order_get_items', $tax_collection_filter, PHP_INT_MAX);
+		}
 		$source_before = WCOS_Merge_Recovery_Snapshot::participant_signature($source);
 		$before_journals = self::journal_option_count();
 
@@ -614,6 +1100,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			'cases' => '60',
 			'native_product_shipping_fee_refund' => true,
 			'native_tax_reference_by_rate' => true,
+			'target_tax_collection_filters_ignored' => true,
 			'aggregate_refund_unchanged' => true,
 			'confirm_rejected' => true,
 			'production_gateway_rejected_pre_journal' => true,
@@ -938,11 +1425,44 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		}
 		self::assert($stale_confirmation_rejected, 'A pre-006 Confirmation schema minted current financial authority.');
 
+		$pre_closure_review = WCOS_Merge_Review_Store::create($source, wc_get_order($target->get_id()), $report, self::$operator_id);
+		self::$review_ids[] = $pre_closure_review['review_id'];
+		$pre_closure_review_key = 'wcos_merge_review_' . hash('sha256', sanitize_key($pre_closure_review['review_id']));
+		$pre_closure_review_record = get_transient($pre_closure_review_key);
+		$pre_closure_review_record['authority']['plan']['financial_authority']['schema_version'] = 1;
+		$pre_closure_review_record['authority']['plan']['financial_authority']['policy_version'] = 1;
+		set_transient($pre_closure_review_key, $pre_closure_review_record, WCOS_Merge_Review_Store::TTL);
+		$pre_closure_review_rejected = false;
+		try {
+			WCOS_Merge_Review_Store::verify($source, wc_get_order($target->get_id()), $pre_closure_review['review_id'], $pre_closure_review['review_token'], self::$operator_id);
+		} catch (WCOS_Merge_Review_Exception $exception) {
+			$pre_closure_review_rejected = in_array($exception->get_reason(), array('review_invalid', 'authority_changed'), true);
+		}
+		self::assert($pre_closure_review_rejected, 'A pre-closure WOS-COMPAT-006 Review authority minted a schema-v2 refund operation.');
+
+		$pre_closure_confirmation_review = WCOS_Merge_Review_Store::create($source, wc_get_order($target->get_id()), $report, self::$operator_id);
+		self::$review_ids[] = $pre_closure_confirmation_review['review_id'];
+		$pre_closure_confirmation = WCOS_Merge_Confirmation_Store::create($source, wc_get_order($target->get_id()), $pre_closure_confirmation_review['authority'], self::$operator_id);
+		self::$operation_ids[$source->get_id()][] = $pre_closure_confirmation['operation_id'];
+		$pre_closure_confirmation_key = 'wcos_merge_confirm_' . hash('sha256', sanitize_key($pre_closure_confirmation['operation_id']));
+		$pre_closure_confirmation_record = get_transient($pre_closure_confirmation_key);
+		$pre_closure_confirmation_record['plan']['financial_authority']['schema_version'] = 1;
+		$pre_closure_confirmation_record['plan']['financial_authority']['policy_version'] = 1;
+		set_transient($pre_closure_confirmation_key, $pre_closure_confirmation_record, WCOS_Merge_Confirmation_Store::TTL);
+		$pre_closure_confirmation_rejected = false;
+		try {
+			WCOS_Merge_Confirmation_Store::verify($source, wc_get_order($target->get_id()), $pre_closure_confirmation['operation_id'], $pre_closure_confirmation['confirmation_token'], self::$operator_id);
+		} catch (WCOS_Merge_Confirmation_Exception $exception) {
+			$pre_closure_confirmation_rejected = in_array($exception->get_reason(), array('authority_incomplete', 'authority_changed'), true);
+		}
+		self::assert($pre_closure_confirmation_rejected, 'A pre-closure WOS-COMPAT-006 Confirmation authority minted a schema-v2 refund operation.');
+
 		self::$results['drift_and_transient'] = array(
-			'cases' => '37-41,60',
+			'cases' => '37-41,60,69-70',
 			'drifts' => $drifts,
 			'fresh_review_required' => true,
 			'pre_006_transient_rejected' => true,
+			'pre_closure_transient_rejected' => true,
 		);
 	}
 
@@ -1290,7 +1810,9 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			&& WCOS_Merge_Journal_Context::SCHEMA_VERSION === 5
 			&& WCOS_Merge_Journal_Context::PREVIOUS_SCHEMA_VERSION === 4
 			&& WCOS_Merge_Order_Service::POLICY_VERSION === 3
-			&& WCOS_Merge_Order_Service::PREVIOUS_POLICY_VERSION === 2, 'Merge durable version tuple is incomplete.');
+			&& WCOS_Merge_Order_Service::PREVIOUS_POLICY_VERSION === 2
+			&& WCOS_Merge_Financial_Authority::SCHEMA_VERSION === 2
+			&& WCOS_Merge_Financial_Authority::POLICY_VERSION === 2, 'Merge durable version tuple or refund-authority namespace is incomplete.');
 		foreach (array(
 			WCOS_Feature_Gates::SPLIT,
 			WCOS_Feature_Gates::DUPLICATE,
@@ -1323,7 +1845,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 	}
 
 	private static function target_immutable_snapshot(WC_Order $target, array $existing_line_ids) {
-		$date_paid = $target->get_date_paid();
+		$date_paid = $target->get_date_paid('edit');
 		$refunds = array();
 		foreach ($target->get_refunds() as $refund) {
 			$refunds[(int) $refund->get_id()] = self::order_item_collection_snapshot($refund);
@@ -1336,12 +1858,12 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		}
 		ksort($existing_lines, SORT_NUMERIC);
 		return array(
-			'status' => (string) $target->get_status(),
-			'is_paid' => (bool) $target->is_paid(),
+			'status' => (string) $target->get_status('edit'),
+			'is_paid' => in_array((string) $target->get_status('edit'), wc_get_is_paid_statuses(), true),
 			'date_paid' => null === $date_paid ? null : (int) $date_paid->getTimestamp(),
-			'transaction_id' => (string) $target->get_transaction_id(),
-			'payment_method' => (string) $target->get_payment_method(),
-			'payment_method_title' => (string) $target->get_payment_method_title(),
+			'transaction_id' => (string) $target->get_transaction_id('edit'),
+			'payment_method' => (string) $target->get_payment_method('edit'),
+			'payment_method_title' => (string) $target->get_payment_method_title('edit'),
 			'total' => WCOS_Decimal::normalize($target->get_total(), 2),
 			'total_tax' => WCOS_Decimal::normalize($target->get_total_tax(), 2),
 			'total_refunded' => WCOS_Decimal::normalize($target->get_total_refunded(), 2),
@@ -1355,13 +1877,23 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 	}
 
 	private static function order_item_collection_snapshot(WC_Abstract_Order $order) {
-		$date = $order->get_date_created();
+		$date = $order->get_date_created('edit');
 		$result = array(
 			'id' => (int) $order->get_id(),
 			'parent_id' => (int) $order->get_parent_id(),
 			'status' => (string) $order->get_status(),
+			'currency' => (string) $order->get_currency('edit'),
+			'prices_include_tax' => (bool) $order->get_prices_include_tax('edit'),
 			'amount' => $order instanceof WC_Order_Refund ? (string) $order->get_amount() : '',
+			'total' => (string) $order->get_total('edit'),
+			'discount_total' => (string) $order->get_discount_total('edit'),
+			'discount_tax' => (string) $order->get_discount_tax('edit'),
+			'shipping_total' => (string) $order->get_shipping_total('edit'),
+			'shipping_tax' => (string) $order->get_shipping_tax('edit'),
+			'cart_tax' => (string) $order->get_cart_tax('edit'),
+			'total_tax' => (string) $order->get_total_tax('edit'),
 			'reason' => $order instanceof WC_Order_Refund ? (string) $order->get_reason() : '',
+			'refunded_payment' => $order instanceof WC_Order_Refund ? (bool) $order->get_refunded_payment('edit') : false,
 			'date' => null === $date ? null : (int) $date->getTimestamp(),
 			'meta' => self::meta_snapshot($order->get_meta_data()),
 			'items' => array(),
@@ -1473,6 +2005,11 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		}
 		foreach (array_reverse(array_values(array_unique(self::$tax_rate_ids))) as $tax_rate_id) {
 			WC_Tax::_delete_tax_rate($tax_rate_id);
+		}
+		$zone = new WC_Shipping_Zone(0);
+		foreach (array_reverse(array_values(array_unique(self::$shipping_method_ids))) as $instance_id) {
+			$zone->delete_shipping_method($instance_id);
+			delete_option('woocommerce_flat_rate_' . $instance_id . '_settings');
 		}
 	}
 

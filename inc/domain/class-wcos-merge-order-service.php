@@ -25,6 +25,15 @@ final class WCOS_Merge_Order_Service {
 		if (is_array($existing)) {
 			return $this->replay_existing($source_id, $target_id, $operation_id, $existing);
 		}
+		if (!empty($confirmation_authority)) {
+			$this->assert_confirmation_current_before_lease(
+				$confirmation_authority,
+				$operation_id,
+				$source_id,
+				$target_id,
+				$precision
+			);
+		}
 
 		$lease = WCOS_Multi_Order_Lease::acquire(array($source_id, $target_id), $operation_id);
 		if (!$lease instanceof WCOS_Multi_Order_Lease) {
@@ -430,6 +439,32 @@ final class WCOS_Merge_Order_Service {
 			ksort($result[$bucket], SORT_NUMERIC);
 		}
 		return $result;
+	}
+
+	private function assert_confirmation_current_before_lease(array $authority, $operation_id, $source_id, $target_id, $precision) {
+		$source = $this->load_order($source_id, 'source');
+		$target = $this->load_order($target_id, 'target');
+		$report = WCOS_Merge_Preflight::assert_supported($source, $target, $precision);
+		$plan = WCOS_Merge_Plan::build($source, $target, $precision);
+		if (!hash_equals(WCOS_Merge_Plan::fingerprint($report['plan']), WCOS_Merge_Plan::fingerprint($plan))) {
+			throw new RuntimeException(__('The server-owned Merge plan changed during confirmation revalidation.', 'wc-order-splitter'));
+		}
+		$context = WCOS_Merge_Journal_Context::create_executable(
+			$source,
+			$target,
+			$plan,
+			$report['context_authority'],
+			$precision
+		);
+		$this->assert_confirmation_authority(
+			$authority,
+			$operation_id,
+			$source_id,
+			$target_id,
+			$precision,
+			$plan,
+			$context['merge_pair']
+		);
 	}
 
 	private function assert_confirmation_authority(array $authority, $operation_id, $source_id, $target_id, $precision, array $plan, array $pair) {
