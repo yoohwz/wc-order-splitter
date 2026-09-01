@@ -221,6 +221,7 @@ jobs:
           grep -Fq 'class-wcos-split-strategy-admin-controller.php' inc/cores/script.php
           grep -Fq 'WCOS_Split_Strategy_Admin_Controller::bootstrap();' inc/cores/script.php
           grep -Fq 'class-wcos-multi-order-lease.php' inc/cores/script.php
+          grep -Fq 'class-wcos-merge-financial-authority.php' inc/cores/script.php
           grep -Fq 'class-wcos-merge-plan.php' inc/cores/script.php
           grep -Fq 'class-wcos-merge-context-signature.php' inc/cores/script.php
           grep -Fq 'class-wcos-merge-journal-context.php' inc/cores/script.php
@@ -588,6 +589,9 @@ jobs:
 
       - name: Verify 1.4.11 Merge ordinary commercial compatibility
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/compat-merge-commercial-compatibility-smoke.php
+
+      - name: Verify 1.4.11 Merge paid and refund financial boundary
+        run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/compat-merge-financial-history-smoke.php
 
       - name: Verify Merge recovery and retirement evidence
         run: npx wp-env run cli wp eval-file wp-content/plugins/wc-order-splitter/tests/integration/merge-recovery-foundation-smoke.php

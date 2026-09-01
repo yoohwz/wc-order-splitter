@@ -138,6 +138,11 @@
 			addSummary('Projected active-target historical aggregate', String(summary.projected_active_target_total || '0') + ' ' + String(summary.currency || ''));
 			addSummary('Source commercial history', (summary.source_shipping_retained ? 'shipping; ' : '') + (summary.source_fees_retained ? 'fees; ' : '') + (summary.source_coupons_retained ? 'coupons; ' : '') + 'retained on archived source');
 			addSummary('Target authority', 'Status, customer/address/payment context, shipping, fees and coupons stay with target');
+			if (summary.target_financial_history_retained) {
+				addSummary('Financial-history boundary', String(summary.settlement_neutral_line_count || 0) + ' settlement-neutral source lines · fresh target lines only');
+				addSummary('Target settlement/refund authority', 'Transaction, paid date, payment context, status, refunds, payable total and actual tax stay unchanged');
+				addSummary('Payment/refund operations', 'No payment or refund API will run');
+			}
 			addSummary('Price precision', String(summary.price_precision || 0));
 			addSummary('Retirement policy', String(summary.retirement_policy || 'non_force_trash_archive'));
 			reviewBox.hidden = false;

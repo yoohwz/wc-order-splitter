@@ -90,6 +90,7 @@ assert_contains "$ci_workflow" 'baseline_tree=75140a414cd637d134f860d8a70e7f92cb
 assert_contains "$ci_workflow" 'compat-legacy-1-4-11-create.php'
 assert_contains "$ci_workflow" 'compat-legacy-1-4-11-seal.php'
 assert_contains "$ci_workflow" 'compat-legacy-return-upgrade-smoke.php'
+assert_contains "$ci_workflow" 'compat-merge-financial-history-smoke.php'
 assert_before "$ci_workflow" 'Create a genuine Split fixture with exact public 1.4.11' 'Activate Order Splitter after the in-place fixture upgrade'
 assert_before "$ci_workflow" 'Remove exact public 1.4.11 before current runtime validation' 'Activate Order Splitter after the in-place fixture upgrade'
 assert_contains "$ci_workflow" 'wp plugin delete wcos-legacy-1-4-11'

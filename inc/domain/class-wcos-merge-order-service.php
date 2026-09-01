@@ -8,7 +8,8 @@ defined('ABSPATH') || exit;
 final class WCOS_Merge_Order_Service {
 
 	const TYPE = 'merge';
-	const POLICY_VERSION = 2;
+	const POLICY_VERSION = 3;
+	const PREVIOUS_POLICY_VERSION = 2;
 	const LEGACY_POLICY_VERSION = 1;
 
 	public function merge(WC_Order $source, WC_Order $target, $operation_id, $precision, array $confirmation_authority = array()) {
@@ -146,11 +147,12 @@ final class WCOS_Merge_Order_Service {
 				$precision,
 				true,
 				WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE,
-				true
+				'import_source_product_rates' === sanitize_key(isset($plan['tax_template_policy']) ? (string) $plan['tax_template_policy'] : '')
 			);
 			WCOS_Order_Totals_Rebuilder::rebuild($target, $precision);
 			$target->save();
 			$target = $this->load_order($target_id, 'target');
+			WCOS_Merge_Financial_Authority::assert_current($source, $target, $plan['financial_authority']);
 			$target_tax_item_ids = array_values(array_diff(array_map('intval', array_keys($target->get_items('tax'))), $tax_ids_before));
 			sort($target_tax_item_ids, SORT_NUMERIC);
 			$this->event('after_target_money_tax_persistence', $source, $target, $operation_id);

@@ -17,7 +17,8 @@ final class WCOS_Merge_Confirmation_Exception extends RuntimeException {
 
 /** Temporary Merge authority until the source-keyed operation journal exists. */
 final class WCOS_Merge_Confirmation_Store {
-	const SCHEMA_VERSION = 1;
+	const SCHEMA_VERSION = 2;
+	const PREVIOUS_SCHEMA_VERSION = 1;
 	const TTL = 1800;
 
 	public static function create(WC_Order $source, WC_Order $target, array $review_authority, $user_id) {
@@ -168,7 +169,7 @@ final class WCOS_Merge_Confirmation_Store {
 			|| absint($pair['target_order_id']) !== $target->get_id()
 			|| sanitize_key(isset($journal['operation_id']) ? (string) $journal['operation_id'] : '') !== $operation_id
 			|| absint(isset($confirmed['operator_user_id']) ? $confirmed['operator_user_id'] : 0) !== $user_id
-			|| (int) $confirmed['confirmation_schema_version'] !== self::SCHEMA_VERSION
+			|| !in_array((int) $confirmed['confirmation_schema_version'], array(self::PREVIOUS_SCHEMA_VERSION, self::SCHEMA_VERSION), true)
 			|| !WCOS_Merge_Journal_Context::confirmation_versions_match_pair($confirmed, $pair)) {
 			throw new WCOS_Merge_Confirmation_Exception('journal_mismatch', __('The durable Merge journal does not match this operation, operator, and participant pair.', 'wc-order-splitter'));
 		}

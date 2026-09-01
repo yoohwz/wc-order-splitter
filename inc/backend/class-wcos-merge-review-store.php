@@ -17,7 +17,7 @@ final class WCOS_Merge_Review_Exception extends RuntimeException {
 
 /** Short-lived, server-owned authority for one Merge Review. */
 final class WCOS_Merge_Review_Store {
-	const SCHEMA_VERSION = 1;
+	const SCHEMA_VERSION = 2;
 	const TTL = 900;
 
 	public static function create(WC_Order $source, WC_Order $target, array $report, $user_id) {
@@ -121,6 +121,7 @@ final class WCOS_Merge_Review_Store {
 			'pair_fingerprint' => $context['merge_pair']['pair_fingerprint'],
 			'context_authority' => $pair['context_authority'],
 			'context_authority_fingerprint' => $pair['context_authority_fingerprint'],
+			'financial_authority_fingerprint' => $pair['financial_authority_fingerprint'],
 			'price_precision' => $precision,
 			'merge_service_policy_version' => (int) WCOS_Merge_Order_Service::POLICY_VERSION,
 			'preflight_policy_version' => (int) $pair['preflight_policy_version'],
@@ -144,7 +145,7 @@ final class WCOS_Merge_Review_Store {
 			throw new WCOS_Merge_Review_Exception('pair_changed', __('The Merge pair is no longer supported. Review it again.', 'wc-order-splitter'));
 		}
 		$current = self::authority_from_report($report, $source->get_id(), $target->get_id());
-		foreach (array('source_signature', 'target_signature', 'plan_fingerprint', 'pair_fingerprint', 'context_authority_fingerprint', 'price_precision', 'merge_service_policy_version', 'preflight_policy_version', 'plan_schema_version', 'context_signature_version', 'retirement_policy_schema_version', 'retirement_policy') as $field) {
+		foreach (array('source_signature', 'target_signature', 'plan_fingerprint', 'pair_fingerprint', 'context_authority_fingerprint', 'financial_authority_fingerprint', 'price_precision', 'merge_service_policy_version', 'preflight_policy_version', 'plan_schema_version', 'context_signature_version', 'retirement_policy_schema_version', 'retirement_policy') as $field) {
 			if (!array_key_exists($field, $authority) || (string) $authority[$field] !== (string) $current[$field]) {
 				$reason = 'source_signature' === $field ? 'source_changed' : ('target_signature' === $field ? 'target_changed' : 'authority_changed');
 				throw new WCOS_Merge_Review_Exception($reason, __('The Merge pair authority changed after Review. Review the pair again.', 'wc-order-splitter'));
@@ -158,7 +159,7 @@ final class WCOS_Merge_Review_Store {
 	private static function assert_authority_complete(array $authority) {
 		$required = array(
 			'source_order_id', 'target_order_id', 'source_signature', 'target_signature', 'plan', 'plan_fingerprint',
-			'pair_fingerprint', 'context_authority', 'context_authority_fingerprint', 'price_precision',
+			'pair_fingerprint', 'context_authority', 'context_authority_fingerprint', 'financial_authority_fingerprint', 'price_precision',
 			'merge_service_policy_version', 'preflight_policy_version', 'plan_schema_version', 'context_signature_version',
 			'retirement_policy_schema_version', 'retirement_policy',
 		);
@@ -172,7 +173,8 @@ final class WCOS_Merge_Review_Store {
 			|| !is_array($authority['plan']) || !is_array($authority['context_authority'])
 			|| !self::is_fingerprint($authority['source_signature']) || !self::is_fingerprint($authority['target_signature'])
 			|| !self::is_fingerprint($authority['plan_fingerprint']) || !self::is_fingerprint($authority['pair_fingerprint'])
-			|| !self::is_fingerprint($authority['context_authority_fingerprint'])) {
+			|| !self::is_fingerprint($authority['context_authority_fingerprint'])
+			|| !self::is_fingerprint($authority['financial_authority_fingerprint'])) {
 			throw new WCOS_Merge_Review_Exception('review_invalid', __('The stored Merge Review authority is malformed.', 'wc-order-splitter'));
 		}
 		try {

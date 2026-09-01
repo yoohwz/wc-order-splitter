@@ -25,6 +25,9 @@ final class WCOS_Merge_Recovery_Snapshot {
 			|| !hash_equals($pair['target_signature'], WCOS_Order_Contract_Snapshot::source_signature($target))) {
 			throw new RuntimeException(__('Merge participants changed before recovery state could be captured.', 'wc-order-splitter'));
 		}
+		if (isset($pair['financial_authority']) && is_array($pair['financial_authority'])) {
+			WCOS_Merge_Financial_Authority::assert_current($source, $target, $pair['financial_authority']);
+		}
 
 		$snapshot = array(
 			'schema_version' => self::SCHEMA_VERSION,
@@ -49,7 +52,12 @@ final class WCOS_Merge_Recovery_Snapshot {
 			$snapshot['active_ownership_before_signature'] = self::contract_signature('merge_active_economic_v1', $source->get_id(), $snapshot['active_economic_contract_before']);
 		} else {
 			$snapshot['active_economic_contract_before'] = WCOS_Merge_Commercial_Policy::expected_target_contract($source, $target, $pair['price_precision']);
-			$snapshot['active_ownership_before_signature'] = WCOS_Merge_Commercial_Policy::expected_target_signature($source, $target, $pair['price_precision']);
+			$snapshot['active_ownership_before_signature'] = WCOS_Merge_Commercial_Policy::expected_target_signature(
+				$source,
+				$target,
+				$pair['price_precision'],
+				$pair['preflight_policy_version']
+			);
 		}
 		$snapshot['recovery_fingerprint'] = self::fingerprint($snapshot);
 		return $snapshot;
@@ -83,9 +91,7 @@ final class WCOS_Merge_Recovery_Snapshot {
 		self::assert_participant_state($snapshot['target'], absint($snapshot['target_order_id']));
 		self::assert_immutable_guard($snapshot['source_immutable_context'], absint($snapshot['source_order_id']));
 		self::assert_immutable_guard($snapshot['target_immutable_context'], absint($snapshot['target_order_id']));
-		$active_namespace = WCOS_Merge_Preflight::LEGACY_POLICY_VERSION === (int) $snapshot['preflight_policy_version']
-			? 'merge_active_economic_v1'
-			: 'merge_ordinary_active_economic_v1';
+		$active_namespace = self::active_economic_namespace($snapshot['preflight_policy_version']);
 		if (!hash_equals((string) $snapshot['archive_source_signature_before'], self::contract_signature('merge_archive_commercial_v1', $snapshot['source_order_id'], $snapshot['archive_source_contract_before']))
 			|| !hash_equals((string) $snapshot['active_ownership_before_signature'], self::contract_signature($active_namespace, $snapshot['source_order_id'], $snapshot['active_economic_contract_before']))) {
 			throw new RuntimeException(__('The Merge archive or active-ownership snapshot authority is invalid.', 'wc-order-splitter'));
@@ -175,7 +181,12 @@ final class WCOS_Merge_Recovery_Snapshot {
 		self::assert_valid($snapshot);
 		$actual = WCOS_Merge_Preflight::LEGACY_POLICY_VERSION === (int) $snapshot['preflight_policy_version']
 			? self::active_economic_signature(array($target), $snapshot['price_precision'], $snapshot['source_order_id'])
-			: WCOS_Merge_Commercial_Policy::target_signature($target, $snapshot['price_precision'], $snapshot['source_order_id']);
+			: WCOS_Merge_Commercial_Policy::target_signature(
+				$target,
+				$snapshot['price_precision'],
+				$snapshot['source_order_id'],
+				$snapshot['preflight_policy_version']
+			);
 		WCOS_Merge_Retirement_Policy::assert_active_ownership_conserved(
 			$snapshot['active_ownership_before_signature'],
 			$actual
@@ -201,6 +212,24 @@ final class WCOS_Merge_Recovery_Snapshot {
 		}
 		WCOS_Merge_Context_Signature::assert_current($source, $pair['context_authority'], 'source');
 		WCOS_Merge_Context_Signature::assert_current($target, $pair['context_authority'], 'target');
+		if (isset($pair['financial_authority']) && is_array($pair['financial_authority'])) {
+			$state = WCOS_Merge_Recovery_State_Graph::assert_record($record);
+			$allow_source_retired = in_array($state, array(
+				WCOS_Merge_Recovery_State_Graph::SOURCE_RETIRED,
+				WCOS_Merge_Recovery_State_Graph::SOURCE_RELATION,
+				WCOS_Merge_Recovery_State_Graph::RELATIONS_COMPLETE,
+				WCOS_Merge_Recovery_State_Graph::VERIFIED,
+				WCOS_Merge_Recovery_State_Graph::COMMITTED,
+				WCOS_Merge_Recovery_State_Graph::COMPLETED,
+				WCOS_Merge_Recovery_State_Graph::COMPENSATING,
+			), true);
+			WCOS_Merge_Financial_Authority::assert_current(
+				$source,
+				$target,
+				$pair['financial_authority'],
+				$allow_source_retired
+			);
+		}
 		self::assert_immutable_participant($snapshot['source_immutable_context'], $source, array(), array());
 		self::assert_immutable_participant($snapshot['target_immutable_context'], $target, $target_item_ids, $target_tax_item_ids);
 		return true;
@@ -695,6 +724,16 @@ final class WCOS_Merge_Recovery_Snapshot {
 
 	private static function contract_signature($namespace, $order_id, array $contract) {
 		return WCOS_Mutation_Fingerprint::create($namespace, absint($order_id), $contract);
+	}
+
+	private static function active_economic_namespace($preflight_policy_version) {
+		$version = (int) $preflight_policy_version;
+		if (WCOS_Merge_Preflight::LEGACY_POLICY_VERSION === $version) {
+			return 'merge_active_economic_v1';
+		}
+		return WCOS_Merge_Preflight::PREVIOUS_POLICY_VERSION === $version
+			? 'merge_ordinary_active_economic_v1'
+			: 'merge_financial_boundary_active_economic_v1';
 	}
 
 	private static function canonicalize(array $value) {

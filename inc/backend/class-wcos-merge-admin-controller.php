@@ -443,6 +443,7 @@ final class WCOS_Merge_Admin_Controller {
 
 	private function review_summary(WC_Order $source, WC_Order $target, array $report) {
 		$precision = (int) $report['price_precision'];
+		$financial_target = !empty($report['target_has_financial_history']);
 		$projected = WCOS_Merge_Commercial_Policy::expected_target_contract($source, $target, $precision);
 		$coalesced = 0;
 		$fresh = 0;
@@ -466,6 +467,13 @@ final class WCOS_Merge_Admin_Controller {
 			'target_charges_shipping_disposition' => 'preserve_target',
 			'target_context_disposition' => 'keep_target_context',
 			'target_status_disposition' => 'keep_target',
+			'target_financial_history_retained' => $financial_target,
+			'source_financial_history' => 'none',
+			'settlement_neutral_line_count' => $financial_target ? count($report['plan']['lines']) : 0,
+			'financial_line_disposition' => $financial_target ? 'fresh_target_line_only' : 'ordinary_commercial_policy',
+			'target_financial_authority_disposition' => $financial_target ? 'preserve_exact' : 'absent',
+			'target_payable_tax_disposition' => $financial_target ? 'unchanged' : 'historical_product_values_added',
+			'payment_refund_api_disposition' => 'never',
 			'currency' => (string) $source->get_currency(),
 			'price_precision' => $precision,
 			'compatibility' => array('supported' => true, 'reason' => 'supported'),

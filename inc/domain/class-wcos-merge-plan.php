@@ -2,10 +2,11 @@
 
 defined('ABSPATH') || exit;
 
-/** Canonical server-built Merge plan with exact legacy-v2 replay support. */
+/** Canonical server-built Merge plan with exact v2/v3 durable replay support. */
 final class WCOS_Merge_Plan {
 
-	const SCHEMA_VERSION = 3;
+	const SCHEMA_VERSION = 4;
+	const PREVIOUS_SCHEMA_VERSION = 3;
 	const LEGACY_SCHEMA_VERSION = 2;
 
 	public static function build(WC_Order $source, WC_Order $target, $precision = null) {
@@ -17,6 +18,8 @@ final class WCOS_Merge_Plan {
 		if (!$source_id || !$target_id || $source_id === $target_id) {
 			throw new InvalidArgumentException(__('A Merge plan requires two distinct persisted orders.', 'wc-order-splitter'));
 		}
+		$financial_authority = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, $precision);
+		$financial_target = WCOS_Merge_Financial_Authority::target_has_history($financial_authority);
 
 		$source_stock_flag = (bool) $source->get_data_store()->get_stock_reduced($source_id);
 		$target_stock_flag = (bool) $target->get_data_store()->get_stock_reduced($target_id);
@@ -52,7 +55,7 @@ final class WCOS_Merge_Plan {
 				}
 			}
 
-			$action = 1 === count($candidates) ? 'coalesce' : 'fresh_target_line';
+			$action = !$financial_target && 1 === count($candidates) ? 'coalesce' : 'fresh_target_line';
 			$target_item_id = 'coalesce' === $action ? (int) reset($candidates) : 0;
 			$target_before = array();
 			$target_after = $source_state;
@@ -80,12 +83,14 @@ final class WCOS_Merge_Plan {
 
 		$plan = array(
 			'schema_version' => self::SCHEMA_VERSION,
-			'commercial_policy' => WCOS_Merge_Commercial_Policy::authority($source, $target, $precision),
+			'commercial_policy' => WCOS_Merge_Commercial_Policy::authority($source, $target, $precision, $financial_authority),
+			'financial_authority' => $financial_authority,
 			'source_order_id' => $source_id,
 			'target_order_id' => $target_id,
-			'line_policy' => 'canonical_identity_coalesce_or_fresh',
+			'line_policy' => $financial_target ? 'fresh_target_line_only' : 'canonical_identity_coalesce_or_fresh',
 			'coalesce_lines' => $coalesces,
-			'tax_template_rate_ids' => WCOS_Merge_Commercial_Policy::product_tax_rate_ids($source),
+			'tax_template_rate_ids' => $financial_target ? array() : WCOS_Merge_Commercial_Policy::product_tax_rate_ids($source),
+			'tax_template_policy' => $financial_target ? 'preserve_target_rows_only' : 'import_source_product_rates',
 			'source_order_stock_reduced' => $source_stock_flag,
 			'target_order_stock_reduced' => $target_stock_flag,
 			'target_order_stock_reduced_after' => $source_stock_flag || $target_stock_flag,
@@ -112,11 +117,24 @@ final class WCOS_Merge_Plan {
 	}
 
 	public static function canonicalize_current(array $plan) {
+		return self::canonicalize_commercial($plan, true);
+	}
+
+	/** Exact WOS-COMPAT-005 schema-v3 parser retained for durable replay/recovery. */
+	public static function canonicalize_previous(array $plan) {
+		return self::canonicalize_commercial($plan, false);
+	}
+
+	private static function canonicalize_commercial(array $plan, $current) {
 		$expected = array(
 			'coalesce_lines', 'commercial_policy', 'line_policy', 'lines', 'retirement_policy', 'schema_version',
 			'source_order_id', 'source_order_stock_reduced', 'target_order_id', 'target_order_stock_reduced',
 			'target_order_stock_reduced_after', 'tax_template_rate_ids',
 		);
+		if ($current) {
+			$expected[] = 'financial_authority';
+			$expected[] = 'tax_template_policy';
+		}
 		$actual = array_keys($plan);
 		sort($actual, SORT_STRING);
 		sort($expected, SORT_STRING);
@@ -124,8 +142,8 @@ final class WCOS_Merge_Plan {
 		$target_id = absint(isset($plan['target_order_id']) ? $plan['target_order_id'] : 0);
 		$lines = isset($plan['lines']) && is_array($plan['lines']) ? $plan['lines'] : array();
 		self::assert_pair($source_id, $target_id, $lines);
-		if ($actual !== $expected || self::SCHEMA_VERSION !== (int) $plan['schema_version']
-			|| 'canonical_identity_coalesce_or_fresh' !== sanitize_key((string) $plan['line_policy'])
+		$schema_version = $current ? self::SCHEMA_VERSION : self::PREVIOUS_SCHEMA_VERSION;
+		if ($actual !== $expected || $schema_version !== (int) $plan['schema_version']
 			|| !in_array($plan['coalesce_lines'], array(true, false), true)
 			|| !in_array($plan['source_order_stock_reduced'], array(true, false), true)
 			|| !in_array($plan['target_order_stock_reduced'], array(true, false), true)
@@ -135,7 +153,27 @@ final class WCOS_Merge_Plan {
 			|| !is_array($plan['commercial_policy']) || !is_array($plan['tax_template_rate_ids'])) {
 			throw new InvalidArgumentException(__('The ordinary-commercial Merge plan schema is invalid.', 'wc-order-splitter'));
 		}
-		$policy = WCOS_Merge_Commercial_Policy::canonicalize_authority($plan['commercial_policy']);
+		$policy = $current
+			? WCOS_Merge_Commercial_Policy::canonicalize_authority($plan['commercial_policy'])
+			: WCOS_Merge_Commercial_Policy::canonicalize_previous_authority($plan['commercial_policy']);
+		$financial_authority = null;
+		$financial_target = false;
+		$line_policy = 'canonical_identity_coalesce_or_fresh';
+		$tax_template_policy = 'import_source_product_rates';
+		if ($current) {
+			$financial_authority = WCOS_Merge_Financial_Authority::canonicalize_pair($plan['financial_authority']);
+			$financial_target = WCOS_Merge_Financial_Authority::target_has_history($financial_authority);
+			$line_policy = $financial_target ? 'fresh_target_line_only' : 'canonical_identity_coalesce_or_fresh';
+			$tax_template_policy = $financial_target ? 'preserve_target_rows_only' : 'import_source_product_rates';
+			if ((bool) $policy['financial_target'] !== $financial_target
+				|| !hash_equals((string) $policy['financial_policy_fingerprint'], (string) $financial_authority['pair_financial_policy_fingerprint'])
+				|| $tax_template_policy !== sanitize_key((string) $plan['tax_template_policy'])) {
+				throw new InvalidArgumentException(__('The Merge financial plan does not match its commercial authority.', 'wc-order-splitter'));
+			}
+		}
+		if ($line_policy !== sanitize_key((string) $plan['line_policy'])) {
+			throw new InvalidArgumentException(__('The Merge line disposition does not match its frozen financial policy.', 'wc-order-splitter'));
+		}
 
 		$canonical_lines = self::canonical_lines($lines, true);
 		$has_coalesce = false;
@@ -143,6 +181,9 @@ final class WCOS_Merge_Plan {
 		$precision = WCOS_Price_Precision_Scope::validate(isset($policy['price_precision']) ? $policy['price_precision'] : null);
 		foreach ($canonical_lines as $line) {
 			$has_coalesce = $has_coalesce || 'coalesce' === $line['action'];
+			if ($financial_target && 'fresh_target_line' !== $line['action']) {
+				throw new InvalidArgumentException(__('A financially historical target requires every Merge line to be fresh.', 'wc-order-splitter'));
+			}
 			if (!$plan['source_order_stock_reduced'] && self::has_reduced_stock($line['reduced_stock'])) {
 				throw new InvalidArgumentException(__('The Merge source reduced-stock ownership authority is inconsistent.', 'wc-order-splitter'));
 			}
@@ -178,12 +219,15 @@ final class WCOS_Merge_Plan {
 		if ($rate_ids !== array_values($plan['tax_template_rate_ids'])) {
 			throw new InvalidArgumentException(__('The Merge tax-template authority is not canonical.', 'wc-order-splitter'));
 		}
-		return array(
-			'schema_version' => self::SCHEMA_VERSION,
+		if ($financial_target && !empty($rate_ids)) {
+			throw new InvalidArgumentException(__('A financial-target Merge cannot materialize source tax rows.', 'wc-order-splitter'));
+		}
+		$canonical = array(
+			'schema_version' => $schema_version,
 			'commercial_policy' => $policy,
 			'source_order_id' => $source_id,
 			'target_order_id' => $target_id,
-			'line_policy' => 'canonical_identity_coalesce_or_fresh',
+			'line_policy' => $line_policy,
 			'coalesce_lines' => (bool) $plan['coalesce_lines'],
 			'tax_template_rate_ids' => $rate_ids,
 			'source_order_stock_reduced' => (bool) $plan['source_order_stock_reduced'],
@@ -192,6 +236,11 @@ final class WCOS_Merge_Plan {
 			'retirement_policy' => WCOS_Merge_Retirement_Policy::approved_identifier(),
 			'lines' => $canonical_lines,
 		);
+		if ($current) {
+			$canonical['financial_authority'] = $financial_authority;
+			$canonical['tax_template_policy'] = $tax_template_policy;
+		}
+		return $canonical;
 	}
 
 	public static function fingerprint(array $plan) {
@@ -204,9 +253,13 @@ final class WCOS_Merge_Plan {
 			);
 			return WCOS_Mutation_Fingerprint::create('merge_plan', $canonical['source_order_id'], $canonical);
 		}
+		if (self::PREVIOUS_SCHEMA_VERSION === $schema) {
+			$canonical = self::canonicalize_previous($plan);
+			return WCOS_Mutation_Fingerprint::create('merge_plan_v3', $canonical['source_order_id'], $canonical);
+		}
 		if (self::SCHEMA_VERSION === $schema) {
 			$canonical = self::canonicalize_current($plan);
-			return WCOS_Mutation_Fingerprint::create('merge_plan_v3', $canonical['source_order_id'], $canonical);
+			return WCOS_Mutation_Fingerprint::create('merge_plan_v4', $canonical['source_order_id'], $canonical);
 		}
 		throw new InvalidArgumentException(__('The Merge plan schema is unsupported.', 'wc-order-splitter'));
 	}

@@ -27,15 +27,18 @@ final class WCOS_Merge_Preflight_Exception extends RuntimeException {
  */
 final class WCOS_Merge_Preflight {
 
-	const POLICY_VERSION = 2;
+	const POLICY_VERSION = 3;
+	const PREVIOUS_POLICY_VERSION = 2;
 	const LEGACY_POLICY_VERSION = 1;
 
 	public static function policy() {
 		return array(
 			'policy_version' => self::POLICY_VERSION,
-			'commercial_scope' => 'ordinary_unpaid_non_refund',
-			'paid_orders' => 'reject',
-			'refunds' => 'reject',
+			'commercial_scope' => 'ordinary_or_settlement_neutral_financial_target',
+			'financial_source' => 'reject',
+			'financial_target' => 'settlement_neutral_fresh_lines_only',
+			'payment_refund_authority' => 'preserve_exact',
+			'payment_refund_api' => 'never',
 			'coupons' => 'retain_on_existing_order',
 			'fees' => 'retain_on_existing_order',
 			'source_shipping' => 'retain_on_retired_source',
@@ -79,6 +82,9 @@ final class WCOS_Merge_Preflight {
 			'source_signature' => '',
 			'target_signature' => '',
 			'pair_fingerprint' => '',
+			'financial_authority' => array(),
+			'financial_policy_fingerprint' => '',
+			'target_has_financial_history' => false,
 			'plan' => array(),
 		);
 
@@ -116,14 +122,30 @@ final class WCOS_Merge_Preflight {
 			return self::reject($report, 'incompatible_pricing_mode', __('Merge requires matching historical tax-inclusion modes.', 'wc-order-splitter'));
 		}
 
-		if (self::has_paid_evidence($source) || self::has_paid_evidence($target)) {
-			return self::reject($report, 'paid_order_unsupported', __('Paid or transaction-bearing orders are outside the initial Merge tranche.', 'wc-order-splitter'));
-		}
-		if (self::has_refund_evidence($source) || self::has_refund_evidence($target)) {
-			return self::reject($report, 'refund_policy_missing', __('Refunded orders are outside the initial Merge tranche.', 'wc-order-splitter'));
+		if (WCOS_Merge_Financial_Authority::has_history($source, $precision)) {
+			return self::reject($report, 'source_financial_history_not_movable', __('The Merge source owns payment or refund history and cannot be retired by this workflow.', 'wc-order-splitter'));
 		}
 		if (empty($source->get_items('line_item'))) {
 			return self::reject($report, 'no_source_lines', __('Merge requires at least one source product line.', 'wc-order-splitter'));
+		}
+
+		try {
+			$financial_authority = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, $precision);
+		} catch (WCOS_Merge_Financial_Authority_Exception $exception) {
+			return self::reject($report, $exception->get_reason(), $exception->getMessage());
+		} catch (Throwable $throwable) {
+			return self::reject($report, 'malformed_refund_authority', __('The target refund structure is malformed or cannot be authenticated unambiguously.', 'wc-order-splitter'));
+		}
+		$financial_target = WCOS_Merge_Financial_Authority::target_has_history($financial_authority);
+		if ($financial_target) {
+			foreach ($source->get_items('line_item') as $source_line) {
+				if (0 !== WCOS_Decimal::to_units($source_line->get_total(), $precision)) {
+					return self::reject($report, 'financial_target_nonzero_source_total', __('A financially historical target can accept only source product lines with exact zero total.', 'wc-order-splitter'));
+				}
+				if (0 !== WCOS_Decimal::to_units($source_line->get_total_tax(), $precision)) {
+					return self::reject($report, 'financial_target_nonzero_source_tax', __('A financially historical target can accept only source product lines with exact zero total tax.', 'wc-order-splitter'));
+				}
+			}
 		}
 
 		try {
@@ -135,6 +157,8 @@ final class WCOS_Merge_Preflight {
 			$plan = WCOS_Merge_Plan::build($source, $target, $precision);
 			WCOS_Tax_Item_Synchronizer::templates_for_rates($source, $plan['tax_template_rate_ids']);
 			$journal_context = WCOS_Merge_Journal_Context::create($source, $target, $plan, $context_authority, $precision);
+		} catch (WCOS_Merge_Financial_Authority_Exception $exception) {
+			return self::reject($report, $exception->get_reason(), $exception->getMessage());
 		} catch (Throwable $throwable) {
 			return self::reject(
 				$report,
@@ -146,23 +170,18 @@ final class WCOS_Merge_Preflight {
 		$pair = $journal_context['merge_pair']['authority'];
 		$report['supported'] = true;
 		$report['reason'] = 'supported';
-		$report['message'] = __('This ordinary unpaid pair is compatible with the hardened Merge commercial policy.', 'wc-order-splitter');
+		$report['message'] = $financial_target
+			? __('This pair is eligible for a settlement-neutral Merge that preserves target payment and refund history.', 'wc-order-splitter')
+			: __('This ordinary unpaid pair is compatible with the hardened Merge commercial policy.', 'wc-order-splitter');
 		$report['context_authority'] = $context_authority;
 		$report['source_signature'] = $pair['source_signature'];
 		$report['target_signature'] = $pair['target_signature'];
 		$report['pair_fingerprint'] = $journal_context['merge_pair']['pair_fingerprint'];
+		$report['financial_authority'] = $financial_authority;
+		$report['financial_policy_fingerprint'] = $financial_authority['pair_financial_policy_fingerprint'];
+		$report['target_has_financial_history'] = $financial_target;
 		$report['plan'] = $plan;
 		return $report;
-	}
-
-	private static function has_paid_evidence(WC_Order $order) {
-		return $order->is_paid()
-			|| null !== $order->get_date_paid()
-			|| '' !== (string) $order->get_transaction_id();
-	}
-
-	private static function has_refund_evidence(WC_Order $order) {
-		return $order->get_total_refunded() != 0 || !empty($order->get_refunds());
 	}
 
 	private static function assert_item_metadata_supported(WC_Order $order) {
