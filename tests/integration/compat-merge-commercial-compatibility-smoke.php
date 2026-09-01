@@ -33,6 +33,7 @@ final class WCOS_Compat_Merge_Commercial_Matrix {
 			self::status_context_charge_coalesce();
 			self::fresh_line_and_identity_matrix();
 			self::tax_template_isolation();
+			self::fully_discounted_tax_and_pii_free_authority();
 			self::stock_marker_matrix();
 			self::paid_refund_boundary();
 			self::review_confirm_drift_and_transient_versions();
@@ -639,6 +640,69 @@ final class WCOS_Compat_Merge_Commercial_Matrix {
 			'product_template_imported' => true,
 			'source_charge_templates_excluded' => true,
 			'duplicate_templates_fail_closed' => true,
+		);
+	}
+
+	private static function fully_discounted_tax_and_pii_free_authority() {
+		$product = self::product('fully-discounted-private-authority');
+		$private_name = 'Personalized order for Private Customer 005';
+		$source = self::order('fully-discounted-private-source');
+		$target = self::order('fully-discounted-private-target', 'on-hold');
+		self::line($source, $product, array(
+			'name' => $private_name,
+			'quantity' => '1.000000',
+			'subtotal' => '10.00',
+			'total' => '0.00',
+			'subtotal_tax' => '1.00',
+			'total_tax' => '0.00',
+			'taxes' => array('subtotal' => array(1002 => '1.00'), 'total' => array(1002 => '0.00')),
+			'meta' => array('Configuration' => 'private-source'),
+		));
+		self::line($target, $product, array(
+			'name' => 'Different retained target line',
+			'meta' => array('Configuration' => 'private-target'),
+		));
+		self::coupon($source, 'fully-discounted-history', '10.00', '1.00');
+		self::tax($source, 1002, '0.00', '0.00', 'Fully discounted historical rate');
+		$source = self::finalize($source);
+		$target = self::finalize($target);
+
+		$report = WCOS_Merge_Preflight::assert_supported($source, $target, 2);
+		$line = reset($report['plan']['lines']);
+		self::assert('fresh_target_line' === $line['action'] && array(1002) === $report['plan']['tax_template_rate_ids'], 'Fully discounted product-tax authority was not accepted exactly.');
+		self::assert(false === strpos((string) wp_json_encode($report['plan']), $private_name), 'Raw item-name PII leaked into the canonical Merge plan.');
+
+		$review = WCOS_Merge_Review_Store::create($source, $target, $report, self::$operator_id);
+		self::$review_ids[] = $review['review_id'];
+		self::assert(false === strpos((string) wp_json_encode($review['authority']), $private_name), 'Raw item-name PII leaked into Merge Review authority.');
+		$confirmation = WCOS_Merge_Confirmation_Store::create($source, $target, $review['authority'], self::$operator_id);
+		$operation_id = $confirmation['operation_id'];
+		self::$operation_ids[$source->get_id()][] = $operation_id;
+		self::assert(false === strpos((string) wp_json_encode($confirmation['record']), $private_name), 'Raw item-name PII leaked into Merge Confirmation authority.');
+		self::assert(WCOS_Merge_Review_Store::consume($review['review_id']), 'PII-free Review authority could not be consumed.');
+
+		$result = (new WCOS_Merge_Order_Service())->merge(
+			$source,
+			$target,
+			$operation_id,
+			2,
+			WCOS_Merge_Confirmation_Store::operation_authority($confirmation['record'])
+		);
+		self::assert('completed' === $result['status'], 'Fully discounted zero-total-tax Merge did not complete.');
+		$source = wc_get_order($source->get_id());
+		$target = wc_get_order($target->get_id());
+		$record = WCOS_Operation_Journal::get($source, $operation_id);
+		self::assert(is_array($record) && 'completed' === sanitize_key((string) $record['status']), 'Fully discounted Merge did not persist a completed journal.');
+		self::assert(false === strpos((string) wp_json_encode($record), $private_name), 'Raw item-name PII leaked into the durable Merge journal.');
+		self::assert('trash' === $source->get_status(), 'Fully discounted Merge did not archive its source.');
+		$taxes = self::tax_totals($target);
+		self::assert(isset($taxes[1002]) && array(0, 0) === $taxes[1002], 'Fully discounted Merge did not materialize its exact zero-valued historical tax row.');
+		self::assert($result === (new WCOS_Merge_Order_Service())->merge($source, $target, $operation_id, 2), 'Fully discounted Merge did not replay its terminal result exactly.');
+
+		self::$results['fully_discounted_tax_and_pii_free_authority'] = array(
+			'zero_total_product_tax_row_materialized' => true,
+			'terminal_journal_status' => 'completed',
+			'raw_item_name_excluded_from_plan_review_confirmation_journal' => true,
 		);
 	}
 

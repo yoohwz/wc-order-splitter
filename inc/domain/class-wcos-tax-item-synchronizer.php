@@ -35,7 +35,7 @@ final class WCOS_Tax_Item_Synchronizer {
 		return $templates;
 	}
 
-	public static function synchronize(WC_Order $order, array $templates, $precision = null, $preserve_existing_ids = false, $context = WCOS_Order_Item_Meta_Policy::CONTEXT_SPLIT) {
+	public static function synchronize(WC_Order $order, array $templates, $precision = null, $preserve_existing_ids = false, $context = WCOS_Order_Item_Meta_Policy::CONTEXT_SPLIT, $materialize_zero_template_rows = false) {
 		$precision = null === $precision ? wc_get_price_decimals() : (int) $precision;
 		$context = sanitize_key((string) $context);
 		if (!in_array($context, array(
@@ -63,7 +63,7 @@ final class WCOS_Tax_Item_Synchronizer {
 
 			if (isset($existing[$rate_id])) {
 				$item = $existing[$rate_id];
-			} elseif (0 !== $cart_units || 0 !== $shipping_units) {
+			} elseif (0 !== $cart_units || 0 !== $shipping_units || ($materialize_zero_template_rows && isset($templates[$rate_id]))) {
 				if (!isset($templates[$rate_id])) {
 					throw new RuntimeException(__('A historical tax-rate template is missing from the source order.', 'wc-order-splitter'));
 				}

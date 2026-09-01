@@ -220,7 +220,6 @@ final class WCOS_Merge_Plan {
 		return array(
 			'line_identity' => WCOS_Line_Identity::from_item($item),
 			'commercial_identity' => WCOS_Merge_Commercial_Policy::line_identity($item),
-			'name' => (string) $item->get_name(),
 			'product_id' => (int) $item->get_product_id(),
 			'variation_id' => (int) $item->get_variation_id(),
 			'tax_class' => (string) $item->get_tax_class(),
@@ -300,7 +299,7 @@ final class WCOS_Merge_Plan {
 
 	private static function assert_current_line(array $line) {
 		$required = array(
-			'action', 'commercial_identity', 'line_identity', 'name', 'product_id', 'quantity', 'reduced_stock',
+			'action', 'commercial_identity', 'line_identity', 'product_id', 'quantity', 'reduced_stock',
 			'source_item_id', 'subtotal', 'subtotal_tax', 'target_after', 'target_before', 'target_item_id',
 			'tax_class', 'taxes', 'total', 'total_tax', 'variation_id',
 		);
@@ -353,7 +352,7 @@ final class WCOS_Merge_Plan {
 
 	private static function line_state_keys() {
 		return array(
-			'commercial_identity', 'line_identity', 'name', 'product_id', 'quantity', 'reduced_stock',
+			'commercial_identity', 'line_identity', 'product_id', 'quantity', 'reduced_stock',
 			'subtotal', 'subtotal_tax', 'tax_class', 'taxes', 'total', 'total_tax', 'variation_id',
 		);
 	}

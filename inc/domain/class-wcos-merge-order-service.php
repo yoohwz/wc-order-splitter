@@ -145,7 +145,8 @@ final class WCOS_Merge_Order_Service {
 				WCOS_Tax_Item_Synchronizer::templates_for_rates($source, $plan['tax_template_rate_ids']),
 				$precision,
 				true,
-				WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE
+				WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE,
+				true
 			);
 			WCOS_Order_Totals_Rebuilder::rebuild($target, $precision);
 			$target->save();
@@ -352,7 +353,6 @@ final class WCOS_Merge_Order_Service {
 			|| !hash_equals((string) $authority['line_identity'], WCOS_Line_Identity::from_item($item))
 			|| (int) $authority['product_id'] !== (int) $item->get_product_id()
 			|| (int) $authority['variation_id'] !== (int) $item->get_variation_id()
-			|| (string) $authority['name'] !== (string) $item->get_name()
 			|| (string) $authority['tax_class'] !== (string) $item->get_tax_class()
 			|| !hash_equals((string) $authority['commercial_identity'], WCOS_Merge_Commercial_Policy::line_identity($item))
 			|| (string) $authority['quantity'] !== WCOS_Decimal::normalize($item->get_quantity(), 6)
@@ -377,7 +377,6 @@ final class WCOS_Merge_Order_Service {
 		if (!$item instanceof WC_Order_Item_Product
 			|| !hash_equals((string) $authority['line_identity'], WCOS_Line_Identity::from_item($item))
 			|| !hash_equals((string) $authority['commercial_identity'], WCOS_Merge_Commercial_Policy::line_identity($item))
-			|| (string) $authority['name'] !== (string) $item->get_name()
 			|| (int) $authority['product_id'] !== (int) $item->get_product_id()
 			|| (int) $authority['variation_id'] !== (int) $item->get_variation_id()
 			|| (string) $authority['tax_class'] !== (string) $item->get_tax_class()
