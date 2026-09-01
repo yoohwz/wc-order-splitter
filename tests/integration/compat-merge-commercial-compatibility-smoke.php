@@ -1114,15 +1114,33 @@ final class WCOS_Compat_Merge_Commercial_Matrix {
 			'participation_schema_version' => WCOS_Merge_Participation::SCHEMA_VERSION,
 		);
 		$pair_fingerprint = WCOS_Mutation_Fingerprint::create('merge_pair_authority_v3', $source->get_id(), $authority);
-		$journal_context = array(
-			'merge_pair' => array(
-				'schema_version' => WCOS_Merge_Journal_Context::LEGACY_SCHEMA_VERSION,
-				'authority' => $authority,
-				'pair_fingerprint' => $pair_fingerprint,
-			),
-			'merge_plan' => $legacy_plan,
+		$operation_id = wp_generate_uuid4();
+		$legacy_pair = array(
+			'schema_version' => WCOS_Merge_Journal_Context::LEGACY_SCHEMA_VERSION,
+			'authority' => $authority,
+			'pair_fingerprint' => $pair_fingerprint,
 		);
-		$operation_id = 'compat-005-legacy-replay-' . wp_generate_uuid4();
+		$journal_context = array(
+			'merge_pair' => $legacy_pair,
+			'merge_plan' => $legacy_plan,
+			'merge_confirmation_authority' => WCOS_Merge_Journal_Context::create_confirmation_handoff(array(
+				'operation_id' => $operation_id,
+				'operator_user_id' => self::$operator_id,
+				'source_order_id' => $source_id,
+				'target_order_id' => $target_id,
+				'confirmation_schema_version' => WCOS_Merge_Confirmation_Store::SCHEMA_VERSION,
+				'merge_service_policy_version' => WCOS_Merge_Order_Service::LEGACY_POLICY_VERSION,
+				'preflight_policy_version' => WCOS_Merge_Preflight::LEGACY_POLICY_VERSION,
+				'plan_schema_version' => WCOS_Merge_Plan::LEGACY_SCHEMA_VERSION,
+				'plan_fingerprint' => $authority['plan_fingerprint'],
+				'context_signature_version' => WCOS_Merge_Context_Signature::LEGACY_SCHEMA_VERSION,
+				'context_authority_fingerprint' => $authority['context_authority_fingerprint'],
+				'pair_fingerprint' => $pair_fingerprint,
+				'price_precision' => 2,
+				'retirement_policy_schema_version' => WCOS_Merge_Retirement_Policy::SCHEMA_VERSION,
+				'retirement_policy' => WCOS_Merge_Retirement_Policy::approved_identifier(),
+			), $legacy_pair),
+		);
 		self::$operation_ids[$source->get_id()][] = $operation_id;
 		$lease = WCOS_Multi_Order_Lease::acquire(array($source->get_id(), $target->get_id()), $operation_id, 60);
 		self::assert($lease instanceof WCOS_Multi_Order_Lease, 'Legacy durable replay fixture could not acquire its pair lease.');
@@ -1160,9 +1178,6 @@ final class WCOS_Compat_Merge_Commercial_Matrix {
 			$source = wc_get_order($source_id);
 			self::assert($source instanceof WC_Order && 'trash' === $source->get_status(), 'Legacy source was not non-force retired.');
 			self::legacy_checkpoint($source, $target, $operation_id, WCOS_Merge_Recovery_State_Graph::SOURCE_RETIRED, array($added_item_id), $added_tax_ids, true);
-			$record = WCOS_Operation_Journal::get($source, $operation_id);
-			$outcome = WCOS_Merge_Compensator::recover($source, $target, $record, $lease);
-			self::assert('completed' === $outcome, 'Authentic legacy durable journal did not complete through forward recovery.');
 		} finally {
 			WCOS_Stock_Side_Effect_Guard::end($stock_guard);
 			$lease->release();
@@ -1170,9 +1185,32 @@ final class WCOS_Compat_Merge_Commercial_Matrix {
 
 		$source = wc_get_order($source_id);
 		$target = wc_get_order($target_id);
+		$target_line_ids_before_recovery = array_map('absint', array_keys($target->get_items('line_item')));
+		$target_tax_ids_before_recovery = array_map('absint', array_keys($target->get_items('tax')));
+		$physical_stock_before_recovery = (string) wc_get_product($product->get_id())->get_stock_quantity();
+		$controller = WCOS_Merge_Admin_Controller::bootstrap();
+		$controller_request = array_merge(self::request($source, $target), array(
+			'operation_id' => $operation_id,
+			'confirmation_token' => '',
+		));
+		$controller_recovery = $controller->execute_request($controller_request);
+		self::assert('completed' === $controller_recovery['status'], 'Legacy recovery-pending journal did not complete through the production controller.');
+		$source = wc_get_order($source_id);
+		$target = wc_get_order($target_id);
 		$record = WCOS_Operation_Journal::get($source, $operation_id);
 		self::assert('completed' === sanitize_key((string) $record['status']), 'Legacy durable fixture did not persist terminal status.');
+		self::assert($target_line_ids_before_recovery === array_map('absint', array_keys($target->get_items('line_item'))), 'Legacy controller recovery duplicated target product lines.');
+		self::assert($target_tax_ids_before_recovery === array_map('absint', array_keys($target->get_items('tax'))), 'Legacy controller recovery duplicated target tax rows.');
+		self::assert($physical_stock_before_recovery === (string) wc_get_product($product->get_id())->get_stock_quantity(), 'Legacy controller recovery changed physical stock.');
 		self::assert(2 === count($target->get_items('line_item')) && $target->get_item($target_item->get_id()) instanceof WC_Order_Item_Product && $target->get_item($added_item_id) instanceof WC_Order_Item_Product, 'Legacy fresh-line semantics were silently reinterpreted as coalescing.');
+		$journal_before_replay = wp_json_encode($record);
+		$source_before_replay = WCOS_Merge_Recovery_Snapshot::participant_signature($source);
+		$target_before_replay = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
+		$controller_replay = $controller->execute_request($controller_request);
+		self::assert('completed' === $controller_replay['status'], 'Completed legacy durable journal did not replay through the production controller.');
+		self::assert($journal_before_replay === wp_json_encode(WCOS_Operation_Journal::get(wc_get_order($source_id), $operation_id)), 'Completed legacy controller replay changed durable journal authority.');
+		self::assert($source_before_replay === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($source_id)), 'Completed legacy controller replay changed the retired source.');
+		self::assert($target_before_replay === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target_id)), 'Completed legacy controller replay changed the target.');
 		$target->set_status('cancelled');
 		$target->set_billing_email('legacy-post-complete-drift@example.test');
 		$target->save();
@@ -1189,6 +1227,7 @@ final class WCOS_Compat_Merge_Commercial_Matrix {
 			'plan_schema_version' => WCOS_Merge_Plan::LEGACY_SCHEMA_VERSION,
 			'service_policy_version' => WCOS_Merge_Order_Service::LEGACY_POLICY_VERSION,
 			'fresh_line_semantics_preserved' => true,
+			'controller_recovery_and_completed_replay' => true,
 			'exact_terminal_replay' => true,
 		);
 	}
