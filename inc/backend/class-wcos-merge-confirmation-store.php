@@ -158,7 +158,7 @@ final class WCOS_Merge_Confirmation_Store {
 			|| sanitize_key(isset($journal['operation_id']) ? (string) $journal['operation_id'] : '') !== $operation_id
 			|| absint(isset($confirmed['operator_user_id']) ? $confirmed['operator_user_id'] : 0) !== $user_id
 			|| (int) $confirmed['confirmation_schema_version'] !== self::SCHEMA_VERSION
-			|| (int) $confirmed['merge_service_policy_version'] !== WCOS_Merge_Order_Service::POLICY_VERSION) {
+			|| !WCOS_Merge_Journal_Context::confirmation_versions_match_pair($confirmed, $pair)) {
 			throw new WCOS_Merge_Confirmation_Exception('journal_mismatch', __('The durable Merge journal does not match this operation, operator, and participant pair.', 'wc-order-splitter'));
 		}
 		$status = sanitize_key(isset($journal['status']) ? (string) $journal['status'] : '');

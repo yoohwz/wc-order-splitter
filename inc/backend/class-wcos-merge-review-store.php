@@ -102,7 +102,7 @@ final class WCOS_Merge_Review_Store {
 			throw new WCOS_Merge_Review_Exception('review_invalid', __('The server Merge Review is incomplete or mismatched.', 'wc-order-splitter'));
 		}
 		$precision = WCOS_Price_Precision_Scope::validate(isset($report['price_precision']) ? $report['price_precision'] : null);
-		$plan = WCOS_Merge_Plan::canonicalize($source_id, $target_id, $report['plan']['lines']);
+		$plan = WCOS_Merge_Plan::canonicalize_current($report['plan']);
 		$context = WCOS_Merge_Journal_Context::create_executable(
 			wc_get_order($source_id),
 			wc_get_order($target_id),

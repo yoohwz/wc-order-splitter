@@ -27,18 +27,22 @@ final class WCOS_Merge_Preflight_Exception extends RuntimeException {
  */
 final class WCOS_Merge_Preflight {
 
-	const POLICY_VERSION = 1;
+	const POLICY_VERSION = 2;
+	const LEGACY_POLICY_VERSION = 1;
 
 	public static function policy() {
 		return array(
 			'policy_version' => self::POLICY_VERSION,
-			'commercial_scope' => 'initial_safety_tranche_only',
+			'commercial_scope' => 'ordinary_unpaid_non_refund',
 			'paid_orders' => 'reject',
 			'refunds' => 'reject',
-			'coupons' => 'reject',
-			'fees' => 'reject',
-			'source_shipping' => 'reject',
-			'line_coalescing' => 'never',
+			'coupons' => 'retain_on_existing_order',
+			'fees' => 'retain_on_existing_order',
+			'source_shipping' => 'retain_on_retired_source',
+			'target_charges_shipping' => 'preserve_target',
+			'order_context' => 'keep_target_context',
+			'target_status' => 'keep_target',
+			'line_coalescing' => 'exact_canonical_identity_only',
 			'historical_tax' => 'preserve_exact',
 			'catalog_recalculation' => 'never',
 			'retirement_policy' => WCOS_Merge_Retirement_Policy::approved_identifier(),
@@ -98,10 +102,9 @@ final class WCOS_Merge_Preflight {
 		$source_status = sanitize_key((string) $source->get_status());
 		$target_status = sanitize_key((string) $target->get_status());
 		$unsupported_statuses = array('trash', 'cancelled', 'refunded', 'failed', 'checkout-draft');
-		if ($source_status !== $target_status
-			|| in_array($source_status, $unsupported_statuses, true)
+		if (in_array($source_status, $unsupported_statuses, true)
 			|| in_array($target_status, $unsupported_statuses, true)) {
-			return self::reject($report, 'incompatible_status', __('The initial Merge tranche requires matching compatible order statuses.', 'wc-order-splitter'));
+			return self::reject($report, 'incompatible_status', __('Merge requires two independently safe, non-terminal order statuses.', 'wc-order-splitter'));
 		}
 
 		$source_currency = (string) $source->get_currency();
@@ -119,28 +122,18 @@ final class WCOS_Merge_Preflight {
 		if (self::has_refund_evidence($source) || self::has_refund_evidence($target)) {
 			return self::reject($report, 'refund_policy_missing', __('Refunded orders are outside the initial Merge tranche.', 'wc-order-splitter'));
 		}
-		if (!empty($source->get_items('coupon')) || !empty($target->get_items('coupon'))) {
-			return self::reject($report, 'coupon_policy_missing', __('Coupon ownership is outside the initial Merge tranche.', 'wc-order-splitter'));
-		}
-		if (!empty($source->get_items('fee')) || !empty($target->get_items('fee'))) {
-			return self::reject($report, 'fee_policy_missing', __('Fee ownership is outside the initial Merge tranche.', 'wc-order-splitter'));
-		}
-		if (!empty($source->get_items('shipping'))
-			|| 0 !== WCOS_Decimal::to_units($source->get_shipping_total(), $precision)
-			|| 0 !== WCOS_Decimal::to_units($source->get_shipping_tax(), $precision)) {
-			return self::reject($report, 'source_shipping_policy_missing', __('Source shipping ownership is outside the initial Merge tranche.', 'wc-order-splitter'));
-		}
 		if (empty($source->get_items('line_item'))) {
 			return self::reject($report, 'no_source_lines', __('Merge requires at least one source product line.', 'wc-order-splitter'));
 		}
 
 		try {
-			$context_authority = WCOS_Merge_Context_Signature::compatibility($source, $target);
+			$context_authority = WCOS_Merge_Context_Signature::disposition($source, $target);
 			self::assert_item_metadata_supported($source);
 			self::assert_item_metadata_supported($target);
 			WCOS_Order_Totals_Rebuilder::assert_consistent($source, $precision);
 			WCOS_Order_Totals_Rebuilder::assert_consistent($target, $precision);
-			$plan = WCOS_Merge_Plan::build($source, $target);
+			$plan = WCOS_Merge_Plan::build($source, $target, $precision);
+			WCOS_Tax_Item_Synchronizer::templates_for_rates($source, $plan['tax_template_rate_ids']);
 			$journal_context = WCOS_Merge_Journal_Context::create($source, $target, $plan, $context_authority, $precision);
 		} catch (Throwable $throwable) {
 			return self::reject(
@@ -153,7 +146,7 @@ final class WCOS_Merge_Preflight {
 		$pair = $journal_context['merge_pair']['authority'];
 		$report['supported'] = true;
 		$report['reason'] = 'supported';
-		$report['message'] = __('This pair is compatible with the initial hard-off Merge safety tranche.', 'wc-order-splitter');
+		$report['message'] = __('This ordinary unpaid pair is compatible with the hardened Merge commercial policy.', 'wc-order-splitter');
 		$report['context_authority'] = $context_authority;
 		$report['source_signature'] = $pair['source_signature'];
 		$report['target_signature'] = $pair['target_signature'];

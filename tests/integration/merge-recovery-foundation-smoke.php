@@ -339,10 +339,17 @@ $matrix = array(
 	wcos_merge_recovery_run_case('managed-compensate', $managed, 2, 2, false, 1),
 	wcos_merge_recovery_run_case('managed-forward', $managed, 2, 2, true),
 	wcos_merge_recovery_run_case('parent-managed-variation', $variation, 2, 2, false),
-	wcos_merge_recovery_run_case('fractional', $managed, '0.500000', '0.500000', false),
 	wcos_merge_recovery_run_case('backorder', $backorder, 3, 3, false),
 	wcos_merge_recovery_run_case('unmanaged', $unmanaged, 1, null, false),
 );
+remove_filter('woocommerce_stock_amount', 'intval');
+add_filter('woocommerce_stock_amount', 'floatval');
+try {
+	$matrix[] = wcos_merge_recovery_run_case('fractional', $managed, '0.500000', '0.500000', false);
+} finally {
+	remove_filter('woocommerce_stock_amount', 'floatval');
+	add_filter('woocommerce_stock_amount', 'intval');
+}
 $immutable_drift_matrix = array(
 	wcos_merge_recovery_run_immutable_drift_case('source-billing-payment', $managed, true, false),
 	wcos_merge_recovery_run_immutable_drift_case('target-shipping-item', $managed, false, true),

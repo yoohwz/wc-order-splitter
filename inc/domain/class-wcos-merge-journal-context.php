@@ -7,7 +7,8 @@ defined('ABSPATH') || exit;
  */
 final class WCOS_Merge_Journal_Context {
 
-	const SCHEMA_VERSION = 3;
+	const SCHEMA_VERSION = 4;
+	const LEGACY_SCHEMA_VERSION = 3;
 	const TERMINAL_RESULT_SCHEMA_VERSION = 1;
 	const CONFIRMATION_HANDOFF_SCHEMA_VERSION = 1;
 
@@ -25,7 +26,7 @@ final class WCOS_Merge_Journal_Context {
 		}
 		$source_signature = WCOS_Order_Contract_Snapshot::source_signature($source);
 		$archive_signature = WCOS_Merge_Recovery_Snapshot::archive_commercial_signature($source);
-		$active_signature = WCOS_Merge_Recovery_Snapshot::active_economic_signature(array($source, $target), $price_precision, $source_id);
+		$active_signature = WCOS_Merge_Commercial_Policy::expected_target_signature($source, $target, $price_precision);
 		$authority = array(
 			'source_order_id' => $source_id,
 			'target_order_id' => $target_id,
@@ -83,13 +84,14 @@ final class WCOS_Merge_Journal_Context {
 		}
 		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
 		$pair = isset($context['merge_pair']) && is_array($context['merge_pair']) ? $context['merge_pair'] : array();
-		if ((int) (isset($pair['schema_version']) ? $pair['schema_version'] : 0) !== self::SCHEMA_VERSION
+		$pair_schema = (int) (isset($pair['schema_version']) ? $pair['schema_version'] : 0);
+		if (!in_array($pair_schema, array(self::LEGACY_SCHEMA_VERSION, self::SCHEMA_VERSION), true)
 			|| !isset($pair['authority']) || !is_array($pair['authority'])) {
 			return null;
 		}
 
 		try {
-			$authority = self::canonical_authority($pair['authority']);
+			$authority = self::canonical_authority($pair['authority'], $pair_schema);
 			$context_fingerprint = is_array($authority)
 				? WCOS_Merge_Context_Signature::authority_fingerprint($authority['context_authority'])
 				: '';
@@ -103,7 +105,7 @@ final class WCOS_Merge_Journal_Context {
 			return null;
 		}
 
-		$computed_fingerprint = self::authority_fingerprint($authority);
+		$computed_fingerprint = self::authority_fingerprint($authority, $pair_schema);
 		$pair_fingerprint = self::normalized_fingerprint(isset($pair['pair_fingerprint']) ? $pair['pair_fingerprint'] : '');
 		$journal_fingerprint = self::normalized_fingerprint(isset($record['fingerprint']) ? $record['fingerprint'] : '');
 		$record_precision = isset($context['price_precision']) ? (int) $context['price_precision'] : -1;
@@ -198,7 +200,8 @@ final class WCOS_Merge_Journal_Context {
 			|| (int) $pair['plan_schema_version'] !== $authority['plan_schema_version']
 			|| (int) $pair['context_signature_version'] !== $authority['context_signature_version']
 			|| (int) $pair['retirement_policy_schema_version'] !== $authority['retirement_policy_schema_version']
-			|| (string) $pair['retirement_policy_identifier'] !== $authority['retirement_policy']) {
+			|| (string) $pair['retirement_policy_identifier'] !== $authority['retirement_policy']
+			|| !self::confirmation_versions_match_pair($authority, $pair)) {
 			throw new RuntimeException(__('The durable Merge Confirmation handoff failed authority verification.', 'wc-order-splitter'));
 		}
 		return $authority;
@@ -210,6 +213,28 @@ final class WCOS_Merge_Journal_Context {
 		}
 		$status = sanitize_key(isset($record['status']) ? (string) $record['status'] : '');
 		return !in_array($status, array('completed', 'compensated', 'manual_reconciled'), true);
+	}
+
+	public static function service_policy_for_pair(array $pair) {
+		$versions = array(
+			'preflight_policy_version' => (int) (isset($pair['preflight_policy_version']) ? $pair['preflight_policy_version'] : 0),
+			'plan_schema_version' => (int) (isset($pair['plan_schema_version']) ? $pair['plan_schema_version'] : 0),
+			'context_signature_version' => (int) (isset($pair['context_signature_version']) ? $pair['context_signature_version'] : 0),
+		);
+		if (self::legacy_pair_versions($versions)) {
+			return WCOS_Merge_Order_Service::LEGACY_POLICY_VERSION;
+		}
+		if (self::current_pair_versions($versions)) {
+			return WCOS_Merge_Order_Service::POLICY_VERSION;
+		}
+		throw new RuntimeException(__('The Merge pair contains an unsupported version tuple.', 'wc-order-splitter'));
+	}
+
+	public static function confirmation_versions_match_pair(array $confirmation, array $pair) {
+		return (int) (isset($confirmation['merge_service_policy_version']) ? $confirmation['merge_service_policy_version'] : 0) === self::service_policy_for_pair($pair)
+			&& (int) (isset($confirmation['preflight_policy_version']) ? $confirmation['preflight_policy_version'] : 0) === (int) $pair['preflight_policy_version']
+			&& (int) (isset($confirmation['plan_schema_version']) ? $confirmation['plan_schema_version'] : 0) === (int) $pair['plan_schema_version']
+			&& (int) (isset($confirmation['context_signature_version']) ? $confirmation['context_signature_version'] : 0) === (int) $pair['context_signature_version'];
 	}
 
 	public static function create_terminal_result(array $record) {
@@ -308,15 +333,18 @@ final class WCOS_Merge_Journal_Context {
 		$plan_fingerprint = self::normalized_fingerprint(isset($authority['plan_fingerprint']) ? $authority['plan_fingerprint'] : '');
 		$context_fingerprint = self::normalized_fingerprint(isset($authority['context_authority_fingerprint']) ? $authority['context_authority_fingerprint'] : '');
 		$precision = isset($authority['price_precision']) ? (int) $authority['price_precision'] : -1;
+		$versions = array(
+			'merge_service_policy_version' => (int) (isset($authority['merge_service_policy_version']) ? $authority['merge_service_policy_version'] : 0),
+			'preflight_policy_version' => (int) (isset($authority['preflight_policy_version']) ? $authority['preflight_policy_version'] : 0),
+			'plan_schema_version' => (int) (isset($authority['plan_schema_version']) ? $authority['plan_schema_version'] : 0),
+			'context_signature_version' => (int) (isset($authority['context_signature_version']) ? $authority['context_signature_version'] : 0),
+		);
 		if ($actual_keys !== $expected_keys || '' === $operation_id || !$source_id || !$target_id || $source_id === $target_id
 			|| !absint(isset($authority['operator_user_id']) ? $authority['operator_user_id'] : 0)
 			|| '' === $pair_fingerprint || '' === $plan_fingerprint || '' === $context_fingerprint
 			|| $precision !== WCOS_Price_Precision_Scope::validate($precision)
 			|| !absint(isset($authority['confirmation_schema_version']) ? $authority['confirmation_schema_version'] : 0)
-			|| (int) $authority['merge_service_policy_version'] !== WCOS_Merge_Order_Service::POLICY_VERSION
-			|| (int) $authority['preflight_policy_version'] !== WCOS_Merge_Preflight::POLICY_VERSION
-			|| (int) $authority['plan_schema_version'] !== WCOS_Merge_Plan::SCHEMA_VERSION
-			|| (int) $authority['context_signature_version'] !== WCOS_Merge_Context_Signature::SCHEMA_VERSION
+			|| !self::supported_version_tuple($versions)
 			|| (int) $authority['retirement_policy_schema_version'] !== WCOS_Merge_Retirement_Policy::SCHEMA_VERSION
 			|| WCOS_Merge_Retirement_Policy::approved_identifier() !== sanitize_key((string) $authority['retirement_policy'])) {
 			return null;
@@ -327,11 +355,11 @@ final class WCOS_Merge_Journal_Context {
 			'source_order_id' => $source_id,
 			'target_order_id' => $target_id,
 			'confirmation_schema_version' => absint($authority['confirmation_schema_version']),
-			'merge_service_policy_version' => WCOS_Merge_Order_Service::POLICY_VERSION,
-			'preflight_policy_version' => WCOS_Merge_Preflight::POLICY_VERSION,
-			'plan_schema_version' => WCOS_Merge_Plan::SCHEMA_VERSION,
+			'merge_service_policy_version' => $versions['merge_service_policy_version'],
+			'preflight_policy_version' => $versions['preflight_policy_version'],
+			'plan_schema_version' => $versions['plan_schema_version'],
 			'plan_fingerprint' => $plan_fingerprint,
-			'context_signature_version' => WCOS_Merge_Context_Signature::SCHEMA_VERSION,
+			'context_signature_version' => $versions['context_signature_version'],
 			'context_authority_fingerprint' => $context_fingerprint,
 			'pair_fingerprint' => $pair_fingerprint,
 			'price_precision' => $precision,
@@ -346,11 +374,14 @@ final class WCOS_Merge_Journal_Context {
 		return $ids;
 	}
 
-	private static function authority_fingerprint(array $authority) {
-		return WCOS_Mutation_Fingerprint::create('merge_pair_authority_v3', $authority['source_order_id'], $authority);
+	private static function authority_fingerprint(array $authority, $schema_version = self::SCHEMA_VERSION) {
+		$namespace = self::LEGACY_SCHEMA_VERSION === (int) $schema_version
+			? 'merge_pair_authority_v3'
+			: 'merge_pair_authority_v4';
+		return WCOS_Mutation_Fingerprint::create($namespace, $authority['source_order_id'], $authority);
 	}
 
-	private static function canonical_authority(array $authority) {
+	private static function canonical_authority(array $authority, $pair_schema = self::SCHEMA_VERSION) {
 		$expected_keys = array(
 			'active_ownership_before_signature', 'archive_source_signature_before', 'context_authority',
 			'context_authority_fingerprint', 'context_signature_version', 'participation_schema_version',
@@ -377,6 +408,12 @@ final class WCOS_Merge_Journal_Context {
 			? ''
 			: self::normalized_fingerprint($authority['active_ownership_before_signature']);
 		$price_precision = (int) $authority['price_precision'];
+		$versions = array(
+			'preflight_policy_version' => (int) $authority['preflight_policy_version'],
+			'plan_schema_version' => (int) $authority['plan_schema_version'],
+			'context_signature_version' => (int) $authority['context_signature_version'],
+		);
+		$expected_legacy = self::LEGACY_SCHEMA_VERSION === (int) $pair_schema;
 		$policy_selected = true === $authority['retirement_policy_selected'];
 		$policy_identifier = sanitize_key((string) $authority['retirement_policy_identifier']);
 		if (!$source_id || !$target_id || $source_id === $target_id || !is_array($context_authority)
@@ -384,9 +421,8 @@ final class WCOS_Merge_Journal_Context {
 			|| '' === $context_fingerprint || '' === $archive_signature
 			|| ('' !== (string) $authority['active_ownership_before_signature'] && '' === $active_signature)
 			|| $price_precision !== WCOS_Price_Precision_Scope::validate($price_precision)
-			|| (int) $authority['plan_schema_version'] !== WCOS_Merge_Plan::SCHEMA_VERSION
-			|| (int) $authority['preflight_policy_version'] !== WCOS_Merge_Preflight::POLICY_VERSION
-			|| (int) $authority['context_signature_version'] !== WCOS_Merge_Context_Signature::SCHEMA_VERSION
+			|| ($expected_legacy && !self::legacy_pair_versions($versions))
+			|| (!$expected_legacy && !self::current_pair_versions($versions))
 			|| (int) $authority['retirement_policy_schema_version'] !== WCOS_Merge_Retirement_Policy::SCHEMA_VERSION
 			|| (int) $authority['participation_schema_version'] !== WCOS_Merge_Participation::SCHEMA_VERSION
 			|| (!in_array($authority['retirement_policy_selected'], array(true, false), true))
@@ -401,11 +437,11 @@ final class WCOS_Merge_Journal_Context {
 			'target_order_id' => $target_id,
 			'source_signature' => $source_signature,
 			'target_signature' => $target_signature,
-			'plan_schema_version' => WCOS_Merge_Plan::SCHEMA_VERSION,
+			'plan_schema_version' => $versions['plan_schema_version'],
 			'plan_fingerprint' => $plan_fingerprint,
 			'price_precision' => $price_precision,
-			'preflight_policy_version' => WCOS_Merge_Preflight::POLICY_VERSION,
-			'context_signature_version' => WCOS_Merge_Context_Signature::SCHEMA_VERSION,
+			'preflight_policy_version' => $versions['preflight_policy_version'],
+			'context_signature_version' => $versions['context_signature_version'],
 			'context_authority' => $context_authority,
 			'context_authority_fingerprint' => $context_fingerprint,
 			'retirement_policy_schema_version' => WCOS_Merge_Retirement_Policy::SCHEMA_VERSION,
@@ -422,6 +458,44 @@ final class WCOS_Merge_Journal_Context {
 		if (!is_array($authority)) {
 			return null;
 		}
+		$schema = (int) (isset($authority['schema_version']) ? $authority['schema_version'] : 0);
+		if (WCOS_Merge_Context_Signature::SCHEMA_VERSION === $schema) {
+			$expected_keys = array(
+				'algorithm', 'disposition', 'schema_version',
+				'source_billing_context_digest', 'source_identity_digest', 'source_identity_type',
+				'source_payment_context_digest', 'source_shipping_context_digest',
+				'target_billing_context_digest', 'target_identity_digest', 'target_identity_type',
+				'target_payment_context_digest', 'target_shipping_context_digest',
+			);
+			$actual_keys = array_keys($authority);
+			sort($actual_keys, SORT_STRING);
+			sort($expected_keys, SORT_STRING);
+			if ($actual_keys !== $expected_keys
+				|| WCOS_Merge_Context_Signature::ALGORITHM !== (string) $authority['algorithm']
+				|| 'keep_target_context' !== sanitize_key((string) $authority['disposition'])) {
+				return null;
+			}
+			$result = array(
+				'schema_version' => WCOS_Merge_Context_Signature::SCHEMA_VERSION,
+				'algorithm' => WCOS_Merge_Context_Signature::ALGORITHM,
+				'disposition' => 'keep_target_context',
+			);
+			foreach (array('source', 'target') as $role) {
+				$type = sanitize_key((string) $authority[$role . '_identity_type']);
+				if (!in_array($type, array('registered', 'guest'), true)) {
+					return null;
+				}
+				$result[$role . '_identity_type'] = $type;
+				foreach (array('identity_digest', 'billing_context_digest', 'shipping_context_digest', 'payment_context_digest') as $field) {
+					$value = self::normalized_fingerprint($authority[$role . '_' . $field]);
+					if ('' === $value) {
+						return null;
+					}
+					$result[$role . '_' . $field] = $value;
+				}
+			}
+			return $result;
+		}
 		$expected_keys = array(
 			'algorithm', 'billing_context_digest', 'customer_id', 'identity_digest', 'identity_type',
 			'payment_context_digest', 'schema_version', 'shipping_context_digest',
@@ -432,7 +506,7 @@ final class WCOS_Merge_Journal_Context {
 		$identity_type = isset($authority['identity_type']) ? sanitize_key((string) $authority['identity_type']) : '';
 		$customer_id = absint(isset($authority['customer_id']) ? $authority['customer_id'] : 0);
 		if ($actual_keys !== $expected_keys
-			|| (int) $authority['schema_version'] !== WCOS_Merge_Context_Signature::SCHEMA_VERSION
+			|| (int) $authority['schema_version'] !== WCOS_Merge_Context_Signature::LEGACY_SCHEMA_VERSION
 			|| (string) $authority['algorithm'] !== WCOS_Merge_Context_Signature::ALGORITHM
 			|| !in_array($identity_type, array('registered', 'guest'), true)
 			|| ('registered' === $identity_type && !$customer_id)
@@ -444,7 +518,7 @@ final class WCOS_Merge_Journal_Context {
 			return null;
 		}
 		return array(
-			'schema_version' => WCOS_Merge_Context_Signature::SCHEMA_VERSION,
+			'schema_version' => WCOS_Merge_Context_Signature::LEGACY_SCHEMA_VERSION,
 			'algorithm' => WCOS_Merge_Context_Signature::ALGORITHM,
 			'identity_type' => $identity_type,
 			'customer_id' => $customer_id,
@@ -453,6 +527,29 @@ final class WCOS_Merge_Journal_Context {
 			'shipping_context_digest' => self::normalized_fingerprint($authority['shipping_context_digest']),
 			'payment_context_digest' => self::normalized_fingerprint($authority['payment_context_digest']),
 		);
+	}
+
+	private static function supported_version_tuple(array $versions) {
+		$pair = array(
+			'preflight_policy_version' => isset($versions['preflight_policy_version']) ? $versions['preflight_policy_version'] : 0,
+			'plan_schema_version' => isset($versions['plan_schema_version']) ? $versions['plan_schema_version'] : 0,
+			'context_signature_version' => isset($versions['context_signature_version']) ? $versions['context_signature_version'] : 0,
+		);
+		$service = (int) (isset($versions['merge_service_policy_version']) ? $versions['merge_service_policy_version'] : 0);
+		return ($service === WCOS_Merge_Order_Service::LEGACY_POLICY_VERSION && self::legacy_pair_versions($pair))
+			|| ($service === WCOS_Merge_Order_Service::POLICY_VERSION && self::current_pair_versions($pair));
+	}
+
+	private static function legacy_pair_versions(array $versions) {
+		return WCOS_Merge_Preflight::LEGACY_POLICY_VERSION === (int) (isset($versions['preflight_policy_version']) ? $versions['preflight_policy_version'] : 0)
+			&& WCOS_Merge_Plan::LEGACY_SCHEMA_VERSION === (int) (isset($versions['plan_schema_version']) ? $versions['plan_schema_version'] : 0)
+			&& WCOS_Merge_Context_Signature::LEGACY_SCHEMA_VERSION === (int) (isset($versions['context_signature_version']) ? $versions['context_signature_version'] : 0);
+	}
+
+	private static function current_pair_versions(array $versions) {
+		return WCOS_Merge_Preflight::POLICY_VERSION === (int) (isset($versions['preflight_policy_version']) ? $versions['preflight_policy_version'] : 0)
+			&& WCOS_Merge_Plan::SCHEMA_VERSION === (int) (isset($versions['plan_schema_version']) ? $versions['plan_schema_version'] : 0)
+			&& WCOS_Merge_Context_Signature::SCHEMA_VERSION === (int) (isset($versions['context_signature_version']) ? $versions['context_signature_version'] : 0);
 	}
 
 	private static function normalized_fingerprint($value) {

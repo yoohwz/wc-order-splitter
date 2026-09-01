@@ -443,12 +443,29 @@ final class WCOS_Merge_Admin_Controller {
 
 	private function review_summary(WC_Order $source, WC_Order $target, array $report) {
 		$precision = (int) $report['price_precision'];
-		$projected_units = WCOS_Decimal::to_units($source->get_total(), $precision) + WCOS_Decimal::to_units($target->get_total(), $precision);
+		$projected = WCOS_Merge_Commercial_Policy::expected_target_contract($source, $target, $precision);
+		$coalesced = 0;
+		$fresh = 0;
+		foreach ($report['plan']['lines'] as $line) {
+			if ('coalesce' === sanitize_key(isset($line['action']) ? (string) $line['action'] : '')) {
+				$coalesced++;
+			} else {
+				$fresh++;
+			}
+		}
 		return array(
-			'source' => array('id' => $source->get_id(), 'number' => (string) $source->get_order_number(), 'line_count' => count($source->get_items('line_item')), 'total' => (string) $source->get_total()),
-			'target' => array('id' => $target->get_id(), 'number' => (string) $target->get_order_number(), 'line_count' => count($target->get_items('line_item')), 'total' => (string) $target->get_total()),
+			'source' => array('id' => $source->get_id(), 'number' => (string) $source->get_order_number(), 'status' => (string) $source->get_status(), 'line_count' => count($source->get_items('line_item')), 'total' => (string) $source->get_total()),
+			'target' => array('id' => $target->get_id(), 'number' => (string) $target->get_order_number(), 'status' => (string) $target->get_status(), 'line_count' => count($target->get_items('line_item')), 'total' => (string) $target->get_total()),
 			'transferable_line_count' => count($report['plan']['lines']),
-			'projected_active_target_total' => WCOS_Decimal::from_units($projected_units, $precision),
+			'coalesced_line_count' => $coalesced,
+			'fresh_line_count' => $fresh,
+			'projected_active_target_total' => (string) $projected['grand_total'],
+			'source_shipping_retained' => !empty($source->get_items('shipping')),
+			'source_fees_retained' => !empty($source->get_items('fee')),
+			'source_coupons_retained' => !empty($source->get_items('coupon')),
+			'target_charges_shipping_disposition' => 'preserve_target',
+			'target_context_disposition' => 'keep_target_context',
+			'target_status_disposition' => 'keep_target',
 			'currency' => (string) $source->get_currency(),
 			'price_precision' => $precision,
 			'compatibility' => array('supported' => true, 'reason' => 'supported'),

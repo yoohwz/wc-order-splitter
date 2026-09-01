@@ -92,10 +92,14 @@ wcos_merge_foundation_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strat
 wcos_merge_foundation_assert(WCOS_Split_Strategy_Gates::enabled(WCOS_Split_Strategy_Gates::STOCK_STATUS), 'Production Stock-status strategy gate is not enabled.');
 wcos_merge_foundation_assert(class_exists('WCOS_Mutation_Gateway'), 'Mandatory production gateway is unavailable.');
 
-/* Canonical historical-state planning is read-only and never coalesces lines. */
+/* Canonical historical-state planning is read-only and safely coalesces exact identities. */
 $report = WCOS_Merge_Preflight::assert_supported($source, $target);
 wcos_merge_foundation_assert(2 === count($report['plan']['lines']), 'Plan did not preserve one target line per source item.');
-wcos_merge_foundation_assert(false === $report['plan']['coalesce_lines'], 'Plan enabled line coalescing.');
+wcos_merge_foundation_assert(true === $report['plan']['coalesce_lines'], 'Plan did not enable exact canonical line coalescing.');
+$planned_lines = array_values($report['plan']['lines']);
+wcos_merge_foundation_assert('coalesce' === $planned_lines[0]['action'] && 'coalesce' === $planned_lines[1]['action'], 'Plan did not freeze exact coalescing actions.');
+wcos_merge_foundation_assert($planned_lines[0]['target_item_id'] === $planned_lines[1]['target_item_id'], 'Sequential exact source lines did not select the same unique target identity.');
+wcos_merge_foundation_assert($planned_lines[0]['target_after'] === $planned_lines[1]['target_before'], 'Sequential coalescing authority did not freeze the cumulative target state.');
 $source_line_ids = array_column($report['plan']['lines'], 'source_item_id');
 wcos_merge_foundation_assert(2 === count(array_unique($source_line_ids)), 'Configured variation lines collided by source item ID.');
 wcos_merge_foundation_assert(
@@ -117,9 +121,9 @@ foreach (array($email, '37 Foundation Way', '+1 555 0100') as $pii) {
 	wcos_merge_foundation_assert(false === strpos($durable_json, $pii), 'Raw PII entered a durable Merge proof.');
 }
 $tampered_context = $report['context_authority'];
-$tampered_context['billing_context_digest'] = str_repeat('0', 64);
+$tampered_context['source_billing_context_digest'] = str_repeat('0', 64);
 try {
-	WCOS_Merge_Context_Signature::assert_current($source, $tampered_context);
+	WCOS_Merge_Context_Signature::assert_current($source, $tampered_context, 'source');
 	throw new RuntimeException('Tampered keyed context was accepted.');
 } catch (RuntimeException $exception) {
 	wcos_merge_foundation_assert(false !== strpos($exception->getMessage(), 'signature'), 'Unexpected keyed-signature failure.');
@@ -149,7 +153,9 @@ $registered_context = WCOS_Merge_Context_Signature::compatibility($registered_so
 wcos_merge_foundation_assert('registered' === $registered_context['identity_type'], 'Equal registered customer IDs did not form keyed identity authority.');
 $registered_target->set_customer_id(708);
 $registered_target->save();
-wcos_merge_foundation_expect_reason($registered_source, $registered_target, 'incompatible_pair_context', 'Different registered customer IDs passed preflight.');
+wcos_merge_foundation_assert('supported' === wcos_merge_foundation_reason($registered_source, $registered_target), 'Different registered customer IDs were blanket-rejected.');
+$registered_disposition = WCOS_Merge_Context_Signature::disposition($registered_source, $registered_target);
+wcos_merge_foundation_assert('keep_target_context' === $registered_disposition['disposition'], 'Different registered customer IDs lost target-context disposition authority.');
 $registered_source->delete(true);
 $registered_target->delete(true);
 
@@ -161,19 +167,18 @@ wcos_merge_foundation_expect_reason($source, $target, 'incompatible_currency', '
 $target->set_currency('USD');
 $target->set_status('on-hold');
 $target->save();
-wcos_merge_foundation_expect_reason($source, $target, 'incompatible_status', 'Status mismatch passed preflight.');
-$target->set_status('pending');
+wcos_merge_foundation_assert('supported' === wcos_merge_foundation_reason($source, $target), 'Safe status mismatch was blanket-rejected.');
 $target->set_payment_method('bacs');
 $target->save();
-wcos_merge_foundation_expect_reason($source, $target, 'incompatible_pair_context', 'Payment mismatch passed preflight.');
+wcos_merge_foundation_assert('supported' === wcos_merge_foundation_reason($source, $target), 'Unpaid payment-context mismatch was blanket-rejected.');
 $target->set_payment_method('cod');
 $target->set_customer_id(77);
 $target->save();
-wcos_merge_foundation_expect_reason($source, $target, 'incompatible_pair_context', 'Customer mismatch passed preflight.');
+wcos_merge_foundation_assert('supported' === wcos_merge_foundation_reason($source, $target), 'Customer mismatch was blanket-rejected.');
 $target->set_customer_id(0);
 $target->set_billing_phone('+1 555 9999');
 $target->save();
-wcos_merge_foundation_expect_reason($source, $target, 'incompatible_pair_context', 'Billing-context mismatch passed preflight.');
+wcos_merge_foundation_assert('supported' === wcos_merge_foundation_reason($source, $target), 'Billing-context mismatch was blanket-rejected.');
 $failure_json = wp_json_encode(WCOS_Merge_Preflight::report($source, $target));
 foreach (array($email, '37 Foundation Way', '+1 555 9999') as $pii) {
 	wcos_merge_foundation_assert(false === strpos($failure_json, $pii), 'Raw PII entered preflight failure evidence.');
@@ -190,27 +195,36 @@ $coupon->set_code('foundation');
 $coupon->set_discount('1.00');
 $coupon->set_discount_tax('0.00');
 $target->add_item($coupon);
+$target->calculate_totals(false);
 $target->save();
-wcos_merge_foundation_expect_reason($source, $target, 'coupon_policy_missing', 'Coupon ownership passed preflight.');
+wcos_merge_foundation_assert('supported' === wcos_merge_foundation_reason($source, $target), 'Coupon ownership was blanket-rejected.');
 $target->remove_item($coupon->get_id());
 $fee = new WC_Order_Item_Fee();
 $fee->set_name('Foundation fee');
 $fee->set_amount('1.00');
 $fee->set_total('1.00');
+$fee->set_total_tax('0.00');
+$fee->set_taxes(array('total' => array()));
 $target->add_item($fee);
+$target->calculate_totals(false);
 $target->save();
-wcos_merge_foundation_expect_reason($source, $target, 'fee_policy_missing', 'Fee ownership passed preflight.');
+$fee_report = WCOS_Merge_Preflight::report($source, $target);
+wcos_merge_foundation_assert('supported' === $fee_report['reason'], 'Fee ownership was blanket-rejected: ' . $fee_report['reason']);
 $target->remove_item($fee->get_id());
+$target->calculate_totals(false);
 $target->save();
 
 $shipping = new WC_Order_Item_Shipping();
 $shipping->set_method_title('Foundation shipping');
 $shipping->set_method_id('flat_rate');
 $shipping->set_total('1.00');
+$shipping->set_taxes(array('total' => array()));
 $source->add_item($shipping);
+$source->calculate_totals(false);
 $source->save();
-wcos_merge_foundation_expect_reason($source, $target, 'source_shipping_policy_missing', 'Source shipping ownership passed preflight.');
+wcos_merge_foundation_assert('supported' === wcos_merge_foundation_reason($source, $target), 'Source shipping ownership was blanket-rejected.');
 $source->remove_item($shipping->get_id());
+$source->calculate_totals(false);
 $source->save();
 
 $source_items = $source->get_items('line_item');
@@ -303,7 +317,7 @@ $authority_tamper_cases = array(
 	'price_precision' => static function(&$record) { $record['context']['merge_pair']['authority']['price_precision']++; },
 	'preflight_policy_version' => static function(&$record) { $record['context']['merge_pair']['authority']['preflight_policy_version']++; },
 	'context_signature_version' => static function(&$record) { $record['context']['merge_pair']['authority']['context_signature_version']++; },
-	'context_authority' => static function(&$record) { $record['context']['merge_pair']['authority']['context_authority']['billing_context_digest'] = str_repeat('4', 64); },
+	'context_authority' => static function(&$record) { $record['context']['merge_pair']['authority']['context_authority']['source_billing_context_digest'] = str_repeat('4', 64); },
 	'context_authority_fingerprint' => static function(&$record) { $record['context']['merge_pair']['authority']['context_authority_fingerprint'] = str_repeat('5', 64); },
 	'retirement_policy_schema_version' => static function(&$record) { $record['context']['merge_pair']['authority']['retirement_policy_schema_version']++; },
 	'retirement_candidates' => static function(&$record) { $record['context']['merge_pair']['authority']['retirement_candidates'][] = 'unreviewed'; },
