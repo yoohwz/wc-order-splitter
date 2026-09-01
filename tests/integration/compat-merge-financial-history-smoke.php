@@ -464,6 +464,66 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			self::expect_reason($source, wc_get_order($target->get_id()), $fixture[1]);
 		}
 
+		$source = self::order('reject-cancelling-tax-rates-source');
+		$target = self::order('reject-cancelling-tax-rates-target');
+		$source_line = self::line($source, $product, array(
+			'name' => 'Cancelling per-rate source taxes',
+			'subtotal' => '0.00',
+			'total' => '0.00',
+			'subtotal_tax' => '0.00',
+			'total_tax' => '0.00',
+		));
+		$target_line = self::line($target, $product, array(
+			'name' => 'Existing financial target tax authority',
+			'subtotal' => '10.00',
+			'total' => '10.00',
+			'subtotal_tax' => '0.30',
+			'total_tax' => '0.30',
+			'taxes' => array(
+				'subtotal' => array(609 => '0.10', 610 => '0.20'),
+				'total' => array(609 => '0.10', 610 => '0.20'),
+			),
+		));
+		self::tax($target, 609, '0.10', '0.00');
+		self::tax($target, 610, '0.20', '0.00');
+		$source = self::finalize($source);
+		$target = self::finalize($target);
+		$target->set_transaction_id('reject-cancelling-tax-rates');
+		$target->save();
+		$target = wc_get_order($target->get_id());
+		$neutral_plan = WCOS_Merge_Plan::build($source, $target, 2);
+		$neutral_line_id = (int) $source_line->get_id();
+		$neutral_plan['lines'][$neutral_line_id]['taxes']['total'] = array(609 => '0.01', 610 => '-0.01');
+		$neutral_plan['lines'][$neutral_line_id]['target_after']['taxes']['total'] = array(609 => '0.01', 610 => '-0.01');
+		$durable_plan_rejected = false;
+		try {
+			WCOS_Merge_Plan::canonicalize_current($neutral_plan);
+		} catch (InvalidArgumentException $exception) {
+			$durable_plan_rejected = false !== strpos($exception->getMessage(), 'settlement-neutral');
+		}
+		self::assert($durable_plan_rejected, 'Canonical financial-target plan accepted cancelling nonzero per-rate taxes.');
+
+		$source_line = $source->get_item($neutral_line_id);
+		$source_line->set_taxes(array(
+			'subtotal' => array(609 => '0.01', 610 => '-0.01'),
+			'total' => array(609 => '0.01', 610 => '-0.01'),
+		));
+		$source_line->save();
+		self::tax($source, 609, '0.01', '0.00');
+		self::tax($source, 610, '-0.01', '0.00');
+		$source = wc_get_order($source->get_id());
+		WCOS_Order_Totals_Rebuilder::assert_consistent($source, 2);
+		$target_tax_before = self::target_immutable_snapshot($target, array($target_line->get_id()));
+		$domain_contract_rejected = false;
+		try {
+			WCOS_Merge_Commercial_Policy::expected_target_contract($source, $target, 2);
+		} catch (InvalidArgumentException $exception) {
+			$domain_contract_rejected = false !== strpos($exception->getMessage(), 'settlement-neutral');
+		}
+		self::assert($domain_contract_rejected, 'Financial target expected contract accepted cancelling nonzero per-rate taxes.');
+		self::expect_reason($source, $target, 'financial_target_nonzero_source_tax', null, true);
+		self::assert($target_tax_before === self::target_immutable_snapshot(wc_get_order($target->get_id()), array($target_line->get_id())), 'Rejected cancelling-rate Merge changed target settlement authority.');
+
 		$source = self::order('reject-cancel-source');
 		$target = self::order('reject-cancel-target');
 		self::line($source, $product, array('name' => 'positive cancellation', 'total' => '2.00'));
@@ -520,8 +580,10 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		}
 
 		self::$results['financial_rejections'] = array(
-			'cases' => '13-25',
+			'cases' => '13-25,58',
 			'per_line_neutrality' => true,
+			'per_rate_tax_neutrality' => true,
+			'production_service_pre_journal_rejection' => true,
 			'terminal_and_malformed_fail_closed' => true,
 			'source_financial_history' => $source_history,
 			'pre_journal_no_participation' => true,
@@ -1092,7 +1154,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		return array_values(array_unique($matches));
 	}
 
-	private static function expect_reason(WC_Order $source_view, WC_Order $target, $reason, ?WC_Order $persisted_source = null) {
+	private static function expect_reason(WC_Order $source_view, WC_Order $target, $reason, ?WC_Order $persisted_source = null, $exercise_service = false) {
 		$persisted_source = $persisted_source instanceof WC_Order ? $persisted_source : $source_view;
 		$source_id = $persisted_source->get_id();
 		$target_id = $target->get_id();
@@ -1101,6 +1163,17 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		$journal_count = self::journal_option_count();
 		$report = WCOS_Merge_Preflight::report($source_view, $target, 2);
 		self::assert($reason === $report['reason'], 'Unexpected Merge preflight reason: ' . $report['reason'] . ', expected ' . $reason);
+		if ($exercise_service) {
+			$operation_id = 'compat-006-rejected-' . wp_generate_uuid4();
+			$service_reason = '';
+			try {
+				(new WCOS_Mutation_Gateway())->merge($persisted_source, $target, $operation_id, 2);
+			} catch (WCOS_Merge_Preflight_Exception $exception) {
+				$service_reason = $exception->get_reason();
+			}
+			self::assert($reason === $service_reason, 'Production Merge service did not reject before journal with the expected reason.');
+			self::assert(null === WCOS_Operation_Journal::get(wc_get_order($source_id), $operation_id), 'Rejected production Merge service created a journal.');
+		}
 		self::assert($journal_count === self::journal_option_count(), 'Rejected financial preflight created a journal.');
 		self::assert($source_before === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($source_id)), 'Rejected financial preflight changed source.');
 		self::assert($target_before === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target_id)), 'Rejected financial preflight changed target.');

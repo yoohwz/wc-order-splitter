@@ -168,6 +168,21 @@ final class WCOS_Merge_Commercial_Policy {
 		return $authority;
 	}
 
+	/** Exact aggregate and per-rate line-total tax boundary for financial targets. */
+	public static function financial_target_line_tax_is_neutral($total_tax, array $taxes, $precision) {
+		$precision = WCOS_Price_Precision_Scope::validate($precision);
+		if (0 !== WCOS_Decimal::to_units($total_tax, $precision)) {
+			return false;
+		}
+		$rate_totals = isset($taxes['total']) ? (array) $taxes['total'] : array();
+		foreach ($rate_totals as $amount) {
+			if (0 !== WCOS_Decimal::to_units($amount, $precision)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	/** Canonical identity for deciding whether historical values may be added. */
 	public static function line_identity(WC_Order_Item_Product $item) {
 		$taxes = $item->get_taxes();
@@ -210,6 +225,14 @@ final class WCOS_Merge_Commercial_Policy {
 		$result = WCOS_Order_Contract_Snapshot::aggregate(array($target), $precision);
 		$source_lines = self::line_contract($source, $precision);
 		$financial_target = WCOS_Merge_Financial_Authority::has_history($target, $precision);
+		if ($financial_target) {
+			foreach ($source->get_items('line_item') as $source_line) {
+				if (0 !== WCOS_Decimal::to_units($source_line->get_total(), $precision)
+					|| !self::financial_target_line_tax_is_neutral($source_line->get_total_tax(), (array) $source_line->get_taxes(), $precision)) {
+					throw new InvalidArgumentException(__('A financially historical target requires exact settlement-neutral source line authority.', 'wc-order-splitter'));
+				}
+			}
+		}
 
 		foreach (array('line_subtotal', 'line_total', 'line_subtotal_tax', 'line_total_tax') as $field) {
 			$result[$field] = self::add_decimal($result[$field], $source_lines[$field], $precision);
@@ -254,7 +277,7 @@ final class WCOS_Merge_Commercial_Policy {
 				$zero = WCOS_Decimal::from_units(0, $precision);
 				$result['tax_by_rate'][$rate_id] = array('cart' => $zero, 'shipping' => $zero);
 			}
-			if (isset($result['tax_by_rate'][$rate_id])) {
+			if (!$financial_target && isset($result['tax_by_rate'][$rate_id])) {
 				$result['tax_by_rate'][$rate_id]['cart'] = self::add_decimal(
 					$result['tax_by_rate'][$rate_id]['cart'],
 					$taxes['total'],

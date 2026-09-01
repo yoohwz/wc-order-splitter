@@ -142,7 +142,11 @@ final class WCOS_Merge_Preflight {
 				if (0 !== WCOS_Decimal::to_units($source_line->get_total(), $precision)) {
 					return self::reject($report, 'financial_target_nonzero_source_total', __('A financially historical target can accept only source product lines with exact zero total.', 'wc-order-splitter'));
 				}
-				if (0 !== WCOS_Decimal::to_units($source_line->get_total_tax(), $precision)) {
+				if (!WCOS_Merge_Commercial_Policy::financial_target_line_tax_is_neutral(
+					$source_line->get_total_tax(),
+					(array) $source_line->get_taxes(),
+					$precision
+				)) {
 					return self::reject($report, 'financial_target_nonzero_source_tax', __('A financially historical target can accept only source product lines with exact zero total tax.', 'wc-order-splitter'));
 				}
 			}

@@ -44,6 +44,9 @@ final class WCOS_Merge_Plan {
 				throw new RuntimeException(__('Merge encountered an unsupported source product-line object.', 'wc-order-splitter'));
 			}
 			$source_state = self::line_state($item);
+			if ($financial_target) {
+				self::assert_financial_target_line_neutral($source_state, $precision);
+			}
 			self::assert_reduced_stock($source_state['reduced_stock'], $source_state['quantity']);
 			if (!$source_stock_flag && self::has_reduced_stock($source_state['reduced_stock'])) {
 				throw new RuntimeException(__('Merge found source line-level reduced-stock ownership without its order-level stock flag.', 'wc-order-splitter'));
@@ -181,6 +184,9 @@ final class WCOS_Merge_Plan {
 		$precision = WCOS_Price_Precision_Scope::validate(isset($policy['price_precision']) ? $policy['price_precision'] : null);
 		foreach ($canonical_lines as $line) {
 			$has_coalesce = $has_coalesce || 'coalesce' === $line['action'];
+			if ($financial_target) {
+				self::assert_financial_target_line_neutral($line, $precision);
+			}
 			if ($financial_target && 'fresh_target_line' !== $line['action']) {
 				throw new InvalidArgumentException(__('A financially historical target requires every Merge line to be fresh.', 'wc-order-splitter'));
 			}
@@ -429,6 +435,17 @@ final class WCOS_Merge_Plan {
 		if (!is_numeric($value) || WCOS_Decimal::to_units($value, 6) < 0
 			|| WCOS_Decimal::to_units($value, 6) > WCOS_Decimal::to_units($quantity, 6)) {
 			throw new RuntimeException(__('A Merge line contains an invalid reduced-stock ownership marker.', 'wc-order-splitter'));
+		}
+	}
+
+	private static function assert_financial_target_line_neutral(array $line, $precision) {
+		if (0 !== WCOS_Decimal::to_units(isset($line['total']) ? $line['total'] : null, $precision)
+			|| !WCOS_Merge_Commercial_Policy::financial_target_line_tax_is_neutral(
+				isset($line['total_tax']) ? $line['total_tax'] : null,
+				isset($line['taxes']) && is_array($line['taxes']) ? $line['taxes'] : array(),
+				$precision
+			)) {
+			throw new InvalidArgumentException(__('A financially historical target requires exact settlement-neutral source line authority.', 'wc-order-splitter'));
 		}
 	}
 
