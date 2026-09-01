@@ -11,9 +11,9 @@ defined('ABSPATH') || exit;
  */
 final class WCOS_Merge_Commercial_Policy {
 
-	const SCHEMA_VERSION = 2;
+	const SCHEMA_VERSION = 3;
 	const PREVIOUS_SCHEMA_VERSION = 1;
-	const POLICY_VERSION = 2;
+	const POLICY_VERSION = 3;
 	const PREVIOUS_POLICY_VERSION = 1;
 
 	public static function authority(WC_Order $source, WC_Order $target, $precision, array $financial_authority = array()) {
@@ -41,10 +41,10 @@ final class WCOS_Merge_Commercial_Policy {
 			'financial_policy_fingerprint' => $financial_authority['pair_financial_policy_fingerprint'],
 			'target_financial_history_disposition' => $financial_target ? 'preserve_exact' : 'absent',
 			'payment_refund_api_disposition' => 'never',
-			'source_status' => sanitize_key((string) $source->get_status()),
-			'target_status' => sanitize_key((string) $target->get_status()),
-			'currency' => (string) $target->get_currency(),
-			'prices_include_tax' => (bool) $target->get_prices_include_tax(),
+			'source_status' => WCOS_Merge_Canonical_Reader::status($source),
+			'target_status' => WCOS_Merge_Canonical_Reader::status($target),
+			'currency' => WCOS_Merge_Canonical_Reader::currency($target),
+			'prices_include_tax' => WCOS_Merge_Canonical_Reader::prices_include_tax($target),
 			'price_precision' => $precision,
 		));
 	}
@@ -94,7 +94,9 @@ final class WCOS_Merge_Commercial_Policy {
 		$source_status = sanitize_key((string) $authority['source_status']);
 		$target_status = sanitize_key((string) $authority['target_status']);
 		$currency = strtoupper(trim((string) $authority['currency']));
-		if ('' === $source_status || '' === $target_status || '' === $currency) {
+		if ('' === $source_status || '' === $target_status || '' === $currency
+			|| in_array($source_status, array('trash', 'cancelled', 'refunded', 'failed', 'checkout-draft'), true)
+			|| in_array($target_status, array('trash', 'cancelled', 'refunded', 'failed', 'checkout-draft'), true)) {
 			throw new InvalidArgumentException(__('The Merge commercial status or currency authority is incomplete.', 'wc-order-splitter'));
 		}
 		return array(
@@ -185,7 +187,7 @@ final class WCOS_Merge_Commercial_Policy {
 
 	/** Canonical identity for deciding whether historical values may be added. */
 	public static function line_identity(WC_Order_Item_Product $item) {
-		$taxes = $item->get_taxes();
+		$taxes = (array) $item->get_taxes('edit');
 		$structure = array();
 		foreach (array('subtotal', 'total') as $bucket) {
 			$rate_ids = array_map('strval', array_keys(isset($taxes[$bucket]) && is_array($taxes[$bucket]) ? $taxes[$bucket] : array()));
@@ -194,10 +196,10 @@ final class WCOS_Merge_Commercial_Policy {
 		}
 		return WCOS_Mutation_Fingerprint::create(
 			'merge_commercial_line_identity_v1',
-			absint($item->get_product_id()),
+			absint($item->get_product_id('edit')),
 			array(
-				'line_identity' => WCOS_Line_Identity::from_item($item),
-				'name' => (string) $item->get_name(),
+				'line_identity' => WCOS_Merge_Canonical_Reader::line_identity($item),
+				'name' => (string) $item->get_name('edit'),
 				'tax_rate_structure' => $structure,
 				'quantity_precision' => 6,
 			)
@@ -206,9 +208,9 @@ final class WCOS_Merge_Commercial_Policy {
 
 	public static function product_tax_rate_ids(WC_Order $order) {
 		$ids = array();
-		foreach ($order->get_items('line_item') as $item) {
+		foreach (WCOS_Merge_Canonical_Reader::items($order, 'line_item') as $item) {
 			foreach (array('subtotal', 'total') as $bucket) {
-				$taxes = $item->get_taxes();
+				$taxes = (array) $item->get_taxes('edit');
 				foreach (array_keys(isset($taxes[$bucket]) && is_array($taxes[$bucket]) ? $taxes[$bucket] : array()) as $rate_id) {
 					$ids[] = (int) $rate_id;
 				}
@@ -220,15 +222,18 @@ final class WCOS_Merge_Commercial_Policy {
 	}
 
 	/** Expected active target economy after only source product history moves. */
-	public static function expected_target_contract(WC_Order $source, WC_Order $target, $precision) {
+	public static function expected_target_contract(WC_Order $source, WC_Order $target, $precision, $preflight_policy_version = null) {
 		$precision = WCOS_Price_Precision_Scope::validate($precision);
-		$result = WCOS_Order_Contract_Snapshot::aggregate(array($target), $precision);
-		$source_lines = self::line_contract($source, $precision);
-		$financial_target = WCOS_Merge_Financial_Authority::has_history($target, $precision);
+		$current_projection = self::uses_current_projection($preflight_policy_version);
+		$result = $current_projection
+			? WCOS_Merge_Canonical_Reader::aggregate(array($target), $precision)
+			: WCOS_Order_Contract_Snapshot::aggregate(array($target), $precision);
+		$source_lines = self::line_contract($source, $precision, $preflight_policy_version);
+		$financial_target = $current_projection && WCOS_Merge_Financial_Authority::has_history($target, $precision);
 		if ($financial_target) {
-			foreach ($source->get_items('line_item') as $source_line) {
-				if (0 !== WCOS_Decimal::to_units($source_line->get_total(), $precision)
-					|| !self::financial_target_line_tax_is_neutral($source_line->get_total_tax(), (array) $source_line->get_taxes(), $precision)) {
+			foreach (WCOS_Merge_Canonical_Reader::items($source, 'line_item') as $source_line) {
+				if (0 !== WCOS_Decimal::to_units($source_line->get_total('edit'), $precision)
+					|| !self::financial_target_line_tax_is_neutral($source_line->get_total_tax('edit'), (array) $source_line->get_taxes('edit'), $precision)) {
 					throw new InvalidArgumentException(__('A financially historical target requires exact settlement-neutral source line authority.', 'wc-order-splitter'));
 				}
 			}
@@ -294,7 +299,7 @@ final class WCOS_Merge_Commercial_Policy {
 		return WCOS_Mutation_Fingerprint::create(
 			self::active_economic_namespace($preflight_policy_version),
 			$source->get_id(),
-			self::expected_target_contract($source, $target, $precision)
+			self::expected_target_contract($source, $target, $precision, $preflight_policy_version)
 		);
 	}
 
@@ -302,14 +307,26 @@ final class WCOS_Merge_Commercial_Policy {
 		return WCOS_Mutation_Fingerprint::create(
 			self::active_economic_namespace($preflight_policy_version),
 			absint($source_order_id),
-			WCOS_Order_Contract_Snapshot::aggregate(array($target), $precision)
+			self::uses_current_projection($preflight_policy_version)
+				? WCOS_Merge_Canonical_Reader::aggregate(array($target), $precision)
+				: WCOS_Order_Contract_Snapshot::aggregate(array($target), $precision)
 		);
+	}
+
+	private static function uses_current_projection($preflight_policy_version) {
+		$preflight_policy_version = null === $preflight_policy_version
+			? WCOS_Merge_Preflight::POLICY_VERSION
+			: (int) $preflight_policy_version;
+		return WCOS_Merge_Preflight::POLICY_VERSION === $preflight_policy_version;
 	}
 
 	private static function active_economic_namespace($preflight_policy_version) {
 		$preflight_policy_version = null === $preflight_policy_version
 			? WCOS_Merge_Preflight::POLICY_VERSION
 			: (int) $preflight_policy_version;
+		if (WCOS_Merge_Preflight::POLICY_VERSION === $preflight_policy_version) {
+			return 'merge_canonical_active_economic_v2';
+		}
 		return WCOS_Merge_Preflight::PREVIOUS_POLICY_VERSION === $preflight_policy_version
 			? 'merge_ordinary_active_economic_v1'
 			: 'merge_financial_boundary_active_economic_v1';
@@ -331,24 +348,31 @@ final class WCOS_Merge_Commercial_Policy {
 		return self::add_decimal($left, WCOS_Decimal::from_units(-WCOS_Decimal::to_units($right, $precision), $precision), $precision);
 	}
 
-	private static function line_contract(WC_Order $order, $precision) {
+	private static function line_contract(WC_Order $order, $precision, $preflight_policy_version = null) {
 		$result = array(
 			'line_subtotal' => '0', 'line_total' => '0', 'line_subtotal_tax' => '0', 'line_total_tax' => '0',
 			'stock_reduced' => '0', 'line_quantities' => array(), 'line_tax_by_rate' => array(),
 		);
-		foreach ($order->get_items('line_item') as $item) {
-			$result['line_subtotal'] = self::add_decimal($result['line_subtotal'], $item->get_subtotal(), $precision);
-			$result['line_total'] = self::add_decimal($result['line_total'], $item->get_total(), $precision);
-			$result['line_subtotal_tax'] = self::add_decimal($result['line_subtotal_tax'], $item->get_subtotal_tax(), $precision);
-			$result['line_total_tax'] = self::add_decimal($result['line_total_tax'], $item->get_total_tax(), $precision);
-			$identity = WCOS_Line_Identity::from_item($item);
+		$current_projection = self::uses_current_projection($preflight_policy_version);
+		$items = $current_projection
+			? WCOS_Merge_Canonical_Reader::items($order, 'line_item')
+			: $order->get_items('line_item');
+		$context = $current_projection ? 'edit' : 'view';
+		foreach ($items as $item) {
+			$result['line_subtotal'] = self::add_decimal($result['line_subtotal'], $item->get_subtotal($context), $precision);
+			$result['line_total'] = self::add_decimal($result['line_total'], $item->get_total($context), $precision);
+			$result['line_subtotal_tax'] = self::add_decimal($result['line_subtotal_tax'], $item->get_subtotal_tax($context), $precision);
+			$result['line_total_tax'] = self::add_decimal($result['line_total_tax'], $item->get_total_tax($context), $precision);
+			$identity = $current_projection
+				? WCOS_Merge_Canonical_Reader::line_identity($item)
+				: WCOS_Line_Identity::from_item($item);
 			$current_quantity = isset($result['line_quantities'][$identity]) ? $result['line_quantities'][$identity] : '0.000000';
-			$result['line_quantities'][$identity] = self::add_decimal($current_quantity, $item->get_quantity(), 6);
-			$reduced = $item->get_meta('_reduced_stock', true);
+			$result['line_quantities'][$identity] = self::add_decimal($current_quantity, $item->get_quantity($context), 6);
+			$reduced = $item->get_meta('_reduced_stock', true, $context);
 			if ('' !== $reduced && null !== $reduced) {
 				$result['stock_reduced'] = self::add_decimal($result['stock_reduced'], $reduced, 6);
 			}
-			$taxes = $item->get_taxes();
+			$taxes = (array) $item->get_taxes($context);
 			foreach (array('subtotal', 'total') as $bucket) {
 				foreach (isset($taxes[$bucket]) && is_array($taxes[$bucket]) ? $taxes[$bucket] : array() as $rate_id => $amount) {
 					$key = (string) (int) $rate_id;

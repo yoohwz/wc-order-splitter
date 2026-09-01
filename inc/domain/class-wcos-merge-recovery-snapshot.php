@@ -12,7 +12,8 @@ defined('ABSPATH') || exit;
  */
 final class WCOS_Merge_Recovery_Snapshot {
 
-	const SCHEMA_VERSION = 4;
+	const SCHEMA_VERSION = 5;
+	const PREVIOUS_SCHEMA_VERSION = 4;
 
 	public static function capture(WC_Order $source, WC_Order $target, array $record) {
 		$pair = WCOS_Merge_Journal_Context::pair_from_record($record);
@@ -21,8 +22,20 @@ final class WCOS_Merge_Recovery_Snapshot {
 			|| absint($target->get_id()) !== $pair['target_order_id']) {
 			throw new RuntimeException(__('Merge recovery snapshot participants do not match pair authority.', 'wc-order-splitter'));
 		}
-		if (!hash_equals($pair['source_signature'], WCOS_Order_Contract_Snapshot::source_signature($source))
-			|| !hash_equals($pair['target_signature'], WCOS_Order_Contract_Snapshot::source_signature($target))) {
+		$current_pair = WCOS_Merge_Preflight::POLICY_VERSION === (int) $pair['preflight_policy_version'];
+		$schema_version = $current_pair ? self::SCHEMA_VERSION : self::PREVIOUS_SCHEMA_VERSION;
+		$source = self::order($pair['source_order_id'], $schema_version);
+		$target = self::order($pair['target_order_id'], $schema_version);
+		if (!$source instanceof WC_Order || !$target instanceof WC_Order
+			|| 'shop_order' !== $source->get_type() || 'shop_order' !== $target->get_type()) {
+			throw new RuntimeException(__('Merge recovery snapshot participants could not be reloaded from persisted authority.', 'wc-order-splitter'));
+		}
+		$source_signature = $current_pair
+			? WCOS_Merge_Canonical_Reader::source_signature($source) : WCOS_Order_Contract_Snapshot::source_signature($source);
+		$target_signature = $current_pair
+			? WCOS_Merge_Canonical_Reader::source_signature($target) : WCOS_Order_Contract_Snapshot::source_signature($target);
+		if (!hash_equals($pair['source_signature'], $source_signature)
+			|| !hash_equals($pair['target_signature'], $target_signature)) {
 			throw new RuntimeException(__('Merge participants changed before recovery state could be captured.', 'wc-order-splitter'));
 		}
 		if (isset($pair['financial_authority']) && is_array($pair['financial_authority'])) {
@@ -30,7 +43,7 @@ final class WCOS_Merge_Recovery_Snapshot {
 		}
 
 		$snapshot = array(
-			'schema_version' => self::SCHEMA_VERSION,
+			'schema_version' => $schema_version,
 			'pair_fingerprint' => $pair['pair_fingerprint'],
 			'source_order_id' => $pair['source_order_id'],
 			'target_order_id' => $pair['target_order_id'],
@@ -40,18 +53,23 @@ final class WCOS_Merge_Recovery_Snapshot {
 			'retirement_candidates' => $pair['retirement_candidates'],
 			'retirement_policy_selected' => (bool) $pair['retirement_policy_selected'],
 			'retirement_policy_identifier' => (string) $pair['retirement_policy_identifier'],
-			'source' => self::participant_state($source),
-			'target' => self::participant_state($target),
-			'source_immutable_context' => self::immutable_guard($source),
-			'target_immutable_context' => self::immutable_guard($target),
+			'source' => self::participant_state($source, $schema_version),
+			'target' => self::participant_state($target, $schema_version),
+			'source_immutable_context' => self::immutable_guard($source, $schema_version),
+			'target_immutable_context' => self::immutable_guard($target, $schema_version),
 		);
-		$snapshot['archive_source_contract_before'] = self::archive_commercial_contract($source);
+		$snapshot['archive_source_contract_before'] = self::archive_commercial_contract($source, $schema_version);
 		$snapshot['archive_source_signature_before'] = self::contract_signature('merge_archive_commercial_v1', $source->get_id(), $snapshot['archive_source_contract_before']);
 		if (WCOS_Merge_Preflight::LEGACY_POLICY_VERSION === (int) $pair['preflight_policy_version']) {
-			$snapshot['active_economic_contract_before'] = self::active_economic_contract(array($source, $target), $pair['price_precision']);
+			$snapshot['active_economic_contract_before'] = self::active_economic_contract(array($source, $target), $pair['price_precision'], $schema_version);
 			$snapshot['active_ownership_before_signature'] = self::contract_signature('merge_active_economic_v1', $source->get_id(), $snapshot['active_economic_contract_before']);
 		} else {
-			$snapshot['active_economic_contract_before'] = WCOS_Merge_Commercial_Policy::expected_target_contract($source, $target, $pair['price_precision']);
+			$snapshot['active_economic_contract_before'] = WCOS_Merge_Commercial_Policy::expected_target_contract(
+				$source,
+				$target,
+				$pair['price_precision'],
+				$pair['preflight_policy_version']
+			);
 			$snapshot['active_ownership_before_signature'] = WCOS_Merge_Commercial_Policy::expected_target_signature(
 				$source,
 				$target,
@@ -74,7 +92,7 @@ final class WCOS_Merge_Recovery_Snapshot {
 		sort($actual_keys, SORT_STRING);
 		sort($expected_keys, SORT_STRING);
 		if ($actual_keys !== $expected_keys
-			|| self::SCHEMA_VERSION !== (int) $snapshot['schema_version']
+			|| !in_array((int) $snapshot['schema_version'], array(self::PREVIOUS_SCHEMA_VERSION, self::SCHEMA_VERSION), true)
 			|| !is_array($snapshot['source']) || !is_array($snapshot['target'])
 			|| !in_array($snapshot['retirement_policy_selected'], array(true, false), true)
 			|| ((bool) $snapshot['retirement_policy_selected'] && WCOS_Merge_Retirement_Policy::approved_identifier() !== sanitize_key((string) $snapshot['retirement_policy_identifier']))
@@ -120,26 +138,28 @@ final class WCOS_Merge_Recovery_Snapshot {
 	public static function fingerprint(array $snapshot) {
 		$copy = $snapshot;
 		unset($copy['recovery_fingerprint']);
+		$namespace = self::SCHEMA_VERSION === (int) (isset($copy['schema_version']) ? $copy['schema_version'] : 0)
+			? 'merge_pair_recovery_v5' : 'merge_pair_recovery_v4';
 		return WCOS_Mutation_Fingerprint::create(
-			'merge_pair_recovery_v4',
+			$namespace,
 			isset($copy['source_order_id']) ? absint($copy['source_order_id']) : 0,
 			$copy
 		);
 	}
 
-	public static function participant_signature(WC_Order $order) {
-		$state = self::participant_state($order);
+	public static function participant_signature(WC_Order $order, $schema_version = self::SCHEMA_VERSION) {
+		$state = self::participant_state($order, $schema_version);
 		return self::state_signature($state);
 	}
 
 	/** Full lifecycle/stock-aware participant state used only for exact recovery. */
-	public static function participant_checkpoint(WC_Order $order) {
-		return self::participant_state($order);
+	public static function participant_checkpoint(WC_Order $order, $schema_version = self::SCHEMA_VERSION) {
+		return self::participant_state($order, $schema_version);
 	}
 
 	/** Commercial archive contract deliberately excludes lifecycle, relations, and stock markers. */
-	public static function archive_commercial_contract(WC_Order $order) {
-		$state = self::participant_state($order);
+	public static function archive_commercial_contract(WC_Order $order, $schema_version = self::SCHEMA_VERSION) {
+		$state = self::participant_state($order, $schema_version);
 		$lines = $state['line_items'];
 		foreach ($lines as &$line) {
 			unset($line['reduced_stock']);
@@ -149,38 +169,43 @@ final class WCOS_Merge_Recovery_Snapshot {
 		unset($props['status']);
 		return array(
 			'order_id' => $state['order_id'],
-			'currency' => (string) $order->get_currency(),
-			'prices_include_tax' => (bool) $order->get_prices_include_tax(),
+			'currency' => self::is_current_schema($schema_version) ? WCOS_Merge_Canonical_Reader::currency($order) : (string) $order->get_currency(),
+			'prices_include_tax' => self::is_current_schema($schema_version) ? WCOS_Merge_Canonical_Reader::prices_include_tax($order) : (bool) $order->get_prices_include_tax(),
 			'order_props' => $props,
 			'line_items' => $lines,
 			'tax_items' => $state['tax_items'],
 		);
 	}
 
-	public static function archive_commercial_signature(WC_Order $order) {
-		return self::contract_signature('merge_archive_commercial_v1', $order->get_id(), self::archive_commercial_contract($order));
+	public static function archive_commercial_signature(WC_Order $order, $schema_version = self::SCHEMA_VERSION) {
+		return self::contract_signature('merge_archive_commercial_v1', $order->get_id(), self::archive_commercial_contract($order, $schema_version));
 	}
 
 	/** Exact quantity/money/per-rate-tax/currency aggregate; operational stock is excluded. */
-	public static function active_economic_contract(array $orders, $precision) {
-		$contract = WCOS_Order_Contract_Snapshot::aggregate($orders, $precision);
+	public static function active_economic_contract(array $orders, $precision, $schema_version = self::SCHEMA_VERSION) {
+		$contract = self::is_current_schema($schema_version)
+			? WCOS_Merge_Canonical_Reader::aggregate($orders, $precision)
+			: WCOS_Order_Contract_Snapshot::aggregate($orders, $precision);
 		unset($contract['stock_reduced']);
 		return $contract;
 	}
 
-	public static function active_economic_signature(array $orders, $precision, $authority_order_id) {
-		return self::contract_signature('merge_active_economic_v1', $authority_order_id, self::active_economic_contract($orders, $precision));
+	public static function active_economic_signature(array $orders, $precision, $authority_order_id, $schema_version = self::SCHEMA_VERSION) {
+		return self::contract_signature('merge_active_economic_v1', $authority_order_id, self::active_economic_contract($orders, $precision, $schema_version));
 	}
 
 	public static function assert_archive_preserved(array $snapshot, WC_Order $source) {
 		self::assert_valid($snapshot);
-		WCOS_Merge_Retirement_Policy::assert_archive_preserved($snapshot['archive_source_signature_before'], self::archive_commercial_signature($source));
+		WCOS_Merge_Retirement_Policy::assert_archive_preserved(
+			$snapshot['archive_source_signature_before'],
+			self::archive_commercial_signature($source, $snapshot['schema_version'])
+		);
 	}
 
 	public static function assert_active_economic_conserved(array $snapshot, WC_Order $target) {
 		self::assert_valid($snapshot);
 		$actual = WCOS_Merge_Preflight::LEGACY_POLICY_VERSION === (int) $snapshot['preflight_policy_version']
-			? self::active_economic_signature(array($target), $snapshot['price_precision'], $snapshot['source_order_id'])
+			? self::active_economic_signature(array($target), $snapshot['price_precision'], $snapshot['source_order_id'], $snapshot['schema_version'])
 			: WCOS_Merge_Commercial_Policy::target_signature(
 				$target,
 				$snapshot['price_precision'],
@@ -230,8 +255,8 @@ final class WCOS_Merge_Recovery_Snapshot {
 				$allow_source_retired
 			);
 		}
-		self::assert_immutable_participant($snapshot['source_immutable_context'], $source, array(), array());
-		self::assert_immutable_participant($snapshot['target_immutable_context'], $target, $target_item_ids, $target_tax_item_ids);
+		self::assert_immutable_participant($snapshot['source_immutable_context'], $source, array(), array(), $snapshot['schema_version']);
+		self::assert_immutable_participant($snapshot['target_immutable_context'], $target, $target_item_ids, $target_tax_item_ids, $snapshot['schema_version']);
 		return true;
 	}
 
@@ -258,49 +283,52 @@ final class WCOS_Merge_Recovery_Snapshot {
 		$retirement_candidate = ''
 	) {
 		self::assert_valid($snapshot);
+		$schema_version = (int) $snapshot['schema_version'];
 		$role = sanitize_key((string) $role);
 		if (!in_array($role, array('source', 'target'), true)) {
 			throw new InvalidArgumentException(__('A valid Merge recovery participant role is required.', 'wc-order-splitter'));
 		}
 		$order_id = absint($snapshot[$role]['order_id']);
-		$order = wc_get_order($order_id);
+		$order = self::order($order_id, $schema_version);
 		if (!$order instanceof WC_Order || 'shop_order' !== $order->get_type()) {
 			throw new RuntimeException(__('A Merge recovery participant is unavailable.', 'wc-order-splitter'));
 		}
 		$retirement_candidate = sanitize_key((string) $retirement_candidate);
-		if ('source' === $role && WCOS_Merge_Retirement_Policy::NON_FORCE_TRASH_ARCHIVE === $retirement_candidate && 'trash' === $order->get_status()) {
+		if ('source' === $role && WCOS_Merge_Retirement_Policy::NON_FORCE_TRASH_ARCHIVE === $retirement_candidate && 'trash' === self::status($order, $schema_version)) {
 			self::invoke($boundary, 'before_source_untrash', 0);
 			if (!method_exists($order, 'untrash') || !$order->untrash()) {
 				throw new RuntimeException(__('The non-force archived Merge source could not be untrashed for recovery.', 'wc-order-splitter'));
 			}
-			$order = wc_get_order($order_id);
+			$order = self::order($order_id, $schema_version);
 			self::invoke($checkpoint, 'source_untrashed', 0);
 		}
 		$target_item_ids = array_values(array_unique(array_filter(array_map('absint', $target_item_ids))));
 		sort($target_item_ids, SORT_NUMERIC);
 		$target_tax_item_ids = array_values(array_unique(array_filter(array_map('absint', $target_tax_item_ids))));
 		sort($target_tax_item_ids, SORT_NUMERIC);
-		self::assert_resumable_participant($snapshot[$role], $after_state, $order, 'target' === $role ? $target_item_ids : array(), 'target' === $role ? $target_tax_item_ids : array());
+		self::assert_resumable_participant($snapshot[$role], $after_state, $order, 'target' === $role ? $target_item_ids : array(), 'target' === $role ? $target_tax_item_ids : array(), $schema_version);
 
-		$line_items = $order->get_items('line_item');
+		$line_items = self::items($order, 'line_item', $schema_version);
 		foreach ($snapshot[$role]['line_items'] as $item_id => $state) {
 			$item = isset($line_items[$item_id]) ? $line_items[$item_id] : null;
 			if (!$item instanceof WC_Order_Item_Product) {
 				throw new RuntimeException(__('A snapshotted Merge line disappeared during recovery.', 'wc-order-splitter'));
 			}
-			$current_line = self::participant_state($order)['line_items'][$item_id];
+			$current_line = self::participant_state($order, $schema_version)['line_items'][$item_id];
 			if ($current_line === $state) {
 				continue;
 			}
 			self::invoke($boundary, 'before_' . $role . '_line_restore', $item_id);
-			$result = $item->set_props(array(
-				'quantity' => $state['quantity'],
-				'subtotal' => $state['subtotal'],
-				'subtotal_tax' => $state['subtotal_tax'],
-				'total' => $state['total'],
-				'total_tax' => $state['total_tax'],
-				'taxes' => $state['taxes'],
-			));
+			$result = self::write($schema_version, static function() use ($item, $state) {
+				return $item->set_props(array(
+					'quantity' => $state['quantity'],
+					'subtotal' => $state['subtotal'],
+					'subtotal_tax' => $state['subtotal_tax'],
+					'total' => $state['total'],
+					'total_tax' => $state['total_tax'],
+					'taxes' => $state['taxes'],
+				));
+			});
 			if (is_wp_error($result)) {
 				throw new RuntimeException(__('A Merge line could not be restored.', 'wc-order-splitter'));
 			}
@@ -319,10 +347,12 @@ final class WCOS_Merge_Recovery_Snapshot {
 				if (isset($snapshot[$role]['line_items'][$item_id])) {
 					throw new RuntimeException(__('Recovery cannot remove a pre-existing target line.', 'wc-order-splitter'));
 				}
-				if (false !== $order->get_item($item_id)) {
+				if (false !== self::item($order, $item_id, 'line_item', $schema_version)) {
 					self::invoke($boundary, 'before_target_added_line_cleanup', $item_id);
-					$order->remove_item($item_id);
-					$order->save();
+					self::write($schema_version, static function() use ($order, $item_id) {
+						$order->remove_item($item_id);
+						$order->save();
+					});
 					self::invoke($checkpoint, 'target_added_line_removed', $item_id);
 				}
 			}
@@ -330,75 +360,81 @@ final class WCOS_Merge_Recovery_Snapshot {
 				if (isset($snapshot[$role]['tax_items'][$item_id])) {
 					throw new RuntimeException(__('Recovery cannot remove a pre-existing target tax row.', 'wc-order-splitter'));
 				}
-				if (false !== $order->get_item($item_id)) {
+				if (false !== self::item($order, $item_id, 'tax', $schema_version)) {
 					self::invoke($boundary, 'before_target_added_tax_cleanup', $item_id);
-					$order->remove_item($item_id);
-					$order->save();
+					self::write($schema_version, static function() use ($order, $item_id) {
+						$order->remove_item($item_id);
+						$order->save();
+					});
 					self::invoke($checkpoint, 'target_added_tax_removed', $item_id);
 				}
 			}
 		}
 
-		$tax_items = $order->get_items('tax');
+		$tax_items = self::items($order, 'tax', $schema_version);
 		foreach ($snapshot[$role]['tax_items'] as $item_id => $state) {
 			$item = isset($tax_items[$item_id]) ? $tax_items[$item_id] : null;
-			if (!$item instanceof WC_Order_Item_Tax || (int) $item->get_rate_id() !== (int) $state['rate_id']) {
+			if (!$item instanceof WC_Order_Item_Tax || (int) $item->get_rate_id(self::context($schema_version)) !== (int) $state['rate_id']) {
 				throw new RuntimeException(__('A snapshotted Merge tax row changed during recovery.', 'wc-order-splitter'));
 			}
-			$current_tax = self::participant_state($order)['tax_items'][$item_id];
+			$current_tax = self::participant_state($order, $schema_version)['tax_items'][$item_id];
 			if ($current_tax === $state) {
 				continue;
 			}
 			self::invoke($boundary, 'before_' . $role . '_tax_restore', $item_id);
-			$result = $item->set_props(array(
-				'tax_total' => $state['tax_total'],
-				'shipping_tax_total' => $state['shipping_tax_total'],
-			));
+			$result = self::write($schema_version, static function() use ($item, $state) {
+				return $item->set_props(array(
+					'tax_total' => $state['tax_total'],
+					'shipping_tax_total' => $state['shipping_tax_total'],
+				));
+			});
 			if (is_wp_error($result) || (int) $item_id !== (int) $item->save()) {
 				throw new RuntimeException(__('A Merge tax row could not be restored.', 'wc-order-splitter'));
 			}
 			self::invoke($checkpoint, $role . '_tax_restored', $item_id);
 		}
 
-		$current_state = self::participant_state($order);
+		$current_state = self::participant_state($order, $schema_version);
 		if ($current_state['order_props'] !== $snapshot[$role]['order_props']) {
 			self::invoke($boundary, 'before_' . $role . '_order_restore', 0);
-			$result = $order->set_props($snapshot[$role]['order_props']);
+			$result = self::write($schema_version, static function() use ($order, $snapshot, $role) {
+				return $order->set_props($snapshot[$role]['order_props']);
+			});
 			if (is_wp_error($result)) {
 				throw new RuntimeException(__('Merge order totals or lifecycle state could not be restored.', 'wc-order-splitter'));
 			}
 			$order->save();
 			self::invoke($checkpoint, $role . '_order_restored', 0);
 		}
-		$order = wc_get_order($order_id);
-		$current_state = self::participant_state($order);
+		$order = self::order($order_id, $schema_version);
+		$current_state = self::participant_state($order, $schema_version);
 		if ($current_state['relation_meta'] !== $snapshot[$role]['relation_meta']) {
 			self::invoke($boundary, 'before_' . $role . '_relation_restore', 0);
 			self::restore_relation_state($order, $snapshot[$role]['relation_meta']);
 			$order->save();
 			self::invoke($checkpoint, $role . '_relations_restored', 0);
 		}
-		$order = wc_get_order($order_id);
+		$order = self::order($order_id, $schema_version);
 		if ((bool) $order->get_data_store()->get_stock_reduced($order_id) !== (bool) $snapshot[$role]['order_stock_reduced']) {
 			self::invoke($boundary, 'before_' . $role . '_stock_marker_restore', 0);
 			$order->get_data_store()->set_stock_reduced($order_id, (bool) $snapshot[$role]['order_stock_reduced']);
 			self::invoke($checkpoint, $role . '_stock_marker_restored', 0);
 		}
 
-		$restored = wc_get_order($order_id);
+		$restored = self::order($order_id, $schema_version);
 		$before = self::before_signature($snapshot, $role);
-		if (!$restored instanceof WC_Order || !hash_equals($before, self::participant_signature($restored))) {
+		if (!$restored instanceof WC_Order || !hash_equals($before, self::participant_signature($restored, $schema_version))) {
 			throw new RuntimeException(__('A Merge participant did not match its verified pre-operation snapshot after recovery.', 'wc-order-splitter'));
 		}
 		return $restored;
 	}
 
 	/** Prove every operation-owned component is exactly at its before or after checkpoint. */
-	public static function assert_resumable_participant(array $before, array $after, WC_Order $order, array $added_ids = array(), array $added_tax_ids = array()) {
+	public static function assert_resumable_participant(array $before, array $after, WC_Order $order, array $added_ids = array(), array $added_tax_ids = array(), $schema_version = self::SCHEMA_VERSION) {
 		self::assert_participant_state($before, $order->get_id());
 		self::assert_participant_state($after, $order->get_id());
-		$current = self::participant_state($order);
-		self::assert_item_shape($order, $before, $added_ids, $added_tax_ids, true);
+		$current = self::participant_state($order, $schema_version);
+		self::assert_item_shape($order, $before, $added_ids, $added_tax_ids, true, $schema_version);
 		foreach ($before['line_items'] as $id => $state) {
 			if (!isset($current['line_items'][$id]) || ($current['line_items'][$id] !== $state && (!isset($after['line_items'][$id]) || $current['line_items'][$id] !== $after['line_items'][$id]))) {
 				throw new RuntimeException(__('A Merge line diverged from its resumable checkpoints.', 'wc-order-splitter'));
@@ -430,9 +466,9 @@ final class WCOS_Merge_Recovery_Snapshot {
 	}
 
 	/** Forward repair may resume with operation-owned reciprocal metadata partially persisted. */
-	public static function assert_forward_checkpoint(array $after, WC_Order $order) {
+	public static function assert_forward_checkpoint(array $after, WC_Order $order, $schema_version = self::SCHEMA_VERSION) {
 		self::assert_participant_state($after, $order->get_id());
-		$current = self::participant_state($order);
+		$current = self::participant_state($order, $schema_version);
 		foreach (array('line_items', 'tax_items', 'order_props', 'order_stock_reduced') as $component) {
 			if ($current[$component] !== $after[$component]) {
 				throw new RuntimeException(__('A Merge forward participant changed outside reciprocal relation metadata.', 'wc-order-splitter'));
@@ -441,17 +477,17 @@ final class WCOS_Merge_Recovery_Snapshot {
 		return true;
 	}
 
-	private static function immutable_guard(WC_Order $order) {
+	private static function immutable_guard(WC_Order $order, $schema_version) {
 		$item_ids = array();
 		foreach (array('line_item', 'shipping', 'fee', 'tax', 'coupon') as $type) {
-			$item_ids[$type] = array_map('intval', array_keys($order->get_items($type)));
+			$item_ids[$type] = array_map('intval', array_keys(self::items($order, $type, $schema_version)));
 			sort($item_ids[$type], SORT_NUMERIC);
 		}
 		return array(
 			'schema_version' => 1,
 			'order_id' => (int) $order->get_id(),
 			'item_ids' => $item_ids,
-			'immutable_signature' => self::immutable_signature($order, $item_ids),
+			'immutable_signature' => self::immutable_signature($order, $item_ids, $schema_version),
 		);
 	}
 
@@ -480,14 +516,14 @@ final class WCOS_Merge_Recovery_Snapshot {
 		}
 	}
 
-	private static function assert_immutable_participant(array $guard, WC_Order $order, array $allowed_line_ids, array $allowed_tax_ids) {
+	private static function assert_immutable_participant(array $guard, WC_Order $order, array $allowed_line_ids, array $allowed_tax_ids, $schema_version) {
 		self::assert_immutable_guard($guard, $order->get_id());
 		$allowed_additions = array(
 			'line_item' => array_values(array_unique(array_filter(array_map('absint', $allowed_line_ids)))),
 			'tax' => array_values(array_unique(array_filter(array_map('absint', $allowed_tax_ids)))),
 		);
 		foreach ($guard['item_ids'] as $type => $baseline) {
-			$current = array_map('intval', array_keys($order->get_items($type)));
+			$current = array_map('intval', array_keys(self::items($order, $type, $schema_version)));
 			$allowed = array_values(array_unique(array_merge($baseline, isset($allowed_additions[$type]) ? $allowed_additions[$type] : array())));
 			sort($current, SORT_NUMERIC);
 			sort($allowed, SORT_NUMERIC);
@@ -495,60 +531,61 @@ final class WCOS_Merge_Recovery_Snapshot {
 				throw new RuntimeException(__('A non-Merge order item changed outside immutable participant authority.', 'wc-order-splitter'));
 			}
 		}
-		$actual = self::immutable_signature($order, $guard['item_ids']);
+		$actual = self::immutable_signature($order, $guard['item_ids'], $schema_version);
 		if (!hash_equals((string) $guard['immutable_signature'], $actual)) {
 			throw new RuntimeException(__('Immutable non-Merge participant context changed after its approved checkpoint.', 'wc-order-splitter'));
 		}
 	}
 
-	private static function immutable_signature(WC_Order $order, array $item_ids) {
+	private static function immutable_signature(WC_Order $order, array $item_ids, $schema_version) {
+		$context = self::context($schema_version);
 		$items = array();
 		foreach ($item_ids as $type => $ids) {
 			foreach ($ids as $item_id) {
-				$item = $order->get_item($item_id);
+				$item = self::item($order, $item_id, $type, $schema_version);
 				if (!$item instanceof WC_Order_Item || $item->get_type() !== $type) {
 					throw new RuntimeException(__('An immutable Merge participant item disappeared or changed type.', 'wc-order-splitter'));
 				}
 				$state = array(
 					'id' => (int) $item_id,
 					'type' => (string) $item->get_type(),
-					'name' => (string) $item->get_name(),
+					'name' => (string) $item->get_name($context),
 					'business_meta' => WCOS_Order_Item_Meta_Policy::business_metadata($item),
 				);
 				if ($item instanceof WC_Order_Item_Product) {
 					$state += array(
-						'product_id' => (int) $item->get_product_id(),
-						'variation_id' => (int) $item->get_variation_id(),
-						'tax_class' => (string) $item->get_tax_class(),
+						'product_id' => (int) $item->get_product_id($context),
+						'variation_id' => (int) $item->get_variation_id($context),
+						'tax_class' => (string) $item->get_tax_class($context),
 					);
 				} elseif ($item instanceof WC_Order_Item_Shipping) {
 					$state += array(
-						'method_id' => (string) $item->get_method_id(),
-						'instance_id' => (int) $item->get_instance_id(),
-						'total' => (string) $item->get_total(),
-						'total_tax' => (string) $item->get_total_tax(),
-						'taxes' => self::canonicalize($item->get_taxes()),
+						'method_id' => (string) $item->get_method_id($context),
+						'instance_id' => (int) $item->get_instance_id($context),
+						'total' => (string) $item->get_total($context),
+						'total_tax' => (string) $item->get_total_tax($context),
+						'taxes' => self::canonicalize((array) $item->get_taxes($context)),
 					);
 				} elseif ($item instanceof WC_Order_Item_Fee) {
 					$state += array(
-						'amount' => (string) $item->get_amount(),
-						'tax_class' => (string) $item->get_tax_class(),
-						'tax_status' => (string) $item->get_tax_status(),
-						'total' => (string) $item->get_total(),
-						'total_tax' => (string) $item->get_total_tax(),
-						'taxes' => self::canonicalize($item->get_taxes()),
+						'amount' => (string) $item->get_amount($context),
+						'tax_class' => (string) $item->get_tax_class($context),
+						'tax_status' => (string) $item->get_tax_status($context),
+						'total' => (string) $item->get_total($context),
+						'total_tax' => (string) $item->get_total_tax($context),
+						'taxes' => self::canonicalize((array) $item->get_taxes($context)),
 					);
 				} elseif ($item instanceof WC_Order_Item_Tax) {
 					$state += array(
-						'rate_id' => (int) $item->get_rate_id(),
-						'compound' => (bool) $item->get_compound(),
-						'rate_percent' => (string) $item->get_rate_percent(),
+						'rate_id' => (int) $item->get_rate_id($context),
+						'compound' => (bool) $item->get_compound($context),
+						'rate_percent' => (string) $item->get_rate_percent($context),
 					);
 				} elseif ($item instanceof WC_Order_Item_Coupon) {
 					$state += array(
-						'code' => (string) $item->get_code(),
-						'discount' => (string) $item->get_discount(),
-						'discount_tax' => (string) $item->get_discount_tax(),
+						'code' => (string) $item->get_code($context),
+						'discount' => (string) $item->get_discount($context),
+						'discount_tax' => (string) $item->get_discount_tax($context),
 					);
 				}
 				$items[$type][(int) $item_id] = $state;
@@ -557,12 +594,12 @@ final class WCOS_Merge_Recovery_Snapshot {
 		$contract = array(
 			'order_id' => (int) $order->get_id(),
 			'type' => (string) $order->get_type(),
-			'currency' => (string) $order->get_currency(),
-			'prices_include_tax' => (bool) $order->get_prices_include_tax(),
-			'transaction_id' => (string) $order->get_transaction_id(),
-			'customer_note' => (string) $order->get_customer_note(),
-			'parent_id' => (int) $order->get_parent_id(),
-			'created_via' => (string) $order->get_created_via(),
+			'currency' => self::is_current_schema($schema_version) ? WCOS_Merge_Canonical_Reader::currency($order) : (string) $order->get_currency(),
+			'prices_include_tax' => self::is_current_schema($schema_version) ? WCOS_Merge_Canonical_Reader::prices_include_tax($order) : (bool) $order->get_prices_include_tax(),
+			'transaction_id' => (string) $order->get_transaction_id($context),
+			'customer_note' => (string) $order->get_customer_note($context),
+			'parent_id' => (int) $order->get_parent_id($context),
+			'created_via' => (string) $order->get_created_via($context),
 			'items' => $items,
 		);
 		$secret = (string) wp_salt('auth');
@@ -581,51 +618,54 @@ final class WCOS_Merge_Recovery_Snapshot {
 		return hash_hmac('sha256', $document, $secret);
 	}
 
-	private static function participant_state(WC_Order $order) {
+	private static function participant_state(WC_Order $order, $schema_version) {
 		if (!$order->get_id() || 'shop_order' !== $order->get_type()) {
 			throw new InvalidArgumentException(__('Merge recovery requires persisted shop orders.', 'wc-order-splitter'));
 		}
+		$context = self::context($schema_version);
 		$lines = array();
-		foreach ($order->get_items('line_item') as $item_id => $item) {
-			$reduced = $item->get_meta('_reduced_stock', true);
+		foreach (self::items($order, 'line_item', $schema_version) as $item_id => $item) {
+			$reduced = $item->get_meta('_reduced_stock', true, $context);
 			$lines[(int) $item_id] = array(
-				'identity' => WCOS_Line_Identity::from_item($item),
-				'product_id' => (int) $item->get_product_id(),
-				'variation_id' => (int) $item->get_variation_id(),
-				'tax_class' => (string) $item->get_tax_class(),
-				'quantity' => WCOS_Decimal::normalize($item->get_quantity(), 6),
-				'subtotal' => (string) $item->get_subtotal(),
-				'subtotal_tax' => (string) $item->get_subtotal_tax(),
-				'total' => (string) $item->get_total(),
-				'total_tax' => (string) $item->get_total_tax(),
-				'taxes' => self::canonicalize($item->get_taxes()),
+				'identity' => self::is_current_schema($schema_version) ? WCOS_Merge_Canonical_Reader::line_identity($item) : WCOS_Line_Identity::from_item($item),
+				'product_id' => (int) $item->get_product_id($context),
+				'variation_id' => (int) $item->get_variation_id($context),
+				'tax_class' => (string) $item->get_tax_class($context),
+				'quantity' => WCOS_Decimal::normalize($item->get_quantity($context), 6),
+				'subtotal' => (string) $item->get_subtotal($context),
+				'subtotal_tax' => (string) $item->get_subtotal_tax($context),
+				'total' => (string) $item->get_total($context),
+				'total_tax' => (string) $item->get_total_tax($context),
+				'taxes' => self::canonicalize((array) $item->get_taxes($context)),
 				'reduced_stock' => '' === $reduced || null === $reduced ? null : WCOS_Decimal::normalize($reduced, 6),
 			);
 		}
 		ksort($lines, SORT_NUMERIC);
 
 		$taxes = array();
-		foreach ($order->get_items('tax') as $item_id => $item) {
+		foreach (self::items($order, 'tax', $schema_version) as $item_id => $item) {
 			$taxes[(int) $item_id] = array(
-				'rate_id' => (int) $item->get_rate_id(),
-				'tax_total' => (string) $item->get_tax_total(),
-				'shipping_tax_total' => (string) $item->get_shipping_tax_total(),
+				'rate_id' => (int) $item->get_rate_id($context),
+				'tax_total' => (string) $item->get_tax_total($context),
+				'shipping_tax_total' => (string) $item->get_shipping_tax_total($context),
 			);
 		}
 		ksort($taxes, SORT_NUMERIC);
 
 		return array(
 			'order_id' => (int) $order->get_id(),
-			'participant_recovery_signature' => WCOS_Order_Contract_Snapshot::source_signature($order),
+			'participant_recovery_signature' => self::is_current_schema($schema_version)
+				? WCOS_Merge_Canonical_Reader::source_signature($order)
+				: WCOS_Order_Contract_Snapshot::source_signature($order),
 			'order_props' => array(
-				'status' => (string) $order->get_status(),
-				'discount_total' => (string) $order->get_discount_total(),
-				'discount_tax' => (string) $order->get_discount_tax(),
-				'shipping_total' => (string) $order->get_shipping_total(),
-				'shipping_tax' => (string) $order->get_shipping_tax(),
-				'cart_tax' => (string) $order->get_cart_tax(),
-				'total_tax' => (string) $order->get_total_tax(),
-				'total' => (string) $order->get_total(),
+				'status' => self::status($order, $schema_version),
+				'discount_total' => (string) $order->get_discount_total($context),
+				'discount_tax' => (string) $order->get_discount_tax($context),
+				'shipping_total' => (string) $order->get_shipping_total($context),
+				'shipping_tax' => (string) $order->get_shipping_tax($context),
+				'cart_tax' => (string) $order->get_cart_tax($context),
+				'total_tax' => (string) $order->get_total_tax($context),
+				'total' => (string) $order->get_total($context),
 			),
 			'order_stock_reduced' => (bool) $order->get_data_store()->get_stock_reduced($order->get_id()),
 			'relation_meta' => self::relation_state($order),
@@ -647,8 +687,8 @@ final class WCOS_Merge_Recovery_Snapshot {
 		}
 	}
 
-	private static function assert_item_shape(WC_Order $order, array $state, array $allowed_added_ids, array $allowed_added_tax_ids, $allow_removed_additions = false) {
-		$current = array_map('intval', array_keys($order->get_items('line_item')));
+	private static function assert_item_shape(WC_Order $order, array $state, array $allowed_added_ids, array $allowed_added_tax_ids, $allow_removed_additions = false, $schema_version = self::SCHEMA_VERSION) {
+		$current = array_map('intval', array_keys(self::items($order, 'line_item', $schema_version)));
 		$expected = array_map('intval', array_keys($state['line_items']));
 		$allowed = array_values(array_unique(array_merge($expected, $allowed_added_ids)));
 		sort($current, SORT_NUMERIC);
@@ -658,12 +698,15 @@ final class WCOS_Merge_Recovery_Snapshot {
 			throw new RuntimeException(__('The Merge line set contains an unexplained external change.', 'wc-order-splitter'));
 		}
 		foreach ($state['line_items'] as $item_id => $line) {
-			$item = $order->get_item((int) $item_id);
-			if (!$item instanceof WC_Order_Item_Product || !hash_equals((string) $line['identity'], WCOS_Line_Identity::from_item($item))) {
+			$item = self::item($order, $item_id, 'line_item', $schema_version);
+			$identity = $item instanceof WC_Order_Item_Product && self::is_current_schema($schema_version)
+				? WCOS_Merge_Canonical_Reader::line_identity($item)
+				: ($item instanceof WC_Order_Item_Product ? WCOS_Line_Identity::from_item($item) : '');
+			if (!$item instanceof WC_Order_Item_Product || !hash_equals((string) $line['identity'], $identity)) {
 				throw new RuntimeException(__('A pre-existing Merge line identity changed during recovery.', 'wc-order-splitter'));
 			}
 		}
-		$current_tax = array_map('intval', array_keys($order->get_items('tax')));
+		$current_tax = array_map('intval', array_keys(self::items($order, 'tax', $schema_version)));
 		$expected_tax = array_map('intval', array_keys($state['tax_items']));
 		sort($current_tax, SORT_NUMERIC);
 		sort($expected_tax, SORT_NUMERIC);
@@ -672,6 +715,44 @@ final class WCOS_Merge_Recovery_Snapshot {
 		if (($allow_removed_additions && array_diff($current_tax, $allowed_tax)) || (!$allow_removed_additions && $current_tax !== $allowed_tax) || array_diff($expected_tax, $current_tax)) {
 			throw new RuntimeException(__('The Merge tax-row set changed during recovery.', 'wc-order-splitter'));
 		}
+	}
+
+	private static function is_current_schema($schema_version) {
+		return self::SCHEMA_VERSION === (int) $schema_version;
+	}
+
+	private static function context($schema_version) {
+		return self::is_current_schema($schema_version) ? 'edit' : 'view';
+	}
+
+	private static function order($order_id, $schema_version) {
+		return self::is_current_schema($schema_version)
+			? WCOS_Merge_Canonical_Reader::order($order_id)
+			: wc_get_order($order_id);
+	}
+
+	private static function items(WC_Order $order, $item_type, $schema_version) {
+		return self::is_current_schema($schema_version)
+			? WCOS_Merge_Canonical_Reader::items($order, $item_type)
+			: $order->get_items($item_type);
+	}
+
+	private static function item(WC_Order $order, $item_id, $item_type, $schema_version) {
+		return self::is_current_schema($schema_version)
+			? WCOS_Merge_Canonical_Reader::item($order, $item_id, $item_type)
+			: $order->get_item($item_id);
+	}
+
+	private static function status(WC_Order $order, $schema_version) {
+		return self::is_current_schema($schema_version)
+			? WCOS_Merge_Canonical_Reader::status($order)
+			: (string) $order->get_status();
+	}
+
+	private static function write($schema_version, callable $callback) {
+		return self::is_current_schema($schema_version)
+			? WCOS_Merge_Canonical_Reader::without_presentation_filters($callback)
+			: $callback();
 	}
 
 	private static function invoke($callback, $stage, $component_id) {
@@ -730,6 +811,9 @@ final class WCOS_Merge_Recovery_Snapshot {
 		$version = (int) $preflight_policy_version;
 		if (WCOS_Merge_Preflight::LEGACY_POLICY_VERSION === $version) {
 			return 'merge_active_economic_v1';
+		}
+		if (WCOS_Merge_Preflight::POLICY_VERSION === $version) {
+			return 'merge_canonical_active_economic_v2';
 		}
 		return WCOS_Merge_Preflight::PREVIOUS_POLICY_VERSION === $version
 			? 'merge_ordinary_active_economic_v1'

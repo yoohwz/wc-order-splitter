@@ -8,10 +8,11 @@ defined('ABSPATH') || exit;
  */
 final class WCOS_Tax_Item_Synchronizer {
 
-	public static function templates(WC_Order $source) {
+	public static function templates(WC_Order $source, $canonical_merge = false) {
 		$templates = array();
-		foreach ($source->get_items('tax') as $item) {
-			$rate_id = (int) $item->get_rate_id();
+		$items = $canonical_merge ? WCOS_Merge_Canonical_Reader::items($source, 'tax') : $source->get_items('tax');
+		foreach ($items as $item) {
+			$rate_id = (int) $item->get_rate_id($canonical_merge ? 'edit' : 'view');
 			if (isset($templates[$rate_id])) {
 				throw new RuntimeException(__('Duplicate tax rows for one rate are not supported by the hardened split engine.', 'wc-order-splitter'));
 			}
@@ -21,8 +22,8 @@ final class WCOS_Tax_Item_Synchronizer {
 	}
 
 	/** Restrict imported templates to rates sealed by source product-line taxes. */
-	public static function templates_for_rates(WC_Order $source, array $rate_ids) {
-		$all = self::templates($source);
+	public static function templates_for_rates(WC_Order $source, array $rate_ids, $canonical_merge = false) {
+		$all = self::templates($source, $canonical_merge);
 		$rate_ids = array_values(array_unique(array_map('intval', $rate_ids)));
 		sort($rate_ids, SORT_NUMERIC);
 		$templates = array();
@@ -35,7 +36,7 @@ final class WCOS_Tax_Item_Synchronizer {
 		return $templates;
 	}
 
-	public static function synchronize(WC_Order $order, array $templates, $precision = null, $preserve_existing_ids = false, $context = WCOS_Order_Item_Meta_Policy::CONTEXT_SPLIT, $materialize_zero_template_rows = false) {
+	public static function synchronize(WC_Order $order, array $templates, $precision = null, $preserve_existing_ids = false, $context = WCOS_Order_Item_Meta_Policy::CONTEXT_SPLIT, $materialize_zero_template_rows = false, $canonical_merge = false) {
 		$precision = null === $precision ? wc_get_price_decimals() : (int) $precision;
 		$context = sanitize_key((string) $context);
 		if (!in_array($context, array(
@@ -45,10 +46,12 @@ final class WCOS_Tax_Item_Synchronizer {
 		), true)) {
 			throw new InvalidArgumentException(__('A supported historical tax synchronization context is required.', 'wc-order-splitter'));
 		}
-		$totals = self::collect($order, $precision);
+		$canonical_merge = (bool) $canonical_merge;
+		$totals = self::collect($order, $precision, $canonical_merge);
 		$existing = array();
-		foreach ($order->get_items('tax') as $item) {
-			$rate_id = (int) $item->get_rate_id();
+		$tax_items = $canonical_merge ? WCOS_Merge_Canonical_Reader::items($order, 'tax') : $order->get_items('tax');
+		foreach ($tax_items as $item) {
+			$rate_id = (int) $item->get_rate_id($canonical_merge ? 'edit' : 'view');
 			if (isset($existing[$rate_id])) {
 				throw new RuntimeException(__('Duplicate tax rows were found while synchronizing an order.', 'wc-order-splitter'));
 			}
@@ -60,25 +63,33 @@ final class WCOS_Tax_Item_Synchronizer {
 		foreach ($rate_ids as $rate_id) {
 			$cart_units = isset($totals[$rate_id]['cart']) ? $totals[$rate_id]['cart'] : 0;
 			$shipping_units = isset($totals[$rate_id]['shipping']) ? $totals[$rate_id]['shipping'] : 0;
+			$persist_directly = false;
 
 			if (isset($existing[$rate_id])) {
 				$item = $existing[$rate_id];
+				$persist_directly = $canonical_merge;
 			} elseif (0 !== $cart_units || 0 !== $shipping_units || ($materialize_zero_template_rows && isset($templates[$rate_id]))) {
 				if (!isset($templates[$rate_id])) {
 					throw new RuntimeException(__('A historical tax-rate template is missing from the source order.', 'wc-order-splitter'));
 				}
-				$item = WCOS_Order_Item_Cloner::tax($templates[$rate_id], $context);
+				$item = WCOS_Order_Item_Cloner::tax($templates[$rate_id], $context, $canonical_merge);
 				$order->add_item($item);
 			} else {
 				continue;
 			}
 
-			$result = $item->set_props(array(
-				'tax_total' => WCOS_Decimal::from_units($cart_units, $precision),
-				'shipping_tax_total' => WCOS_Decimal::from_units($shipping_units, $precision),
-			));
+			$write = static function() use ($item, $cart_units, $shipping_units, $precision) {
+				return $item->set_props(array(
+					'tax_total' => WCOS_Decimal::from_units($cart_units, $precision),
+					'shipping_tax_total' => WCOS_Decimal::from_units($shipping_units, $precision),
+				));
+			};
+			$result = $canonical_merge ? WCOS_Merge_Canonical_Reader::without_presentation_filters($write) : $write();
 			if (is_wp_error($result)) {
 				throw new RuntimeException($result->get_error_message());
+			}
+			if ($persist_directly && absint($item->get_id()) !== absint($item->save())) {
+				throw new RuntimeException(__('A canonical Merge tax-row update did not persist.', 'wc-order-splitter'));
 			}
 		}
 
@@ -91,16 +102,19 @@ final class WCOS_Tax_Item_Synchronizer {
 		}
 	}
 
-	private static function collect(WC_Order $order, $precision) {
+	private static function collect(WC_Order $order, $precision, $canonical_merge = false) {
 		$totals = array();
-		foreach ($order->get_items('line_item') as $item) {
-			self::collect_tax_array($totals, $item->get_taxes(), 'cart', $precision);
+		$line_items = $canonical_merge ? WCOS_Merge_Canonical_Reader::items($order, 'line_item') : $order->get_items('line_item');
+		foreach ($line_items as $item) {
+			self::collect_tax_array($totals, $item->get_taxes($canonical_merge ? 'edit' : 'view'), 'cart', $precision);
 		}
-		foreach ($order->get_items('fee') as $item) {
-			self::collect_tax_array($totals, $item->get_taxes(), 'cart', $precision);
+		$fee_items = $canonical_merge ? WCOS_Merge_Canonical_Reader::items($order, 'fee') : $order->get_items('fee');
+		foreach ($fee_items as $item) {
+			self::collect_tax_array($totals, $item->get_taxes($canonical_merge ? 'edit' : 'view'), 'cart', $precision);
 		}
-		foreach ($order->get_items('shipping') as $item) {
-			self::collect_tax_array($totals, $item->get_taxes(), 'shipping', $precision);
+		$shipping_items = $canonical_merge ? WCOS_Merge_Canonical_Reader::items($order, 'shipping') : $order->get_items('shipping');
+		foreach ($shipping_items as $item) {
+			self::collect_tax_array($totals, $item->get_taxes($canonical_merge ? 'edit' : 'view'), 'shipping', $precision);
 		}
 		return $totals;
 	}

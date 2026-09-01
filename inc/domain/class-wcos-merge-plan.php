@@ -5,7 +5,7 @@ defined('ABSPATH') || exit;
 /** Canonical server-built Merge plan with exact v2/v3 durable replay support. */
 final class WCOS_Merge_Plan {
 
-	const SCHEMA_VERSION = 4;
+	const SCHEMA_VERSION = 5;
 	const PREVIOUS_SCHEMA_VERSION = 3;
 	const LEGACY_SCHEMA_VERSION = 2;
 
@@ -25,7 +25,7 @@ final class WCOS_Merge_Plan {
 		$target_stock_flag = (bool) $target->get_data_store()->get_stock_reduced($target_id);
 		$target_identities = array();
 		$target_states = array();
-		foreach ($target->get_items('line_item') as $target_item_id => $target_item) {
+		foreach (WCOS_Merge_Canonical_Reader::items($target, 'line_item') as $target_item_id => $target_item) {
 			if (!$target_item instanceof WC_Order_Item_Product) {
 				throw new RuntimeException(__('Merge encountered an unsupported target product-line object.', 'wc-order-splitter'));
 			}
@@ -39,7 +39,7 @@ final class WCOS_Merge_Plan {
 		}
 		$lines = array();
 		$coalesces = false;
-		foreach ($source->get_items('line_item') as $item_id => $item) {
+		foreach (WCOS_Merge_Canonical_Reader::items($source, 'line_item') as $item_id => $item) {
 			if (!$item instanceof WC_Order_Item_Product) {
 				throw new RuntimeException(__('Merge encountered an unsupported source product-line object.', 'wc-order-splitter'));
 			}
@@ -265,7 +265,7 @@ final class WCOS_Merge_Plan {
 		}
 		if (self::SCHEMA_VERSION === $schema) {
 			$canonical = self::canonicalize_current($plan);
-			return WCOS_Mutation_Fingerprint::create('merge_plan_v4', $canonical['source_order_id'], $canonical);
+			return WCOS_Mutation_Fingerprint::create('merge_plan_v5', $canonical['source_order_id'], $canonical);
 		}
 		throw new InvalidArgumentException(__('The Merge plan schema is unsupported.', 'wc-order-splitter'));
 	}
@@ -275,21 +275,10 @@ final class WCOS_Merge_Plan {
 	}
 
 	private static function line_state(WC_Order_Item_Product $item) {
-		$reduced = $item->get_meta('_reduced_stock', true);
-		return array(
-			'line_identity' => WCOS_Line_Identity::from_item($item),
-			'commercial_identity' => WCOS_Merge_Commercial_Policy::line_identity($item),
-			'product_id' => (int) $item->get_product_id(),
-			'variation_id' => (int) $item->get_variation_id(),
-			'tax_class' => (string) $item->get_tax_class(),
-			'quantity' => WCOS_Decimal::normalize($item->get_quantity(), 6),
-			'subtotal' => (string) $item->get_subtotal(),
-			'subtotal_tax' => (string) $item->get_subtotal_tax(),
-			'total' => (string) $item->get_total(),
-			'total_tax' => (string) $item->get_total_tax(),
-			'taxes' => self::canonicalize_value($item->get_taxes()),
-			'reduced_stock' => self::normalize_reduced_stock($reduced),
-		);
+		$state = WCOS_Merge_Canonical_Reader::line_state($item);
+		$state['line_identity'] = $state['commercial_identity'];
+		$state['commercial_identity'] = WCOS_Merge_Commercial_Policy::line_identity($item);
+		return self::canonicalize_value($state);
 	}
 
 	private static function add_line_states(array $target, array $source, $precision) {

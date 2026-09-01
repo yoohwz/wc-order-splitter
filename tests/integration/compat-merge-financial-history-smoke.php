@@ -44,6 +44,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			self::refunded_payment_authority();
 			self::refund_projection_drift_authority();
 			self::unfiltered_refund_projection_authority();
+			self::canonical_merge_authority_filters();
 			self::refund_tax_distribution_drift_authority();
 			self::financial_rejection_matrix();
 			self::financial_drift_and_transient_authority();
@@ -102,7 +103,12 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 	private static function line(WC_Order $order, WC_Product $product, array $values = array()) {
 		$item = new WC_Order_Item_Product();
 		$item->set_name(isset($values['name']) ? $values['name'] : 'Exact configured financial-boundary line');
-		$item->set_product_id($product->get_id());
+		if ($product instanceof WC_Product_Variation) {
+			$item->set_product_id($product->get_parent_id('edit'));
+			$item->set_variation_id($product->get_id());
+		} else {
+			$item->set_product_id($product->get_id());
+		}
 		$item->set_quantity(isset($values['quantity']) ? $values['quantity'] : '1.000000');
 		$item->set_subtotal(isset($values['subtotal']) ? $values['subtotal'] : '10.00');
 		$item->set_total(isset($values['total']) ? $values['total'] : '0.00');
@@ -456,7 +462,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			$source = wc_get_order($source->get_id());
 			$target = wc_get_order($target->get_id());
 			self::assert($before === self::target_immutable_snapshot($target, $existing_line_ids), 'Refund target immutable history changed: ' . $kind);
-			$after_financial = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, 2);
+			$after_financial = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, 2, true);
 			self::assert($before_financial['target'] === $after_financial['target'], 'Target refund fingerprint changed: ' . $kind);
 			self::assert(2 === count($target->get_items('line_item')), 'Refund target did not receive exactly one fresh source line: ' . $kind);
 			self::assert(empty(array_diff($existing_line_ids, array_map('absint', array_keys($target->get_items('line_item'))))), 'A pre-existing refunded target line disappeared: ' . $kind);
@@ -525,7 +531,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			$source = wc_get_order($source->get_id());
 			$target = wc_get_order($target->get_id());
 			$persisted_refund = wc_get_order($refund->get_id());
-			$after_authority = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, 2);
+			$after_authority = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, 2, true);
 			self::assert('completed' === $result['status']
 				&& $persisted_refund instanceof WC_Order_Refund
 				&& $refunded_payment === $persisted_refund->get_refunded_payment('edit')
@@ -761,6 +767,8 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		$source = wc_get_order($source->get_id());
 		$target = wc_get_order($target->get_id());
 		$refund = wc_get_order($refund->get_id());
+		self::assert($refund instanceof WC_Order_Refund
+			&& 'completed' === $refund->get_status('edit'), 'Cross-store refund fixture did not retain WooCommerce completed-status authority.');
 		$refund_lines = $refund->get_items('line_item');
 		$refund_line = reset($refund_lines);
 		self::assert($refund_line instanceof WC_Order_Item_Product, 'Unfiltered refund-item fixture is missing.');
@@ -774,6 +782,75 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		}));
 		self::assert(1 === count($baseline_shipping_projection)
 			&& 'none' === $baseline_shipping_projection[0]['tax_status'], 'Canonical shipping tax-status fixture was not projected from the persisted instance ID.');
+
+		$cpt_query_cache_exercised = false;
+		$data_store = $target->get_data_store();
+		if ($data_store instanceof WC_Order_Data_Store_CPT) {
+			$cpt_query_cache_exercised = true;
+			$poison_calls = 0;
+			$poison_query_cache = static function($posts, $query) use (&$poison_calls) {
+				$poison_calls++;
+				return array(999999);
+			};
+			add_filter('posts_pre_query', $poison_query_cache, PHP_INT_MAX, 2);
+			try {
+				$poisoned_ids = $data_store->query(array(
+					'type' => 'shop_order_refund',
+					'status' => 'any',
+					'parent' => absint($target->get_id()),
+					'limit' => -1,
+					'orderby' => 'ID',
+					'order' => 'ASC',
+					'return' => 'ids',
+					'paginate' => false,
+					'no_found_rows' => true,
+					'suppress_filters' => true,
+					'cache_results' => true,
+				));
+			} finally {
+				remove_filter('posts_pre_query', $poison_query_cache, PHP_INT_MAX);
+			}
+			self::assert(array(999999) === array_map('absint', (array) $poisoned_ids)
+				&& 1 === $poison_calls, 'Legacy refund-query cache poison fixture was not established.');
+			self::assert(array(absint($refund->get_id())) === array_map('absint', array_keys(WCOS_Merge_Canonical_Reader::refunds($target))), 'Canonical refund authority consumed a pre-poisoned WP_Query result cache.');
+		}
+
+		$query_hook_calls = 0;
+		$query_filters = array();
+		foreach (array(
+			'woocommerce_order_query_args',
+			'woocommerce_order_query',
+			'woocommerce_get_wp_query_args',
+			'woocommerce_order_data_store_cpt_get_orders_query',
+			'woocommerce_orders_table_datastore_get_orders_query',
+			'woocommerce_hpos_pre_query',
+			'parse_query',
+			'pre_get_posts',
+			'posts_pre_query',
+		) as $query_hook) {
+			$query_filter = static function($value = null) use (&$query_hook_calls, $query_hook) {
+				$query_hook_calls++;
+				if (in_array($query_hook, array('parse_query', 'pre_get_posts'), true)) {
+					return $value;
+				}
+				return in_array($query_hook, array('woocommerce_hpos_pre_query', 'posts_pre_query'), true)
+					? array(999999)
+					: array('include' => array(999999), 'post__in' => array(999999));
+			};
+			add_filter($query_hook, $query_filter, PHP_INT_MAX, 99);
+			$query_filters[] = array($query_hook, $query_filter);
+		}
+		try {
+			$with_query_filters = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, 2);
+			$canonical_refund_ids = array_map('absint', array_keys(WCOS_Merge_Canonical_Reader::refunds($target)));
+			self::assert($baseline === $with_query_filters
+				&& array(absint($refund->get_id())) === $canonical_refund_ids
+				&& 0 === $query_hook_calls, 'Order-query hooks omitted or injected canonical persisted refund authority.');
+		} finally {
+			foreach (array_reverse($query_filters) as $query_filter) {
+				remove_filter($query_filter[0], $query_filter[1], PHP_INT_MAX);
+			}
+		}
 
 		$currency_filter = static function($value, $object) use ($refund) {
 			return $object instanceof WC_Order_Refund && $object->get_id() === $refund->get_id() ? 'EUR' : $value;
@@ -910,6 +987,8 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 
 		self::$results['unfiltered_refund_projection'] = array(
 			'cases' => '76-78',
+			'cross_store_completed_status_bound' => true,
+			'cpt_prepoisoned_query_cache_bypassed' => $cpt_query_cache_exercised ? true : 'not_applicable',
 			'order_view_filters_ignored' => true,
 			'refund_view_filters_ignored' => true,
 			'refund_item_view_filters_ignored' => true,
@@ -917,7 +996,440 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			'refund_reference_meta_filters_ignored' => true,
 			'shipping_instance_filters_ignored' => true,
 			'refund_item_collection_filters_ignored' => true,
+			'refund_query_filters_ignored' => true,
 			'masked_date_drift_rejected_pre_lease' => true,
+		);
+	}
+
+	private static function canonical_merge_authority_filters() {
+		$product = self::product('canonical-authority-filters', true);
+		$source = self::order('canonical-authority-filters-source');
+		$target = self::order('canonical-authority-filters-target', 'on-hold');
+		$source_line = self::line($source, $product, array(
+			'subtotal' => '6.00',
+			'total' => '4.00',
+			'reduced_stock' => '1.000000',
+			'meta' => array('Configuration' => 'canonical-source'),
+		));
+		$target_line = self::line($target, $product, array(
+			'subtotal' => '10.00',
+			'total' => '9.00',
+			'reduced_stock' => '1.000000',
+			'meta' => array('Configuration' => 'canonical-source'),
+		));
+		$target_shipping = self::shipping($target, 'Canonical target shipping', '3.00');
+		$target_fee = self::fee($target, 'Canonical target fee', '2.00');
+		$target_coupon = self::coupon($target, 'canonical-target-coupon', '1.00');
+		$target_tax = self::tax($target, 8806, '0.00', '0.00');
+		$source = self::finalize($source);
+		$target = self::finalize($target);
+		$source->get_data_store()->set_stock_reduced($source->get_id(), true);
+		$target->get_data_store()->set_stock_reduced($target->get_id(), true);
+		$source = wc_get_order($source->get_id());
+		$target = wc_get_order($target->get_id());
+		$baseline_report = WCOS_Merge_Preflight::assert_supported($source, $target, 2);
+		$baseline_source_signature = WCOS_Merge_Recovery_Snapshot::participant_signature($source);
+		$baseline_target_signature = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
+
+		$original_registry_filter = static function($value) { return $value; };
+		$injected_registry_filter = static function($value) { return $value; };
+		$injected_registry_hook = 'woocommerce_order_get_customer_note';
+		add_filter('woocommerce_order_get_total', $original_registry_filter, 7, 1);
+		$registry_exception = false;
+		try {
+			WCOS_Merge_Canonical_Reader::without_presentation_filters(static function() use ($injected_registry_filter, $injected_registry_hook) {
+				add_filter('woocommerce_order_get_total', $injected_registry_filter, 13, 1);
+				add_filter($injected_registry_hook, $injected_registry_filter, 17, 1);
+				throw new RuntimeException('canonical-reader-registry-probe');
+			});
+		} catch (RuntimeException $exception) {
+			$registry_exception = 'canonical-reader-registry-probe' === $exception->getMessage();
+		}
+		self::assert($registry_exception
+			&& 7 === has_filter('woocommerce_order_get_total', $original_registry_filter)
+			&& false === has_filter('woocommerce_order_get_total', $injected_registry_filter)
+			&& false === has_filter($injected_registry_hook, $injected_registry_filter), 'Canonical read isolation did not restore the exact request-local hook registry after failure.');
+		remove_filter('woocommerce_order_get_total', $original_registry_filter, 7);
+
+		$search_query_calls = 0;
+		$search_query_filters = array();
+		foreach (array(
+			'woocommerce_order_query_args',
+			'woocommerce_order_query',
+			'woocommerce_get_wp_query_args',
+			'woocommerce_order_data_store_cpt_get_orders_query',
+			'woocommerce_orders_table_datastore_get_orders_query',
+			'woocommerce_hpos_pre_query',
+			'parse_query',
+			'pre_get_posts',
+			'posts_pre_query',
+		) as $search_query_hook) {
+			$search_query_filter = static function($value = null) use (&$search_query_calls, $search_query_hook) {
+				$search_query_calls++;
+				return in_array($search_query_hook, array('parse_query', 'pre_get_posts'), true) ? $value : array();
+			};
+			add_filter($search_query_hook, $search_query_filter, PHP_INT_MAX, 99);
+			$search_query_filters[] = array($search_query_hook, $search_query_filter);
+		}
+		try {
+			$search = WCOS_Merge_Admin_Controller::bootstrap()->search_request(array(
+				'source_order_id' => $source->get_id(),
+				'nonce' => wp_create_nonce('wcos_merge_order_' . $source->get_id()),
+				'term' => '',
+				'page' => 1,
+			));
+			$search_ids = array_map('absint', wp_list_pluck($search['results'], 'id'));
+			self::assert(in_array(absint($target->get_id()), $search_ids, true)
+				&& 0 === $search_query_calls, 'Order-query hooks omitted an eligible persisted Merge search target.');
+		} finally {
+			foreach (array_reverse($search_query_filters) as $search_query_filter) {
+				remove_filter($search_query_filter[0], $search_query_filter[1], PHP_INT_MAX);
+			}
+		}
+		$number_alias = 'filtered-only-order-alias';
+		$order_number_filter = static function($number, $order) use ($target, $number_alias) {
+			return $order instanceof WC_Order && absint($order->get_id()) === absint($target->get_id()) ? $number_alias : $number;
+		};
+		add_filter('woocommerce_order_number', $order_number_filter, PHP_INT_MAX, 2);
+		try {
+			$alias_search = WCOS_Merge_Admin_Controller::bootstrap()->search_request(array(
+				'source_order_id' => $source->get_id(),
+				'nonce' => wp_create_nonce('wcos_merge_order_' . $source->get_id()),
+				'term' => $number_alias,
+				'page' => 1,
+			));
+			self::assert($number_alias === (string) wc_get_order($target->get_id())->get_order_number()
+				&& array() === $alias_search['results'], 'A presentation-only order number changed canonical search reachability.');
+		} finally {
+			remove_filter('woocommerce_order_number', $order_number_filter, PHP_INT_MAX);
+		}
+
+		$stock_parent = new WC_Product_Variable();
+		$stock_parent->set_name('WOS COMPAT 006 canonical parent-managed stock');
+		$stock_parent->set_status('publish');
+		$stock_parent->set_manage_stock(true);
+		$stock_parent->set_stock_quantity(37);
+		$stock_parent_id = absint($stock_parent->save());
+		self::$product_ids[] = $stock_parent_id;
+		$stock_variation = new WC_Product_Variation();
+		$stock_variation->set_parent_id($stock_parent_id);
+		$stock_variation->set_status('publish');
+		$stock_variation->set_regular_price('10.00');
+		$stock_variation->set_price('10.00');
+		$stock_variation_id = absint($stock_variation->save());
+		self::$product_ids[] = $stock_variation_id;
+		$stock_variation = wc_get_product($stock_variation_id);
+		$stock_order = self::order('canonical-parent-managed-stock');
+		self::line($stock_order, $stock_variation, array('subtotal' => '10.00', 'total' => '10.00'));
+		$stock_order = self::finalize($stock_order);
+		$stock_baseline = WCOS_Merge_Canonical_Reader::product_stock($stock_order);
+		$variation_manage_filter = static function() { return false; };
+		$variation_parent_filter = static function() { return 999999; };
+		$parent_manage_filter = static function() { return false; };
+		add_filter('woocommerce_product_variation_get_manage_stock', $variation_manage_filter, PHP_INT_MAX, 1);
+		add_filter('woocommerce_product_variation_get_parent_id', $variation_parent_filter, PHP_INT_MAX, 1);
+		add_filter('woocommerce_product_get_manage_stock', $parent_manage_filter, PHP_INT_MAX, 1);
+		try {
+			$filtered_variation = wc_get_product($stock_variation_id);
+			self::assert(false === $filtered_variation->get_manage_stock()
+				&& 999999 === absint($filtered_variation->get_parent_id())
+				&& array($stock_parent_id => '37.000000') === $stock_baseline
+				&& $stock_baseline === WCOS_Merge_Canonical_Reader::product_stock(wc_get_order($stock_order->get_id())), 'Product view filters changed canonical parent-managed stock conservation authority.');
+		} finally {
+			remove_filter('woocommerce_product_variation_get_manage_stock', $variation_manage_filter, PHP_INT_MAX);
+			remove_filter('woocommerce_product_variation_get_parent_id', $variation_parent_filter, PHP_INT_MAX);
+			remove_filter('woocommerce_product_get_manage_stock', $parent_manage_filter, PHP_INT_MAX);
+		}
+		$participant_ids = array(absint($source->get_id()), absint($target->get_id()));
+		$item_ids = array_map('absint', array(
+			$source_line->get_id(),
+			$target_line->get_id(),
+			$target_shipping->get_id(),
+			$target_fee->get_id(),
+			$target_coupon->get_id(),
+			$target_tax->get_id(),
+		));
+		$filters = array();
+		$add_filter = static function($hook, $callback, $accepted_args = 2) use (&$filters) {
+			add_filter($hook, $callback, PHP_INT_MAX, $accepted_args);
+			$filters[] = array($hook, $callback);
+		};
+		$order_mask = static function($replacement) use ($participant_ids) {
+			return static function($value, $object) use ($participant_ids, $replacement) {
+				return $object instanceof WC_Order && in_array(absint($object->get_id()), $participant_ids, true)
+					? $replacement
+					: $value;
+			};
+		};
+		$item_mask = static function($replacement) use ($item_ids) {
+			return static function($value, $object) use ($item_ids, $replacement) {
+				return $object instanceof WC_Order_Item && in_array(absint($object->get_id()), $item_ids, true)
+					? $replacement
+					: $value;
+			};
+		};
+
+		$order_masks = array(
+			'woocommerce_order_get_status' => 'processing',
+			'woocommerce_order_get_currency' => 'EUR',
+			'woocommerce_order_get_prices_include_tax' => true,
+			'woocommerce_order_get_customer_id' => 999999,
+			'woocommerce_order_get_billing_first_name' => 'Filtered Billing',
+			'woocommerce_order_get_billing_last_name' => 'View',
+			'woocommerce_order_get_billing_company' => 'Filtered Company',
+			'woocommerce_order_get_billing_address_1' => 'Filtered billing address',
+			'woocommerce_order_get_billing_address_2' => 'Filtered billing address 2',
+			'woocommerce_order_get_billing_city' => 'Filtered City',
+			'woocommerce_order_get_billing_state' => 'CA',
+			'woocommerce_order_get_billing_postcode' => '99999',
+			'woocommerce_order_get_billing_country' => 'CA',
+			'woocommerce_order_get_billing_email' => 'filtered@example.test',
+			'woocommerce_order_get_billing_phone' => '+1-filtered',
+			'woocommerce_order_get_shipping_first_name' => 'Filtered Shipping',
+			'woocommerce_order_get_shipping_last_name' => 'View',
+			'woocommerce_order_get_shipping_company' => 'Filtered Carrier',
+			'woocommerce_order_get_shipping_address_1' => 'Filtered shipping address',
+			'woocommerce_order_get_shipping_address_2' => 'Filtered shipping address 2',
+			'woocommerce_order_get_shipping_city' => 'Filtered Shipping City',
+			'woocommerce_order_get_shipping_state' => 'NY',
+			'woocommerce_order_get_shipping_postcode' => '11111',
+			'woocommerce_order_get_shipping_country' => 'GB',
+			'woocommerce_order_get_payment_method' => 'cod',
+			'woocommerce_order_get_payment_method_title' => 'Filtered payment',
+			'woocommerce_order_get_discount_total' => '901.01',
+			'woocommerce_order_get_discount_tax' => '902.02',
+			'woocommerce_order_get_shipping_total' => '903.03',
+			'woocommerce_order_get_shipping_tax' => '904.04',
+			'woocommerce_order_get_cart_tax' => '905.05',
+			'woocommerce_order_get_total_tax' => '906.06',
+			'woocommerce_order_get_total' => '907.07',
+		);
+		foreach ($order_masks as $hook => $replacement) {
+			$add_filter($hook, $order_mask($replacement));
+		}
+
+		$item_masks = array(
+			'woocommerce_order_item_get_name' => 'Filtered item name',
+			'woocommerce_order_item_get_product_id' => 999991,
+			'woocommerce_order_item_get_variation_id' => 999992,
+			'woocommerce_order_item_get_tax_class' => 'filtered-rate',
+			'woocommerce_order_item_get_quantity' => '99.000000',
+			'woocommerce_order_item_get_subtotal' => '911.11',
+			'woocommerce_order_item_get_subtotal_tax' => '912.12',
+			'woocommerce_order_item_get_total' => '913.13',
+			'woocommerce_order_item_get_total_tax' => '914.14',
+			'woocommerce_order_item_get_taxes' => array('subtotal' => array(999 => '9.99'), 'total' => array(999 => '8.88')),
+			'woocommerce_order_item_get__reduced_stock' => '77.000000',
+			'woocommerce_order_item_get_method_id' => 'filtered_shipping',
+			'woocommerce_order_item_get_instance_id' => 999993,
+			'woocommerce_order_item_get_amount' => '915.15',
+			'woocommerce_order_item_get_discount' => '916.16',
+			'woocommerce_order_item_get_discount_tax' => '917.17',
+			'woocommerce_order_item_get_rate_id' => 999994,
+			'woocommerce_order_item_get_tax_total' => '918.18',
+			'woocommerce_order_item_get_shipping_tax_total' => '919.19',
+		);
+		foreach ($item_masks as $hook => $replacement) {
+			$add_filter($hook, $item_mask($replacement));
+		}
+		$order_items_filter = static function($items, $order) use ($participant_ids) {
+			return $order instanceof WC_Order && in_array(absint($order->get_id()), $participant_ids, true)
+				? array()
+				: $items;
+		};
+		$add_filter('woocommerce_order_get_items', $order_items_filter, 3);
+
+		try {
+			$filtered_source = wc_get_order($source->get_id());
+			$filtered_target = wc_get_order($target->get_id());
+			$filtered_source_line = $filtered_source->get_item($source_line->get_id());
+			$order_class = get_class($filtered_source);
+			$hydrated_under_filters = new $order_class($source->get_id());
+			$canonically_hydrated = WCOS_Merge_Canonical_Reader::order($source->get_id());
+			self::assert($filtered_source_line instanceof WC_Order_Item_Product
+				&& 'EUR' === $filtered_source->get_currency()
+				&& 'USD' === $filtered_source->get_currency('edit')
+				&& true === $filtered_source->get_prices_include_tax()
+				&& false === $filtered_source->get_prices_include_tax('edit')
+				&& 999999 === absint($filtered_source->get_customer_id())
+				&& 'filtered@example.test' === $filtered_source->get_billing_email()
+				&& 'bacs' === $filtered_source->get_payment_method('edit')
+				&& '907.07' === WCOS_Decimal::normalize($filtered_source->get_total(), 2)
+				&& 'Filtered item name' === $filtered_source_line->get_name()
+				&& 999991 === absint($filtered_source_line->get_product_id())
+				&& $product->get_id() === absint($filtered_source_line->get_product_id('edit'))
+				&& '99.000000' === WCOS_Decimal::normalize($filtered_source_line->get_quantity(), 6)
+				&& '77.000000' === WCOS_Decimal::normalize($filtered_source_line->get_meta('_reduced_stock', true), 6)
+				&& '1.000000' === WCOS_Decimal::normalize($filtered_source_line->get_meta('_reduced_stock', true, 'edit'), 6)
+				&& array() === $filtered_source->get_items('line_item')
+				&& array() === $filtered_target->get_items(array('line_item', 'shipping', 'fee', 'coupon', 'tax')), 'Representative Merge presentation filters were not active.');
+			self::assert($hydrated_under_filters instanceof WC_Order
+				&& $canonically_hydrated instanceof WC_Order
+				&& '1809.09' === WCOS_Decimal::normalize($hydrated_under_filters->get_total_tax('edit'), 2)
+				&& '0.00' === WCOS_Decimal::normalize($canonically_hydrated->get_total_tax('edit'), 2), 'Canonical order hydration did not isolate WooCommerce setter-time presentation getters.');
+			$filtered_report = WCOS_Merge_Preflight::assert_supported($filtered_source, $filtered_target, 2);
+			self::assert($baseline_report === $filtered_report
+				&& $baseline_source_signature === WCOS_Merge_Recovery_Snapshot::participant_signature($filtered_source)
+				&& $baseline_target_signature === WCOS_Merge_Recovery_Snapshot::participant_signature($filtered_target), 'Presentation filters changed current/fresh Merge authority.');
+
+			$controller = WCOS_Merge_Admin_Controller::bootstrap();
+			$request = self::request($filtered_source, $filtered_target);
+			$review = $controller->review_request($request);
+			self::$review_ids[] = $review['review_id'];
+			$confirmation = $controller->confirm_request(array_merge($request, array(
+				'review_id' => $review['review_id'],
+				'review_token' => $review['review_token'],
+			)));
+			self::$operation_ids[$source->get_id()][] = $confirmation['operation_id'];
+			$result = $controller->execute_request(array_merge($request, array(
+				'operation_id' => $confirmation['operation_id'],
+				'confirmation_token' => $confirmation['confirmation_token'],
+			)));
+			$persisted_source = wc_get_order($source->get_id());
+			$persisted_target = wc_get_order($target->get_id());
+			self::assert('completed' === $result['status']
+				&& 'trash' === WCOS_Merge_Canonical_Reader::status($persisted_source)
+				&& 'processing' === $persisted_source->get_status()
+				&& 'on-hold' === WCOS_Merge_Canonical_Reader::status($persisted_target)
+				&& 1 === count(WCOS_Merge_Canonical_Reader::items($persisted_target, 'line_item'))
+				&& 1 === count(WCOS_Merge_Canonical_Reader::items($persisted_target, 'shipping'))
+				&& 1 === count(WCOS_Merge_Canonical_Reader::items($persisted_target, 'fee'))
+				&& 1 === count(WCOS_Merge_Canonical_Reader::items($persisted_target, 'coupon'))
+				&& 1 === count(WCOS_Merge_Canonical_Reader::items($persisted_target, 'tax')), 'Filtered Review/Confirm/Execute did not preserve canonical Merge behavior.');
+		} finally {
+			foreach (array_reverse($filters) as $filter) {
+				remove_filter($filter[0], $filter[1], PHP_INT_MAX);
+			}
+		}
+
+		$terminal_source = self::order('canonical-terminal-source');
+		$terminal_target = self::order('canonical-terminal-source-target', 'on-hold');
+		self::line($terminal_source, $product, array('subtotal' => '1.00', 'total' => '0.00'));
+		self::line($terminal_target, $product, array('subtotal' => '2.00', 'total' => '2.00'));
+		$terminal_source = self::finalize($terminal_source);
+		$terminal_target = self::finalize($terminal_target);
+		$terminal_source->set_status('refunded');
+		$terminal_source->save();
+		$terminal_status_filter = static function($value, $object) use ($terminal_source) {
+			return $object instanceof WC_Order && absint($object->get_id()) === absint($terminal_source->get_id()) ? 'pending' : $value;
+		};
+		add_filter('woocommerce_order_get_status', $terminal_status_filter, PHP_INT_MAX, 2);
+		try {
+			$terminal_source = wc_get_order($terminal_source->get_id());
+			self::assert('pending' === $terminal_source->get_status()
+				&& 'refunded' === WCOS_Merge_Canonical_Reader::status($terminal_source)
+				&& 'incompatible_status' === WCOS_Merge_Preflight::report($terminal_source, $terminal_target, 2)['reason'], 'A filtered terminal source status was not rejected from persisted authority.');
+			self::expect_transport_one_of(static function() use ($terminal_source, $terminal_target) {
+				WCOS_Merge_Admin_Controller::bootstrap()->review_request(self::request($terminal_source, $terminal_target));
+			}, array('status_disabled'));
+		} finally {
+			remove_filter('woocommerce_order_get_status', $terminal_status_filter, PHP_INT_MAX);
+		}
+
+		$prelease_source = self::order('canonical-prelease-source');
+		$prelease_target = self::order('canonical-prelease-target', 'on-hold');
+		self::line($prelease_source, $product, array('subtotal' => '1.00', 'total' => '0.00'));
+		self::line($prelease_target, $product, array('subtotal' => '2.00', 'total' => '2.00'));
+		$prelease_source = self::finalize($prelease_source);
+		$prelease_target = self::finalize($prelease_target);
+		$prelease_report = WCOS_Merge_Preflight::assert_supported($prelease_source, $prelease_target, 2);
+		$prelease_review = WCOS_Merge_Review_Store::create($prelease_source, $prelease_target, $prelease_report, self::$operator_id);
+		self::$review_ids[] = $prelease_review['review_id'];
+		$prelease_confirmation = WCOS_Merge_Confirmation_Store::create($prelease_source, $prelease_target, $prelease_review['authority'], self::$operator_id);
+		self::$operation_ids[$prelease_source->get_id()][] = $prelease_confirmation['operation_id'];
+		$prelease_authority = WCOS_Merge_Confirmation_Store::operation_authority($prelease_confirmation['record']);
+		$prelease_target->set_status('cancelled');
+		$prelease_target->save();
+		$prelease_status_filter = static function($value, $object) use ($prelease_target) {
+			return $object instanceof WC_Order && absint($object->get_id()) === absint($prelease_target->get_id()) ? 'on-hold' : $value;
+		};
+		$lease_events = 0;
+		$lease_probe = static function() use (&$lease_events) { $lease_events++; };
+		add_filter('woocommerce_order_get_status', $prelease_status_filter, PHP_INT_MAX, 2);
+		add_action('add_option_wcos_mutation_lock_' . $prelease_source->get_id(), $lease_probe, PHP_INT_MAX, 2);
+		add_action('add_option_wcos_mutation_lock_' . $prelease_target->get_id(), $lease_probe, PHP_INT_MAX, 2);
+		try {
+			$rejected_code = '';
+			try {
+				(new WCOS_Mutation_Gateway())->merge(
+					wc_get_order($prelease_source->get_id()),
+					wc_get_order($prelease_target->get_id()),
+					$prelease_confirmation['operation_id'],
+					2,
+					$prelease_authority
+				);
+			} catch (WCOS_Merge_Adapter_Exception $exception) {
+				$rejected_code = $exception->get_error_code();
+			} catch (WCOS_Merge_Preflight_Exception $exception) {
+				$rejected_code = 'merge_preflight_' . $exception->get_reason();
+			}
+			self::assert('on-hold' === wc_get_order($prelease_target->get_id())->get_status()
+				&& 'cancelled' === WCOS_Merge_Canonical_Reader::status(wc_get_order($prelease_target->get_id()))
+				&& 'merge_preflight_incompatible_status' === $rejected_code
+				&& 0 === $lease_events
+				&& null === WCOS_Operation_Journal::get(wc_get_order($prelease_source->get_id()), $prelease_confirmation['operation_id']), 'A filtered terminal target crossed the direct-gateway pre-lease boundary.');
+		} finally {
+			remove_filter('woocommerce_order_get_status', $prelease_status_filter, PHP_INT_MAX);
+			remove_action('add_option_wcos_mutation_lock_' . $prelease_source->get_id(), $lease_probe, PHP_INT_MAX);
+			remove_action('add_option_wcos_mutation_lock_' . $prelease_target->get_id(), $lease_probe, PHP_INT_MAX);
+		}
+
+		$currency_source = self::order('canonical-currency-source');
+		$currency_target = self::order('canonical-currency-target', 'on-hold');
+		self::line($currency_source, $product, array('subtotal' => '1.00', 'total' => '0.00'));
+		self::line($currency_target, $product, array('subtotal' => '2.00', 'total' => '2.00'));
+		$currency_source = self::finalize($currency_source);
+		$currency_target = self::finalize($currency_target);
+		$currency_target->set_currency('EUR');
+		$currency_target->save();
+		$currency_filter = static function($value, $object) use ($currency_target) {
+			return $object instanceof WC_Order && absint($object->get_id()) === absint($currency_target->get_id()) ? 'USD' : $value;
+		};
+		add_filter('woocommerce_order_get_currency', $currency_filter, PHP_INT_MAX, 2);
+		try {
+			$currency_target = wc_get_order($currency_target->get_id());
+			self::assert('USD' === $currency_target->get_currency()
+				&& 'EUR' === WCOS_Merge_Canonical_Reader::currency($currency_target)
+				&& 'incompatible_currency' === WCOS_Merge_Preflight::report($currency_source, $currency_target, 2)['reason'], 'A filtered currency mismatch did not fail closed.');
+		} finally {
+			remove_filter('woocommerce_order_get_currency', $currency_filter, PHP_INT_MAX);
+		}
+
+		$tax_source = self::order('canonical-tax-mode-source');
+		$tax_target = self::order('canonical-tax-mode-target', 'on-hold');
+		self::line($tax_source, $product, array('subtotal' => '1.00', 'total' => '0.00'));
+		self::line($tax_target, $product, array('subtotal' => '2.00', 'total' => '2.00'));
+		$tax_source = self::finalize($tax_source);
+		$tax_target = self::finalize($tax_target);
+		$tax_target->set_prices_include_tax(true);
+		$tax_target->save();
+		$tax_mode_filter = static function($value, $object) use ($tax_target) {
+			return $object instanceof WC_Order && absint($object->get_id()) === absint($tax_target->get_id()) ? false : $value;
+		};
+		add_filter('woocommerce_order_get_prices_include_tax', $tax_mode_filter, PHP_INT_MAX, 2);
+		try {
+			$tax_target = wc_get_order($tax_target->get_id());
+			self::assert(false === $tax_target->get_prices_include_tax()
+				&& true === WCOS_Merge_Canonical_Reader::prices_include_tax($tax_target)
+				&& 'incompatible_pricing_mode' === WCOS_Merge_Preflight::report($tax_source, $tax_target, 2)['reason'], 'A filtered tax-mode mismatch did not fail closed.');
+		} finally {
+			remove_filter('woocommerce_order_get_prices_include_tax', $tax_mode_filter, PHP_INT_MAX);
+		}
+
+		self::$results['canonical_merge_authority_filters'] = array(
+			'cases' => '79-93',
+			'order_and_item_view_filters_ignored' => true,
+			'collection_filters_ignored' => true,
+			'identity_address_payment_filters_ignored' => true,
+			'target_charges_and_tax_filters_ignored' => true,
+			'review_confirm_execute_under_filters' => true,
+			'current_hydration_filters_bypassed' => true,
+			'terminal_source_rejected' => true,
+			'terminal_target_rejected_pre_lease' => true,
+			'currency_and_tax_mode_masks_rejected' => true,
+			'exact_hook_registry_restored' => true,
+			'query_and_order_number_search_filters_ignored' => true,
+			'parent_managed_stock_filters_ignored' => true,
 		);
 	}
 
@@ -1399,7 +1911,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		self::$review_ids[] = $stored['review_id'];
 		$key = 'wcos_merge_review_' . hash('sha256', sanitize_key($stored['review_id']));
 		$record = get_transient($key);
-		$record['schema_version'] = 1;
+		$record['schema_version'] = 2;
 		set_transient($key, $record, WCOS_Merge_Review_Store::TTL);
 		$stale_rejected = false;
 		try {
@@ -1415,7 +1927,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		self::$operation_ids[$source->get_id()][] = $confirmation['operation_id'];
 		$confirmation_key = 'wcos_merge_confirm_' . hash('sha256', sanitize_key($confirmation['operation_id']));
 		$confirmation_record = get_transient($confirmation_key);
-		$confirmation_record['schema_version'] = WCOS_Merge_Confirmation_Store::PREVIOUS_SCHEMA_VERSION;
+		$confirmation_record['schema_version'] = 2;
 		set_transient($confirmation_key, $confirmation_record, WCOS_Merge_Confirmation_Store::TTL);
 		$stale_confirmation_rejected = false;
 		try {
@@ -1429,8 +1941,8 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		self::$review_ids[] = $pre_closure_review['review_id'];
 		$pre_closure_review_key = 'wcos_merge_review_' . hash('sha256', sanitize_key($pre_closure_review['review_id']));
 		$pre_closure_review_record = get_transient($pre_closure_review_key);
-		$pre_closure_review_record['authority']['plan']['financial_authority']['schema_version'] = 1;
-		$pre_closure_review_record['authority']['plan']['financial_authority']['policy_version'] = 1;
+		$pre_closure_review_record['authority']['plan']['financial_authority']['schema_version'] = 2;
+		$pre_closure_review_record['authority']['plan']['financial_authority']['policy_version'] = 2;
 		set_transient($pre_closure_review_key, $pre_closure_review_record, WCOS_Merge_Review_Store::TTL);
 		$pre_closure_review_rejected = false;
 		try {
@@ -1446,8 +1958,8 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		self::$operation_ids[$source->get_id()][] = $pre_closure_confirmation['operation_id'];
 		$pre_closure_confirmation_key = 'wcos_merge_confirm_' . hash('sha256', sanitize_key($pre_closure_confirmation['operation_id']));
 		$pre_closure_confirmation_record = get_transient($pre_closure_confirmation_key);
-		$pre_closure_confirmation_record['plan']['financial_authority']['schema_version'] = 1;
-		$pre_closure_confirmation_record['plan']['financial_authority']['policy_version'] = 1;
+		$pre_closure_confirmation_record['plan']['financial_authority']['schema_version'] = 2;
+		$pre_closure_confirmation_record['plan']['financial_authority']['policy_version'] = 2;
 		set_transient($pre_closure_confirmation_key, $pre_closure_confirmation_record, WCOS_Merge_Confirmation_Store::TTL);
 		$pre_closure_confirmation_rejected = false;
 		try {
@@ -1462,7 +1974,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			'drifts' => $drifts,
 			'fresh_review_required' => true,
 			'pre_006_transient_rejected' => true,
-			'pre_closure_transient_rejected' => true,
+			'cc9_transient_rejected' => true,
 		);
 	}
 
@@ -1512,7 +2024,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		self::assert(1 === count($new_ids) && '0.500000' === WCOS_Decimal::normalize($target->get_item($new_ids[0])->get_meta('_reduced_stock', true), 6), 'Reduced-stock ownership did not move exactly once to the fresh line.');
 		self::assert('' === (string) wc_get_order($source->get_id())->get_item(array_key_first(wc_get_order($source->get_id())->get_items('line_item')))->get_meta('_reduced_stock', true), 'Retired source retained reduced-stock ownership.');
 		self::assert($physical_before === (string) wc_get_product($product->get_id())->get_stock_quantity(), 'Financial Merge changed physical stock.');
-		$financial_after = WCOS_Merge_Financial_Authority::freeze_pair(wc_get_order($source->get_id()), $target, 2)['target'];
+		$financial_after = WCOS_Merge_Financial_Authority::freeze_pair(wc_get_order($source->get_id()), $target, 2, true)['target'];
 		self::assert($financial_before === $financial_after, 'Completed financial replay changed target financial authority.');
 
 		$checkpoint_stages = array(
@@ -1572,7 +2084,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 					&& !empty(WCOS_Merge_Participation::authorities($fresh_crash_target)), 'Financial checkpoint ambiguity lacks pair-wide manual authority: ' . $checkpoint_stage);
 			}
 			self::assert($target_settlement_before === self::target_immutable_snapshot($fresh_crash_target, array($crash_existing->get_id()))
-				&& $target_financial_before === WCOS_Merge_Financial_Authority::freeze_pair($fresh_crash_source, $fresh_crash_target, 2)['target']
+				&& $target_financial_before === WCOS_Merge_Financial_Authority::freeze_pair($fresh_crash_source, $fresh_crash_target, 2, true)['target']
 				&& count($fresh_crash_target->get_items('line_item')) <= 2
 				&& $physical_checkpoint_before === (string) wc_get_product($product->get_id())->get_stock_quantity(), 'Financial checkpoint safe outcome changed settlement authority, duplicated a line, or changed physical stock: ' . $checkpoint_stage);
 		}
@@ -1625,11 +2137,29 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		));
 		$source = self::finalize($source);
 		$target = self::finalize($target);
+		$legacy_projection_reads = 0;
+		$legacy_order_total_filter = static function($value) use (&$legacy_projection_reads) {
+			$legacy_projection_reads++;
+			return $value;
+		};
+		$legacy_line_total_filter = static function($value) use (&$legacy_projection_reads) {
+			$legacy_projection_reads++;
+			return $value;
+		};
+		$legacy_customer_note_filter = static function($value) use (&$legacy_projection_reads) {
+			$legacy_projection_reads++;
+			return 'legacy-filtered-customer-note';
+		};
+		add_filter('woocommerce_order_get_total', $legacy_order_total_filter, 10, 1);
+		add_filter('woocommerce_order_item_get_total', $legacy_line_total_filter, 10, 1);
+		add_filter('woocommerce_order_get_customer_note', $legacy_customer_note_filter, 10, 1);
+		self::assert('legacy-filtered-customer-note' === $source->get_customer_note()
+			&& '' === $source->get_customer_note('edit'), 'WOS-COMPAT-005 durable fixture did not establish a changed stable legacy view projection.');
 		$source_id = (int) $source->get_id();
 		$target_id = (int) $target->get_id();
 		$current_report = WCOS_Merge_Preflight::assert_supported($source, $target, 2);
 		$previous_plan = self::previous_commercial_plan($current_report['plan']);
-		$context_authority = WCOS_Merge_Context_Signature::disposition($source, $target);
+		$context_authority = WCOS_Merge_Context_Signature::previous_disposition($source, $target);
 		$authority = array(
 			'source_order_id' => $source_id,
 			'target_order_id' => $target_id,
@@ -1639,14 +2169,17 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			'plan_fingerprint' => WCOS_Merge_Plan::fingerprint($previous_plan),
 			'price_precision' => 2,
 			'preflight_policy_version' => WCOS_Merge_Preflight::PREVIOUS_POLICY_VERSION,
-			'context_signature_version' => WCOS_Merge_Context_Signature::SCHEMA_VERSION,
+			'context_signature_version' => WCOS_Merge_Context_Signature::PREVIOUS_SCHEMA_VERSION,
 			'context_authority' => $context_authority,
 			'context_authority_fingerprint' => WCOS_Merge_Context_Signature::authority_fingerprint($context_authority),
 			'retirement_policy_schema_version' => WCOS_Merge_Retirement_Policy::SCHEMA_VERSION,
 			'retirement_candidates' => WCOS_Merge_Retirement_Policy::identifiers(),
 			'retirement_policy_selected' => true,
 			'retirement_policy_identifier' => WCOS_Merge_Retirement_Policy::approved_identifier(),
-			'archive_source_signature_before' => WCOS_Merge_Recovery_Snapshot::archive_commercial_signature($source),
+			'archive_source_signature_before' => WCOS_Merge_Recovery_Snapshot::archive_commercial_signature(
+				$source,
+				WCOS_Merge_Recovery_Snapshot::PREVIOUS_SCHEMA_VERSION
+			),
 			'active_ownership_before_signature' => WCOS_Merge_Commercial_Policy::expected_target_signature(
 				$source,
 				$target,
@@ -1675,7 +2208,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 				'preflight_policy_version' => WCOS_Merge_Preflight::PREVIOUS_POLICY_VERSION,
 				'plan_schema_version' => WCOS_Merge_Plan::PREVIOUS_SCHEMA_VERSION,
 				'plan_fingerprint' => $authority['plan_fingerprint'],
-				'context_signature_version' => WCOS_Merge_Context_Signature::SCHEMA_VERSION,
+				'context_signature_version' => WCOS_Merge_Context_Signature::PREVIOUS_SCHEMA_VERSION,
 				'context_authority_fingerprint' => $authority['context_authority_fingerprint'],
 				'pair_fingerprint' => $pair_fingerprint,
 				'price_precision' => 2,
@@ -1691,6 +2224,8 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		try {
 			self::assert(WCOS_Operation_Journal::start($source, $operation_id, 'merge', $journal_context, $pair_fingerprint), 'WOS-COMPAT-005 durable journal could not be started.');
 			$record = WCOS_Operation_Journal::get($source, $operation_id);
+			self::assert(isset($record['context']['merge_recovery_snapshot']['schema_version'])
+				&& WCOS_Merge_Recovery_Snapshot::PREVIOUS_SCHEMA_VERSION === (int) $record['context']['merge_recovery_snapshot']['schema_version'], 'WOS-COMPAT-005 durable fixture did not persist a true recovery snapshot v4.');
 			$pair = WCOS_Merge_Journal_Context::assert_executable_policy($record);
 			self::assert(WCOS_Merge_Order_Service::PREVIOUS_POLICY_VERSION === WCOS_Merge_Journal_Context::service_policy_for_pair($pair), 'WOS-COMPAT-005 tuple did not resolve to service policy v2.');
 			self::merge_checkpoint($source, $target, $operation_id, WCOS_Merge_Recovery_State_Graph::NO_WRITE, array(), array(), false);
@@ -1750,13 +2285,17 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			&& wc_get_order($target_id)->get_item($target_item->get_id()) instanceof WC_Order_Item_Product
 			&& wc_get_order($target_id)->get_item($added_item_id) instanceof WC_Order_Item_Product, 'WOS-COMPAT-005 recovery duplicated or reinterpreted its fresh-line action.');
 		$journal_before = wp_json_encode($record);
-		$source_before = WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($source_id));
-		$target_before = WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target_id));
+		$source_before = WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($source_id), WCOS_Merge_Recovery_Snapshot::PREVIOUS_SCHEMA_VERSION);
+		$target_before = WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target_id), WCOS_Merge_Recovery_Snapshot::PREVIOUS_SCHEMA_VERSION);
 		$replayed = $controller->execute_request($request);
 		self::assert($result === $replayed
 			&& $journal_before === wp_json_encode(WCOS_Operation_Journal::get(wc_get_order($source_id), $operation_id))
-			&& $source_before === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($source_id))
-			&& $target_before === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target_id)), 'WOS-COMPAT-005 completed replay was not byte/semantic-idempotent.');
+			&& $source_before === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($source_id), WCOS_Merge_Recovery_Snapshot::PREVIOUS_SCHEMA_VERSION)
+			&& $target_before === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target_id), WCOS_Merge_Recovery_Snapshot::PREVIOUS_SCHEMA_VERSION), 'WOS-COMPAT-005 completed replay was not byte/semantic-idempotent.');
+		remove_filter('woocommerce_order_get_total', $legacy_order_total_filter, 10);
+		remove_filter('woocommerce_order_item_get_total', $legacy_line_total_filter, 10);
+		remove_filter('woocommerce_order_get_customer_note', $legacy_customer_note_filter, 10);
+		self::assert($legacy_projection_reads > 0, 'WOS-COMPAT-005 durable replay did not exercise its stable legacy view projection.');
 
 		self::$results['wos_compat_005_durable_replay'] = array(
 			'cases' => '43',
@@ -1764,6 +2303,8 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			'plan_schema_version' => WCOS_Merge_Plan::PREVIOUS_SCHEMA_VERSION,
 			'service_policy_version' => WCOS_Merge_Order_Service::PREVIOUS_POLICY_VERSION,
 			'recovery_and_terminal_replay_exact' => true,
+			'legacy_projection_filters_stable' => true,
+			'legacy_projection_value_changed' => true,
 		);
 	}
 
@@ -1785,12 +2326,16 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 	}
 
 	private static function merge_checkpoint(WC_Order $source, WC_Order $target, $operation_id, $state, array $target_item_ids, array $target_tax_item_ids, $forward) {
+		$record = WCOS_Operation_Journal::get(wc_get_order($source->get_id()), $operation_id);
+		$snapshot_schema = isset($record['context']['merge_recovery_snapshot']['schema_version'])
+			? (int) $record['context']['merge_recovery_snapshot']['schema_version']
+			: WCOS_Merge_Recovery_Snapshot::SCHEMA_VERSION;
 		$context = array(
 			'merge_recovery_state' => sanitize_key((string) $state),
-			'merge_source_signature_after' => WCOS_Merge_Recovery_Snapshot::participant_signature($source),
-			'merge_target_signature_after' => WCOS_Merge_Recovery_Snapshot::participant_signature($target),
-			'merge_source_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($source),
-			'merge_target_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($target),
+			'merge_source_signature_after' => WCOS_Merge_Recovery_Snapshot::participant_signature($source, $snapshot_schema),
+			'merge_target_signature_after' => WCOS_Merge_Recovery_Snapshot::participant_signature($target, $snapshot_schema),
+			'merge_source_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($source, $snapshot_schema),
+			'merge_target_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($target, $snapshot_schema),
 			'merge_target_item_ids' => array_values(array_map('absint', $target_item_ids)),
 			'merge_target_tax_item_ids' => array_values(array_map('absint', $target_tax_item_ids)),
 			'merge_forward_repair_allowed' => (bool) $forward,
@@ -1803,16 +2348,22 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 	}
 
 	private static function version_and_release_regression() {
-		self::assert(WCOS_Merge_Preflight::POLICY_VERSION === 3
+		self::assert(WCOS_Merge_Preflight::POLICY_VERSION === 4
 			&& WCOS_Merge_Preflight::PREVIOUS_POLICY_VERSION === 2
-			&& WCOS_Merge_Plan::SCHEMA_VERSION === 4
+			&& WCOS_Merge_Plan::SCHEMA_VERSION === 5
 			&& WCOS_Merge_Plan::PREVIOUS_SCHEMA_VERSION === 3
-			&& WCOS_Merge_Journal_Context::SCHEMA_VERSION === 5
+			&& WCOS_Merge_Context_Signature::SCHEMA_VERSION === 3
+			&& WCOS_Merge_Context_Signature::PREVIOUS_SCHEMA_VERSION === 2
+			&& WCOS_Merge_Journal_Context::SCHEMA_VERSION === 6
 			&& WCOS_Merge_Journal_Context::PREVIOUS_SCHEMA_VERSION === 4
-			&& WCOS_Merge_Order_Service::POLICY_VERSION === 3
+			&& WCOS_Merge_Order_Service::POLICY_VERSION === 4
 			&& WCOS_Merge_Order_Service::PREVIOUS_POLICY_VERSION === 2
-			&& WCOS_Merge_Financial_Authority::SCHEMA_VERSION === 2
-			&& WCOS_Merge_Financial_Authority::POLICY_VERSION === 2, 'Merge durable version tuple or refund-authority namespace is incomplete.');
+			&& WCOS_Merge_Financial_Authority::SCHEMA_VERSION === 3
+			&& WCOS_Merge_Financial_Authority::POLICY_VERSION === 3
+			&& WCOS_Merge_Recovery_Snapshot::SCHEMA_VERSION === 5
+			&& WCOS_Merge_Recovery_Snapshot::PREVIOUS_SCHEMA_VERSION === 4
+			&& WCOS_Merge_Review_Store::SCHEMA_VERSION === 3
+			&& WCOS_Merge_Confirmation_Store::SCHEMA_VERSION === 3, 'Merge durable version tuple or refund-authority namespace is incomplete.');
 		foreach (array(
 			WCOS_Feature_Gates::SPLIT,
 			WCOS_Feature_Gates::DUPLICATE,

@@ -27,7 +27,7 @@ final class WCOS_Merge_Preflight_Exception extends RuntimeException {
  */
 final class WCOS_Merge_Preflight {
 
-	const POLICY_VERSION = 3;
+	const POLICY_VERSION = 4;
 	const PREVIOUS_POLICY_VERSION = 2;
 	const LEGACY_POLICY_VERSION = 1;
 
@@ -105,27 +105,27 @@ final class WCOS_Merge_Preflight {
 			return self::reject($report, 'manual_reconciliation_required', __('One or both Merge participants have unresolved mutation authority.', 'wc-order-splitter'));
 		}
 
-		$source_status = sanitize_key((string) $source->get_status());
-		$target_status = sanitize_key((string) $target->get_status());
+		$source_status = WCOS_Merge_Canonical_Reader::status($source);
+		$target_status = WCOS_Merge_Canonical_Reader::status($target);
 		$unsupported_statuses = array('trash', 'cancelled', 'refunded', 'failed', 'checkout-draft');
 		if (in_array($source_status, $unsupported_statuses, true)
 			|| in_array($target_status, $unsupported_statuses, true)) {
 			return self::reject($report, 'incompatible_status', __('Merge requires two independently safe, non-terminal order statuses.', 'wc-order-splitter'));
 		}
 
-		$source_currency = (string) $source->get_currency();
-		$target_currency = (string) $target->get_currency();
+		$source_currency = WCOS_Merge_Canonical_Reader::currency($source);
+		$target_currency = WCOS_Merge_Canonical_Reader::currency($target);
 		if ('' === $source_currency || $source_currency !== $target_currency) {
 			return self::reject($report, 'incompatible_currency', __('Merge requires the same non-empty currency on both orders.', 'wc-order-splitter'));
 		}
-		if ((bool) $source->get_prices_include_tax() !== (bool) $target->get_prices_include_tax()) {
+		if (WCOS_Merge_Canonical_Reader::prices_include_tax($source) !== WCOS_Merge_Canonical_Reader::prices_include_tax($target)) {
 			return self::reject($report, 'incompatible_pricing_mode', __('Merge requires matching historical tax-inclusion modes.', 'wc-order-splitter'));
 		}
 
 		if (WCOS_Merge_Financial_Authority::has_history($source, $precision)) {
 			return self::reject($report, 'source_financial_history_not_movable', __('The Merge source owns payment or refund history and cannot be retired by this workflow.', 'wc-order-splitter'));
 		}
-		if (empty($source->get_items('line_item'))) {
+		if (empty(WCOS_Merge_Canonical_Reader::items($source, 'line_item'))) {
 			return self::reject($report, 'no_source_lines', __('Merge requires at least one source product line.', 'wc-order-splitter'));
 		}
 
@@ -138,13 +138,13 @@ final class WCOS_Merge_Preflight {
 		}
 		$financial_target = WCOS_Merge_Financial_Authority::target_has_history($financial_authority);
 		if ($financial_target) {
-			foreach ($source->get_items('line_item') as $source_line) {
-				if (0 !== WCOS_Decimal::to_units($source_line->get_total(), $precision)) {
+			foreach (WCOS_Merge_Canonical_Reader::items($source, 'line_item') as $source_line) {
+				if (0 !== WCOS_Decimal::to_units($source_line->get_total('edit'), $precision)) {
 					return self::reject($report, 'financial_target_nonzero_source_total', __('A financially historical target can accept only source product lines with exact zero total.', 'wc-order-splitter'));
 				}
 				if (!WCOS_Merge_Commercial_Policy::financial_target_line_tax_is_neutral(
-					$source_line->get_total_tax(),
-					(array) $source_line->get_taxes(),
+					$source_line->get_total_tax('edit'),
+					(array) $source_line->get_taxes('edit'),
 					$precision
 				)) {
 					return self::reject($report, 'financial_target_nonzero_source_tax', __('A financially historical target can accept only source product lines with exact zero total tax.', 'wc-order-splitter'));
@@ -156,10 +156,10 @@ final class WCOS_Merge_Preflight {
 			$context_authority = WCOS_Merge_Context_Signature::disposition($source, $target);
 			self::assert_item_metadata_supported($source);
 			self::assert_item_metadata_supported($target);
-			WCOS_Order_Totals_Rebuilder::assert_consistent($source, $precision);
-			WCOS_Order_Totals_Rebuilder::assert_consistent($target, $precision);
+			WCOS_Order_Totals_Rebuilder::assert_consistent($source, $precision, true);
+			WCOS_Order_Totals_Rebuilder::assert_consistent($target, $precision, true);
 			$plan = WCOS_Merge_Plan::build($source, $target, $precision);
-			WCOS_Tax_Item_Synchronizer::templates_for_rates($source, $plan['tax_template_rate_ids']);
+			WCOS_Tax_Item_Synchronizer::templates_for_rates($source, $plan['tax_template_rate_ids'], true);
 			$journal_context = WCOS_Merge_Journal_Context::create($source, $target, $plan, $context_authority, $precision);
 		} catch (WCOS_Merge_Financial_Authority_Exception $exception) {
 			return self::reject($report, $exception->get_reason(), $exception->getMessage());
@@ -192,7 +192,7 @@ final class WCOS_Merge_Preflight {
 		$unknown = array();
 		$inconsistent = array();
 		foreach (array('line_item', 'shipping', 'fee', 'tax', 'coupon') as $item_type) {
-			foreach ($order->get_items($item_type) as $item) {
+			foreach (WCOS_Merge_Canonical_Reader::items($order, $item_type) as $item) {
 				WCOS_Order_Item_Meta_Policy::business_metadata($item);
 				$unknown = array_merge(
 					$unknown,

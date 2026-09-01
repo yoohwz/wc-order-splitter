@@ -24,8 +24,8 @@ final class WCOS_Merge_Financial_Authority_Exception extends RuntimeException {
  */
 final class WCOS_Merge_Financial_Authority {
 
-	const SCHEMA_VERSION = 2;
-	const POLICY_VERSION = 2;
+	const SCHEMA_VERSION = 3;
+	const POLICY_VERSION = 3;
 	const ALGORITHM = 'hmac-sha256';
 
 	public static function has_history(WC_Order $order, $precision = null) {
@@ -33,19 +33,17 @@ final class WCOS_Merge_Financial_Authority {
 			? WCOS_Price_Precision_Scope::store_precision()
 			: WCOS_Price_Precision_Scope::validate($precision);
 		try {
-			$total_refunded = WCOS_Decimal::to_units($order->get_total_refunded(), $precision);
+			$participant = self::participant($order, $precision);
 		} catch (Throwable $throwable) {
 			return true;
 		}
-		return self::is_paid($order)
-			|| null !== $order->get_date_paid('edit')
-			|| '' !== trim((string) $order->get_transaction_id('edit'))
-			|| 0 !== $total_refunded
-			|| !empty($order->get_refunds());
+		return (bool) $participant['has_financial_history'];
 	}
 
-	public static function freeze_pair(WC_Order $source, WC_Order $target, $precision) {
+	public static function freeze_pair(WC_Order $source, WC_Order $target, $precision, $allow_source_retired = false) {
 		$precision = WCOS_Price_Precision_Scope::validate($precision);
+		self::assert_participant_status($source, 'source', (bool) $allow_source_retired);
+		self::assert_participant_status($target, 'target', false);
 		if (self::has_history($source, $precision)) {
 			throw new WCOS_Merge_Financial_Authority_Exception(
 				'source_financial_history_not_movable',
@@ -70,10 +68,10 @@ final class WCOS_Merge_Financial_Authority {
 			'payment_refund_api_disposition' => 'never',
 		);
 		$record['pair_financial_policy_fingerprint'] = self::pair_fingerprint($record);
-		return self::canonicalize_pair($record);
+		return self::canonicalize_pair($record, (bool) $allow_source_retired);
 	}
 
-	public static function canonicalize_pair(array $record) {
+	public static function canonicalize_pair(array $record, $allow_source_retired = false) {
 		$expected = array(
 			'algorithm', 'pair_financial_policy_fingerprint', 'payment_refund_api_disposition', 'policy_version',
 			'price_precision', 'schema_version', 'source', 'source_financial_disposition', 'target',
@@ -98,6 +96,8 @@ final class WCOS_Merge_Financial_Authority {
 		$target_has_history = (bool) $record['target_has_financial_history'];
 		$target_disposition = sanitize_key((string) $record['target_financial_disposition']);
 		if (!empty($source['has_financial_history'])
+			|| (self::status_is_unsupported($source['status']) && !($allow_source_retired && 'trash' === $source['status']))
+			|| self::status_is_unsupported($target['status'])
 			|| $target_has_history !== (bool) $target['has_financial_history']
 			|| ($target_has_history && 'preserve_exact_settlement_neutral_only' !== $target_disposition)
 			|| (!$target_has_history && 'ordinary_commercial_policy' !== $target_disposition)
@@ -135,7 +135,7 @@ final class WCOS_Merge_Financial_Authority {
 
 	public static function assert_current(WC_Order $source, WC_Order $target, array $frozen, $allow_source_retired = false) {
 		$frozen = self::canonicalize_pair($frozen);
-		$current = self::freeze_pair($source, $target, $frozen['price_precision']);
+		$current = self::freeze_pair($source, $target, $frozen['price_precision'], (bool) $allow_source_retired);
 		if (!$allow_source_retired) {
 			if ($current !== $frozen) {
 				throw new RuntimeException(__('The Merge payment or refund authority changed after Review.', 'wc-order-splitter'));
@@ -164,7 +164,7 @@ final class WCOS_Merge_Financial_Authority {
 			);
 		}
 
-		$refunds = $order->get_refunds();
+		$refunds = WCOS_Merge_Canonical_Reader::refunds($order);
 		if (!is_array($refunds)) {
 			self::malformed_refund();
 		}
@@ -216,7 +216,7 @@ final class WCOS_Merge_Financial_Authority {
 			'refund_order_ids' => $refund_id_list,
 			'total_refunded' => $total_refunded,
 			'refund_structure_fingerprint' => self::digest(
-				'merge_refund_structure_v2',
+				'merge_refund_structure_v3',
 				array('order_id' => $order_id, 'refunds' => $refund_structures)
 			),
 		);
@@ -251,7 +251,7 @@ final class WCOS_Merge_Financial_Authority {
 					$referenced = self::resolve_refund_tax_reference($order, $refund_item);
 				} else {
 					$refunded_item_id = absint($refund_item->get_meta('_refunded_item_id', true, 'edit'));
-					$referenced = $refunded_item_id ? $order->get_item($refunded_item_id) : false;
+					$referenced = $refunded_item_id ? WCOS_Merge_Canonical_Reader::item($order, $refunded_item_id, $item_type) : false;
 					if (!$referenced instanceof WC_Order_Item
 						|| (int) $referenced->get_id() !== $refunded_item_id
 						|| (int) $referenced->get_order_id('edit') !== (int) $order->get_id()
@@ -424,12 +424,8 @@ final class WCOS_Merge_Financial_Authority {
 	}
 
 	private static function persisted_items(WC_Abstract_Order $order, $item_type) {
-		$data_store = $order->get_data_store();
-		if (!is_object($data_store) || !is_callable(array($data_store, 'read_items'))) {
-			self::malformed_refund();
-		}
 		try {
-			$items = $data_store->read_items($order, (string) $item_type);
+			$items = WCOS_Merge_Canonical_Reader::items($order, $item_type);
 		} catch (Throwable $throwable) {
 			self::malformed_refund();
 		}
@@ -528,12 +524,28 @@ final class WCOS_Merge_Financial_Authority {
 
 	private static function participant_fingerprint(array $participant) {
 		unset($participant['participant_financial_fingerprint']);
-		return self::digest('merge_participant_financial_v2', $participant);
+		return self::digest('merge_participant_financial_v3', $participant);
 	}
 
 	private static function pair_fingerprint(array $record) {
 		unset($record['pair_financial_policy_fingerprint']);
-		return self::digest('merge_pair_financial_policy_v2', $record);
+		return self::digest('merge_pair_financial_policy_v3', $record);
+	}
+
+	private static function assert_participant_status(WC_Order $order, $role, $allow_retired) {
+		$status = WCOS_Merge_Canonical_Reader::status($order);
+		if (($allow_retired && 'source' === $role && 'trash' === $status)
+			|| !self::status_is_unsupported($status)) {
+			return;
+		}
+		throw new WCOS_Merge_Financial_Authority_Exception(
+			'incompatible_status',
+			__('Merge financial authority requires non-terminal persisted participant statuses.', 'wc-order-splitter')
+		);
+	}
+
+	private static function status_is_unsupported($status) {
+		return in_array(sanitize_key((string) $status), array('trash', 'cancelled', 'refunded', 'failed', 'checkout-draft'), true);
 	}
 
 	private static function metadata_fingerprint(array $metadata, $purpose) {

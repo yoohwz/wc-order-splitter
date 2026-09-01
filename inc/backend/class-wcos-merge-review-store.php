@@ -17,7 +17,7 @@ final class WCOS_Merge_Review_Exception extends RuntimeException {
 
 /** Short-lived, server-owned authority for one Merge Review. */
 final class WCOS_Merge_Review_Store {
-	const SCHEMA_VERSION = 2;
+	const SCHEMA_VERSION = 3;
 	const TTL = 900;
 
 	public static function create(WC_Order $source, WC_Order $target, array $report, $user_id) {
@@ -104,8 +104,8 @@ final class WCOS_Merge_Review_Store {
 		$precision = WCOS_Price_Precision_Scope::validate(isset($report['price_precision']) ? $report['price_precision'] : null);
 		$plan = WCOS_Merge_Plan::canonicalize_current($report['plan']);
 		$context = WCOS_Merge_Journal_Context::create_executable(
-			wc_get_order($source_id),
-			wc_get_order($target_id),
+			WCOS_Merge_Canonical_Reader::order($source_id),
+			WCOS_Merge_Canonical_Reader::order($target_id),
 			$plan,
 			$report['context_authority'],
 			$precision
@@ -135,8 +135,8 @@ final class WCOS_Merge_Review_Store {
 	private static function assert_current(WC_Order $source, WC_Order $target, array $authority) {
 		self::assert_authority_complete($authority);
 		$precision = WCOS_Price_Precision_Scope::validate(isset($authority['price_precision']) ? $authority['price_precision'] : null);
-		$source = wc_get_order($source->get_id());
-		$target = wc_get_order($target->get_id());
+		$source = WCOS_Merge_Canonical_Reader::order($source->get_id());
+		$target = WCOS_Merge_Canonical_Reader::order($target->get_id());
 		if (!$source instanceof WC_Order || !$target instanceof WC_Order) {
 			throw new WCOS_Merge_Review_Exception('participant_missing', __('A Merge participant is no longer available.', 'wc-order-splitter'));
 		}

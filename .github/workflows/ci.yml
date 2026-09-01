@@ -138,6 +138,10 @@ jobs:
           tests/ci/direct-css-fast-contract.sh
           tests/ci/required-ci-profile-contract.sh
 
+      - name: Enforce persisted Merge authority reads
+        shell: bash
+        run: tests/ci/merge-canonical-read-contract.sh
+
       - name: Reject removed telemetry integration
         shell: bash
         run: |

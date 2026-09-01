@@ -7,7 +7,7 @@ defined('ABSPATH') || exit;
  */
 final class WCOS_Merge_Journal_Context {
 
-	const SCHEMA_VERSION = 5;
+	const SCHEMA_VERSION = 6;
 	const PREVIOUS_SCHEMA_VERSION = 4;
 	const LEGACY_SCHEMA_VERSION = 3;
 	const TERMINAL_RESULT_SCHEMA_VERSION = 1;
@@ -25,7 +25,7 @@ final class WCOS_Merge_Journal_Context {
 		if ('' !== $selected_retirement_policy) {
 			WCOS_Merge_Retirement_Policy::assert_approved($selected_retirement_policy);
 		}
-		$source_signature = WCOS_Order_Contract_Snapshot::source_signature($source);
+		$source_signature = WCOS_Merge_Canonical_Reader::source_signature($source);
 		$archive_signature = WCOS_Merge_Recovery_Snapshot::archive_commercial_signature($source);
 		$financial_authority = isset($plan['financial_authority']) && is_array($plan['financial_authority'])
 			? WCOS_Merge_Financial_Authority::canonicalize_pair($plan['financial_authority'])
@@ -44,7 +44,7 @@ final class WCOS_Merge_Journal_Context {
 			'source_order_id' => $source_id,
 			'target_order_id' => $target_id,
 			'source_signature' => $source_signature,
-			'target_signature' => WCOS_Order_Contract_Snapshot::source_signature($target),
+			'target_signature' => WCOS_Merge_Canonical_Reader::source_signature($target),
 			'plan_schema_version' => WCOS_Merge_Plan::SCHEMA_VERSION,
 			'plan_fingerprint' => WCOS_Merge_Plan::fingerprint($plan),
 			'price_precision' => $price_precision,
@@ -396,7 +396,7 @@ final class WCOS_Merge_Journal_Context {
 		$schema_version = (int) $schema_version;
 		$namespace = self::LEGACY_SCHEMA_VERSION === $schema_version
 			? 'merge_pair_authority_v3'
-			: (self::PREVIOUS_SCHEMA_VERSION === $schema_version ? 'merge_pair_authority_v4' : 'merge_pair_authority_v5');
+			: (self::PREVIOUS_SCHEMA_VERSION === $schema_version ? 'merge_pair_authority_v4' : 'merge_pair_authority_v6');
 		return WCOS_Mutation_Fingerprint::create($namespace, $authority['source_order_id'], $authority);
 	}
 
@@ -504,7 +504,7 @@ final class WCOS_Merge_Journal_Context {
 			return null;
 		}
 		$schema = (int) (isset($authority['schema_version']) ? $authority['schema_version'] : 0);
-		if (WCOS_Merge_Context_Signature::SCHEMA_VERSION === $schema) {
+		if (in_array($schema, array(WCOS_Merge_Context_Signature::PREVIOUS_SCHEMA_VERSION, WCOS_Merge_Context_Signature::SCHEMA_VERSION), true)) {
 			$expected_keys = array(
 				'algorithm', 'disposition', 'schema_version',
 				'source_billing_context_digest', 'source_identity_digest', 'source_identity_type',
@@ -521,7 +521,7 @@ final class WCOS_Merge_Journal_Context {
 				return null;
 			}
 			$result = array(
-				'schema_version' => WCOS_Merge_Context_Signature::SCHEMA_VERSION,
+				'schema_version' => $schema,
 				'algorithm' => WCOS_Merge_Context_Signature::ALGORITHM,
 				'disposition' => 'keep_target_context',
 			);
@@ -595,7 +595,7 @@ final class WCOS_Merge_Journal_Context {
 	private static function previous_pair_versions(array $versions) {
 		return WCOS_Merge_Preflight::PREVIOUS_POLICY_VERSION === (int) (isset($versions['preflight_policy_version']) ? $versions['preflight_policy_version'] : 0)
 			&& WCOS_Merge_Plan::PREVIOUS_SCHEMA_VERSION === (int) (isset($versions['plan_schema_version']) ? $versions['plan_schema_version'] : 0)
-			&& WCOS_Merge_Context_Signature::SCHEMA_VERSION === (int) (isset($versions['context_signature_version']) ? $versions['context_signature_version'] : 0);
+			&& WCOS_Merge_Context_Signature::PREVIOUS_SCHEMA_VERSION === (int) (isset($versions['context_signature_version']) ? $versions['context_signature_version'] : 0);
 	}
 
 	private static function current_pair_versions(array $versions) {
