@@ -21,6 +21,7 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 	private static $product_ids = array();
 	private static $review_ids = array();
 	private static $operation_ids = array();
+	private static $tax_rate_ids = array();
 	private static $operator_id = 0;
 	private static $old_statuses = array();
 	private static $results = array();
@@ -115,26 +116,25 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		return $order->get_item($item->get_id());
 	}
 
-	private static function shipping(WC_Order $order, $label, $total) {
+	private static function shipping(WC_Order $order, $label, $total, array $taxes = array()) {
 		$item = new WC_Order_Item_Shipping();
 		$item->set_method_title($label);
 		$item->set_method_id('flat_rate');
 		$item->set_instance_id(6);
 		$item->set_total($total);
-		$item->set_taxes(array('total' => array()));
+		$item->set_taxes(array('total' => $taxes));
 		$item->add_meta_data('Carrier reference', 'financial-target-shipping', true);
 		$order->add_item($item);
 		$order->save();
 		return $order->get_item($item->get_id());
 	}
 
-	private static function fee(WC_Order $order, $label, $total) {
+	private static function fee(WC_Order $order, $label, $total, array $taxes = array()) {
 		$item = new WC_Order_Item_Fee();
 		$item->set_name($label);
 		$item->set_amount($total);
 		$item->set_total($total);
-		$item->set_total_tax('0.00');
-		$item->set_taxes(array('total' => array()));
+		$item->set_taxes(array('total' => $taxes));
 		$order->add_item($item);
 		$order->save();
 		return $order->get_item($item->get_id());
@@ -150,16 +150,37 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		return $order->get_item($item->get_id());
 	}
 
-	private static function tax(WC_Order $order, $rate_id, $cart, $shipping) {
+	private static function tax(WC_Order $order, $rate_id, $cart, $shipping, $native_rate = false) {
 		$item = new WC_Order_Item_Tax();
-		$item->set_rate_id((int) $rate_id);
-		$item->set_label('Historical financial rate ' . (int) $rate_id);
-		$item->set_compound(false);
+		if ($native_rate) {
+			$item->set_rate((int) $rate_id);
+		} else {
+			$item->set_rate_id((int) $rate_id);
+			$item->set_label('Historical financial rate ' . (int) $rate_id);
+			$item->set_compound(false);
+		}
 		$item->set_tax_total($cart);
 		$item->set_shipping_tax_total($shipping);
 		$order->add_item($item);
 		$order->save();
 		return $order->get_item($item->get_id());
+	}
+
+	private static function native_tax_rate($label) {
+		$rate_id = WC_Tax::_insert_tax_rate(array(
+			'tax_rate_country' => '',
+			'tax_rate_state' => '',
+			'tax_rate' => '10.0000',
+			'tax_rate_name' => (string) $label,
+			'tax_rate_priority' => 1,
+			'tax_rate_compound' => 0,
+			'tax_rate_shipping' => 1,
+			'tax_rate_order' => 0,
+			'tax_rate_class' => '',
+		));
+		self::assert(absint($rate_id) > 0, 'Native refund tax-rate fixture could not be created.');
+		self::$tax_rate_ids[] = absint($rate_id);
+		return absint($rate_id);
 	}
 
 	private static function finalize(WC_Order $order) {
@@ -441,31 +462,50 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		$product = self::product('refund-tax-distribution-drift');
 		$source = self::order('refund-tax-distribution-drift-source');
 		$target = self::order('refund-tax-distribution-drift-target', 'on-hold');
+		$rate_id = self::native_tax_rate('WOS COMPAT 006 native refund rate');
 		self::line($source, $product, array('subtotal' => '0.00', 'total' => '0.00'));
 		$target_line = self::line($target, $product, array(
 			'subtotal' => '10.00',
 			'total' => '10.00',
 			'subtotal_tax' => '0.50',
 			'total_tax' => '0.50',
-			'taxes' => array('subtotal' => array(611 => '0.50'), 'total' => array(611 => '0.50')),
+			'taxes' => array('subtotal' => array($rate_id => '0.50'), 'total' => array($rate_id => '0.50')),
 		));
-		$target_tax = self::tax($target, 611, '0.50', '0.00');
+		$target_shipping = self::shipping($target, 'Native taxed target shipping', '3.00', array($rate_id => '0.20'));
+		$target_fee = self::fee($target, 'Native taxed target fee', '2.00', array($rate_id => '0.10'));
+		$target_tax = self::tax($target, $rate_id, '0.60', '0.20', true);
 		$source = self::finalize($source);
-		$target = self::finalize($target);
-		$refund = self::create_refund($target, '0.50', array(
-			$target_line->get_id() => array('qty' => 0, 'refund_total' => '0.00', 'refund_tax' => array(611 => '0.50')),
+		$target = self::finalize(wc_get_order($target->get_id()));
+		$refund = self::create_refund($target, '3.68', array(
+			$target_line->get_id() => array('qty' => 1, 'refund_total' => '2.00', 'refund_tax' => array($rate_id => '0.10')),
+			$target_shipping->get_id() => array('qty' => 0, 'refund_total' => '1.00', 'refund_tax' => array($rate_id => '0.05')),
+			$target_fee->get_id() => array('qty' => 0, 'refund_total' => '0.50', 'refund_tax' => array($rate_id => '0.03')),
 		), 'Refund-tax distribution authority fixture');
 		$refund_taxes = $refund->get_items('tax');
 		$refund_tax = reset($refund_taxes);
-		self::assert($refund_tax instanceof WC_Order_Item_Tax
-			&& '0.50' === WCOS_Decimal::normalize($refund->get_amount(), 2)
-			&& '-0.50' === WCOS_Decimal::normalize($refund_tax->get_tax_total('edit'), 2)
-			&& '0.00' === WCOS_Decimal::normalize($refund_tax->get_shipping_tax_total('edit'), 2), 'Refund-tax drift fixture did not create the expected native tax row.');
-		$refund_tax->add_meta_data('_refunded_item_id', $target_tax->get_id(), true);
-		$refund_tax->save();
+		$refund_lines = $refund->get_items('line_item');
+		$refund_line = reset($refund_lines);
+		$refund_shipping_items = $refund->get_items('shipping');
+		$refund_shipping = reset($refund_shipping_items);
+		$refund_fees = $refund->get_items('fee');
+		$refund_fee = reset($refund_fees);
+		self::assert($target_tax instanceof WC_Order_Item_Tax
+			&& $refund_tax instanceof WC_Order_Item_Tax
+			&& $rate_id === absint($refund_tax->get_rate_id('edit'))
+			&& 0 === absint($refund_tax->get_meta('_refunded_item_id', true))
+			&& '3.68' === WCOS_Decimal::normalize($refund->get_amount(), 2)
+			&& '-0.13' === WCOS_Decimal::normalize($refund_tax->get_tax_total('edit'), 2)
+			&& '-0.05' === WCOS_Decimal::normalize($refund_tax->get_shipping_tax_total('edit'), 2), 'Refund-tax fixture did not preserve unmodified native WooCommerce tax authority.');
+		self::assert($refund_line instanceof WC_Order_Item_Product
+			&& $target_line->get_id() === absint($refund_line->get_meta('_refunded_item_id', true))
+			&& $refund_shipping instanceof WC_Order_Item_Shipping
+			&& $target_shipping->get_id() === absint($refund_shipping->get_meta('_refunded_item_id', true))
+			&& $refund_fee instanceof WC_Order_Item_Fee
+			&& $target_fee->get_id() === absint($refund_fee->get_meta('_refunded_item_id', true)), 'Native line, shipping, or fee refund reference semantics changed.');
 
 		$source = wc_get_order($source->get_id());
 		$target = wc_get_order($target->get_id());
+		self::assert(WCOS_Merge_Preflight::assert_supported($source, $target, 2)['supported'], 'A standard native taxed partial refund was not eligible.');
 		$controller = WCOS_Merge_Admin_Controller::bootstrap();
 		$request = self::request($source, $target);
 		$review = $controller->review_request($request);
@@ -475,13 +515,13 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		$before_journals = self::journal_option_count();
 
 		$refund_tax = wc_get_order($refund->get_id())->get_item($refund_tax->get_id());
-		$refund_tax->set_tax_total('-0.40');
-		$refund_tax->set_shipping_tax_total('-0.10');
+		$refund_tax->set_tax_total('-0.12');
+		$refund_tax->set_shipping_tax_total('-0.06');
 		$refund_tax->save();
 		$target = wc_get_order($target->get_id());
 		$after_drift = WCOS_Merge_Financial_Authority::freeze_pair($source, $target, 2);
 		$target_after_drift = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
-		self::assert('0.50' === WCOS_Decimal::normalize($target->get_total_refunded(), 2)
+		self::assert('3.68' === WCOS_Decimal::normalize($target->get_total_refunded(), 2)
 			&& $before_drift['target']['refund_structure_fingerprint'] !== $after_drift['target']['refund_structure_fingerprint'], 'Aggregate-preserving refund-tax distribution drift did not change financial authority.');
 		self::expect_transport_one_of(static function() use ($controller, $request, $review) {
 			$controller->confirm_request(array_merge($request, array(
@@ -494,8 +534,8 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			&& $target_after_drift === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target->get_id())), 'Confirm rejection changed a participant or created a journal after refund-tax drift.');
 
 		$refund_tax = wc_get_order($refund->get_id())->get_item($refund_tax->get_id());
-		$refund_tax->set_tax_total('-0.50');
-		$refund_tax->set_shipping_tax_total('0.00');
+		$refund_tax->set_tax_total('-0.13');
+		$refund_tax->set_shipping_tax_total('-0.05');
 		$refund_tax->save();
 		$target = wc_get_order($target->get_id());
 		$review = $controller->review_request(self::request($source, $target));
@@ -507,8 +547,8 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		self::$operation_ids[$source->get_id()][] = $confirmation['operation_id'];
 
 		$refund_tax = wc_get_order($refund->get_id())->get_item($refund_tax->get_id());
-		$refund_tax->set_tax_total('-0.40');
-		$refund_tax->set_shipping_tax_total('-0.10');
+		$refund_tax->set_tax_total('-0.12');
+		$refund_tax->set_shipping_tax_total('-0.06');
 		$refund_tax->save();
 		$target = wc_get_order($target->get_id());
 		$target_after_drift = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
@@ -528,20 +568,58 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 			&& $target_after_drift === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target->get_id())), 'Production Execute rejection crossed the pre-journal refund-tax authority boundary.');
 
 		$refund_tax = wc_get_order($refund->get_id())->get_item($refund_tax->get_id());
-		$refund_tax->update_meta_data('_refunded_item_id', $target_line->get_id());
+		$refund_tax->set_tax_total('-0.13');
+		$refund_tax->set_shipping_tax_total('-0.05');
 		$refund_tax->save();
 		$target = wc_get_order($target->get_id());
-		$malformed_before = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
+		$rate_drift_review = $controller->review_request(self::request($source, $target));
+		self::$review_ids[] = $rate_drift_review['review_id'];
+		$refund_tax = wc_get_order($refund->get_id())->get_item($refund_tax->get_id());
+		$refund_tax->set_rate_id($rate_id + 1000000);
+		$refund_tax->save();
+		$target = wc_get_order($target->get_id());
+		$rate_drift_target = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
+		self::expect_transport_one_of(static function() use ($controller, $source, $target, $rate_drift_review) {
+			$controller->confirm_request(array_merge(self::request($source, $target), array(
+				'review_id' => $rate_drift_review['review_id'],
+				'review_token' => $rate_drift_review['review_token'],
+			)));
+		}, array('review_target_changed', 'review_pair_changed', 'review_authority_changed', 'malformed_refund_authority'));
+		self::assert($before_journals === self::journal_option_count()
+			&& $rate_drift_target === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target->get_id())), 'Refund tax rate drift crossed the pre-journal boundary.');
+
+		$refund_tax = wc_get_order($refund->get_id())->get_item($refund_tax->get_id());
+		$refund_tax->set_rate_id($rate_id);
+		$refund_tax->save();
+		$target = wc_get_order($target->get_id());
+		$duplicate_tax = self::tax($target, $rate_id, '0.00', '0.00', true);
+		$ambiguous_before = WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target->get_id()));
+		self::assert('malformed_refund_authority' === WCOS_Merge_Preflight::report($source, wc_get_order($target->get_id()), 2)['reason']
+			&& $before_journals === self::journal_option_count()
+			&& $ambiguous_before === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target->get_id())), 'Ambiguous target tax-rate authority did not fail closed without mutation.');
+		$target = wc_get_order($target->get_id());
+		$target->remove_item($duplicate_tax->get_id());
+		$target->save();
+
+		$refund_tax = wc_get_order($refund->get_id())->get_item($refund_tax->get_id());
+		$refund_tax->set_rate_id(0);
+		$refund_tax->save();
+		$target = wc_get_order($target->get_id());
+		$missing_before = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
 		self::assert('malformed_refund_authority' === WCOS_Merge_Preflight::report($source, $target, 2)['reason']
 			&& $before_journals === self::journal_option_count()
-			&& $malformed_before === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target->get_id())), 'A refund tax item referencing a non-tax original item did not fail closed without mutation.');
+			&& $missing_before === WCOS_Merge_Recovery_Snapshot::participant_signature(wc_get_order($target->get_id())), 'Missing refund tax-rate authority did not fail closed without mutation.');
 
 		self::$results['refund_tax_distribution_drift'] = array(
 			'cases' => '60',
+			'native_product_shipping_fee_refund' => true,
+			'native_tax_reference_by_rate' => true,
 			'aggregate_refund_unchanged' => true,
 			'confirm_rejected' => true,
 			'production_gateway_rejected_pre_journal' => true,
-			'malformed_type_reference_rejected' => true,
+			'rate_id_drift_rejected' => true,
+			'ambiguous_rate_authority_rejected' => true,
+			'missing_rate_authority_rejected' => true,
 		);
 	}
 
@@ -1392,6 +1470,9 @@ final class WCOS_Compat_Merge_Financial_Matrix {
 		}
 		foreach (array_reverse(array_values(array_unique(self::$product_ids))) as $product_id) {
 			wp_delete_post($product_id, true);
+		}
+		foreach (array_reverse(array_values(array_unique(self::$tax_rate_ids))) as $tax_rate_id) {
+			WC_Tax::_delete_tax_rate($tax_rate_id);
 		}
 	}
 

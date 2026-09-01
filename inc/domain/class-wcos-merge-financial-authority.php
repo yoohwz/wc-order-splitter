@@ -235,18 +235,27 @@ final class WCOS_Merge_Financial_Authority {
 		foreach (array('line_item', 'shipping', 'fee', 'tax') as $item_type) {
 			foreach ($refund->get_items($item_type) as $refund_item_id => $refund_item) {
 				$refund_item_id = absint($refund_item_id);
-				$refunded_item_id = absint($refund_item->get_meta('_refunded_item_id', true));
-				$referenced = $refunded_item_id ? $order->get_item($refunded_item_id) : false;
 				if (!$refund_item instanceof WC_Order_Item || !$refund_item_id || isset($seen_item_ids[$refund_item_id])
 					|| (int) $refund_item->get_id() !== $refund_item_id
 					|| (int) $refund_item->get_order_id() !== (int) $refund->get_id()
-					|| (string) $refund_item->get_type() !== $item_type
-					|| !$referenced instanceof WC_Order_Item
-					|| (int) $referenced->get_id() !== $refunded_item_id
-					|| (int) $referenced->get_order_id() !== (int) $order->get_id()
-					|| (string) $referenced->get_type() !== $item_type) {
+					|| (string) $refund_item->get_type() !== $item_type) {
 					self::malformed_refund();
 				}
+
+				if ('tax' === $item_type) {
+					$refunded_item_id = 0;
+					$referenced = self::resolve_refund_tax_reference($order, $refund_item);
+				} else {
+					$refunded_item_id = absint($refund_item->get_meta('_refunded_item_id', true));
+					$referenced = $refunded_item_id ? $order->get_item($refunded_item_id) : false;
+					if (!$referenced instanceof WC_Order_Item
+						|| (int) $referenced->get_id() !== $refunded_item_id
+						|| (int) $referenced->get_order_id() !== (int) $order->get_id()
+						|| (string) $referenced->get_type() !== $item_type) {
+						self::malformed_refund();
+					}
+				}
+
 				$seen_item_ids[$refund_item_id] = true;
 				$items[$refund_item_id] = self::refund_item_structure(
 					$refund_item,
@@ -276,11 +285,41 @@ final class WCOS_Merge_Financial_Authority {
 		);
 	}
 
+	private static function resolve_refund_tax_reference(WC_Order $order, WC_Order_Item $refund_item) {
+		if (!$refund_item instanceof WC_Order_Item_Tax) {
+			self::malformed_refund();
+		}
+
+		$rate_id = absint($refund_item->get_rate_id('edit'));
+		if (!$rate_id) {
+			self::malformed_refund();
+		}
+
+		$matches = array();
+		foreach ($order->get_items('tax') as $target_item_id => $target_item) {
+			$target_item_id = absint($target_item_id);
+			if (!$target_item instanceof WC_Order_Item_Tax || !$target_item_id
+				|| (int) $target_item->get_id() !== $target_item_id
+				|| (int) $target_item->get_order_id() !== (int) $order->get_id()
+				|| 'tax' !== (string) $target_item->get_type()) {
+				self::malformed_refund();
+			}
+			if ($rate_id === absint($target_item->get_rate_id('edit'))) {
+				$matches[$target_item_id] = $target_item;
+			}
+		}
+
+		if (1 !== count($matches)) {
+			self::malformed_refund();
+		}
+
+		return reset($matches);
+	}
+
 	private static function refund_item_structure(WC_Order_Item $item, WC_Order_Item $referenced, $item_type, $item_id, $refunded_item_id, $precision) {
 		$structure = array(
 			'refund_item_id' => absint($item_id),
 			'type' => (string) $item_type,
-			'refunded_item_id' => absint($refunded_item_id),
 			'metadata_fingerprint' => self::metadata_fingerprint($item->get_meta_data(), 'merge_refund_item_meta_v1'),
 		);
 
@@ -289,6 +328,7 @@ final class WCOS_Merge_Financial_Authority {
 				self::malformed_refund();
 			}
 			return array_merge($structure, array(
+				'refunded_item_id' => absint($refunded_item_id),
 				'name_fingerprint' => self::digest('merge_refund_item_name_v1', array('name' => (string) $item->get_name('edit'))),
 				'product_id' => absint($item->get_product_id('edit')),
 				'variation_id' => absint($item->get_variation_id('edit')),
@@ -307,6 +347,7 @@ final class WCOS_Merge_Financial_Authority {
 				self::malformed_refund();
 			}
 			return array_merge($structure, array(
+				'refunded_item_id' => absint($refunded_item_id),
 				'method_title_fingerprint' => self::digest('merge_refund_shipping_title_v1', array('method_title' => (string) $item->get_method_title('edit'))),
 				'method_id' => (string) $item->get_method_id('edit'),
 				'instance_id' => (string) $item->get_instance_id('edit'),
@@ -322,6 +363,7 @@ final class WCOS_Merge_Financial_Authority {
 				self::malformed_refund();
 			}
 			return array_merge($structure, array(
+				'refunded_item_id' => absint($refunded_item_id),
 				'name_fingerprint' => self::digest('merge_refund_item_name_v1', array('name' => (string) $item->get_name('edit'))),
 				'tax_class' => (string) $item->get_tax_class('edit'),
 				'tax_status' => (string) $item->get_tax_status('edit'),
@@ -336,15 +378,26 @@ final class WCOS_Merge_Financial_Authority {
 			if (!$item instanceof WC_Order_Item_Tax || !$referenced instanceof WC_Order_Item_Tax) {
 				self::malformed_refund();
 			}
+			$rate_id = absint($item->get_rate_id('edit'));
+			if (!$rate_id || $rate_id !== absint($referenced->get_rate_id('edit'))
+				|| !absint($referenced->get_id())) {
+				self::malformed_refund();
+			}
 			$rate_percent = $item->get_rate_percent('edit');
+			$target_rate_percent = $referenced->get_rate_percent('edit');
 			return array_merge($structure, array(
-				'rate_id' => absint($item->get_rate_id('edit')),
+				'rate_id' => $rate_id,
+				'resolved_target_tax_item_id' => absint($referenced->get_id()),
 				'rate_code_fingerprint' => self::digest('merge_refund_tax_rate_code_v1', array('rate_code' => (string) $item->get_rate_code('edit'))),
 				'label_fingerprint' => self::digest('merge_refund_tax_label_v1', array('label' => (string) $item->get_label('edit'))),
 				'compound' => (bool) $item->get_compound('edit'),
 				'tax_total' => WCOS_Decimal::normalize($item->get_tax_total('edit'), $precision),
 				'shipping_tax_total' => WCOS_Decimal::normalize($item->get_shipping_tax_total('edit'), $precision),
 				'rate_percent' => null === $rate_percent ? null : WCOS_Decimal::normalize($rate_percent, 6),
+				'target_rate_code_fingerprint' => self::digest('merge_target_tax_rate_code_v1', array('rate_code' => (string) $referenced->get_rate_code('edit'))),
+				'target_label_fingerprint' => self::digest('merge_target_tax_label_v1', array('label' => (string) $referenced->get_label('edit'))),
+				'target_compound' => (bool) $referenced->get_compound('edit'),
+				'target_rate_percent' => null === $target_rate_percent ? null : WCOS_Decimal::normalize($target_rate_percent, 6),
 			));
 		}
 
