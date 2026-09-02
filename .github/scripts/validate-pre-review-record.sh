@@ -18,7 +18,7 @@ expected_profile=${8:-}
 for sha in "$base_sha" "$head_sha" "$head_tree"; do
   [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'pre-review-record-error: invalid exact SHA/tree' >&2; exit 1; }
 done
-case "$expected_profile" in MEDIUM_DOMAIN|HIGH_DEEP|HIGH_FINANCIAL|RELEASE_CERT) ;; *)
+case "$expected_profile" in LOW_FOCUSED|MEDIUM_DOMAIN|HIGH_DEEP|HIGH_FINANCIAL|RELEASE_CERT) ;; *)
   echo 'pre-review-record-error: invalid expected PRECHECK profile' >&2
   exit 1
   ;;
