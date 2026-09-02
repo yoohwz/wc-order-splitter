@@ -10,6 +10,10 @@ const REPO = 'yoohwz/wc-order-splitter';
 const OWNER = { login: 'yoohwz', id: 152001663 };
 const APP = 15368;
 const RULESET = 21367637;
+// Owner-authenticated source ruleset revision, history version 47541914.
+// GitHub redacts bypass_actors without Administration:write; never grant that
+// capability to Actions merely to read it. Any ruleset edit invalidates this pin.
+const RULESET_UPDATED_AT = '2026-08-25T10:09:48.838+07:00';
 const SHA = /^[0-9a-f]{40}$/;
 const ID = /^[1-9][0-9]*$/;
 const PROFILE = /^(LOW_FOCUSED|MEDIUM_DOMAIN|HIGH_DEEP|HIGH_FINANCIAL|RELEASE_CERT)$/;
@@ -73,8 +77,12 @@ function checkResult(check, sha, suite) {
 function verifyRules(rules) {
   equal(rules.id, RULESET, 'ruleset ID');
   equal(rules.name, 'Protect main', 'ruleset name');
+  equal(rules.target, 'branch', 'ruleset target');
+  equal(rules.source_type, 'Repository', 'ruleset source type');
+  equal(rules.source, REPO, 'ruleset source');
+  equal(rules.updated_at, RULESET_UPDATED_AT, 'source-bound ruleset revision');
   equal(rules.enforcement, 'active', 'ruleset enforcement');
-  equal(rules.bypass_actors, [], 'ruleset bypass');
+  if (Object.hasOwn(rules, 'bypass_actors')) equal(rules.bypass_actors, [], 'ruleset bypass');
   equal(rules.conditions?.ref_name, { exclude: [], include: ['~DEFAULT_BRANCH'] }, 'ruleset branch selection');
   equal(rules.rules.map(rule => rule.type).sort(), ['deletion', 'non_fast_forward', 'pull_request', 'required_status_checks'], 'ruleset rule types');
   const status = rules.rules.find(rule => rule.type === 'required_status_checks').parameters;
@@ -194,7 +202,7 @@ function verifySnapshot(s, input) {
     profile, assurance, review: reviewRef, final: s.final.id, finalAttempt: s.final.run_attempt,
     evidence: s.evidence.id, acceptance: s.acceptance.id, humanGate: s.gate.id,
     recordDigest: digest([s.evidence, s.acceptance, s.gate, s.review || null]), artifacts: 0, unresolvedThreads: 0,
-    bridge: s.bridge.id, ruleset: RULESET, app: APP };
+    bridge: s.bridge.id, ruleset: RULESET, rulesetRevision: RULESET_UPDATED_AT, app: APP };
 }
 
 async function materialize(input, collect, api, wait = ms => new Promise(resolve => setTimeout(resolve, ms))) {
@@ -261,6 +269,9 @@ function rawField(record, key) {
 function collectLive(input) {
   const repository = liveApi(`repos/${REPO}`);
   const pr = liveApi(`repos/${REPO}/pulls/${input.pr}`);
+  const rules = liveApi(`repos/${REPO}/rulesets/${RULESET}`);
+  verifyRules(rules);
+  console.log(`merge-authority-rules-read-ok revision=${rules.updated_at} bypass-field=${Object.hasOwn(rules, 'bypass_actors') ? 'visible' : 'redacted'}`);
   const gate = comment(input.gate);
   const evidence = comment(rawField(gate, 'Evidence authority'));
   const acceptance = comment(rawField(gate, 'Acceptance authority'));
@@ -297,7 +308,7 @@ function collectLive(input) {
   return { repository, pr, gate, evidence, acceptance, final, jobs, head, review, reviewVerified, threads,
     classification: { profile: classification.ci_profile, assurance: classification.assurance_profile, review_required: classification.independent_review_required },
     issue: liveApi(`repos/${REPO}/issues/${input.issue}`), main: liveApi(`repos/${REPO}/git/ref/heads/main`),
-    candidate: liveApi(`repos/${REPO}/git/commits/${pr.merge_commit_sha}`), rules: liveApi(`repos/${REPO}/rulesets/${RULESET}`),
+    candidate: liveApi(`repos/${REPO}/git/commits/${pr.merge_commit_sha}`), rules,
     finalArtifacts: liveApi(`repos/${REPO}/actions/runs/${finalId}/artifacts`), finalCheck: liveApi(`repos/${REPO}/check-runs/${required[0].id}`),
     bridge: liveApi(`repos/${REPO}/actions/runs/${process.env.GITHUB_RUN_ID}`), bridgeArtifacts: liveApi(`repos/${REPO}/actions/runs/${process.env.GITHUB_RUN_ID}/artifacts`),
     comments: paginate(`repos/${REPO}/issues/${input.issue}/comments?per_page=100`), reviews: paginate(`repos/${REPO}/pulls/${input.pr}/reviews?per_page=100`) };

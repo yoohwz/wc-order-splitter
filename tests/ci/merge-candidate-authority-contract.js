@@ -31,7 +31,8 @@ function fixture(selected = input) {
       merge_commit_sha: candidate, mergeable: true, mergeable_state: 'clean' },
     main: { object: { sha: base } }, candidate: { sha: candidate, tree: { sha: tree }, parents: [{ sha: base }, { sha: head }] },
     head: { sha: head, tree: { sha: tree } }, threads: 0,
-    rules: { id: 21367637, name: 'Protect main', enforcement: 'active', bypass_actors: [],
+    rules: { id: 21367637, name: 'Protect main', target: 'branch', source_type: 'Repository', source: repo,
+      updated_at: '2026-08-25T10:09:48.838+07:00', enforcement: 'active', bypass_actors: [],
       conditions: { ref_name: { exclude: [], include: ['~DEFAULT_BRANCH'] } }, rules: [
         { type: 'deletion' }, { type: 'non_fast_forward' },
         { type: 'pull_request', parameters: { allowed_merge_methods: ['squash'], dismiss_stale_reviews_on_push: false,
@@ -66,6 +67,9 @@ function rejected(label, change) {
 }
 
 assert.equal(verifySnapshot(fixture(), input).candidate, candidate);
+const redacted = fixture();
+delete redacted.rules.bypass_actors;
+assert.equal(verifySnapshot(redacted, input).rulesetRevision, '2026-08-25T10:09:48.838+07:00');
 for (const profile of ['LOW_FOCUSED', 'MEDIUM_DOMAIN']) {
   const selected = { ...input, profile, assurance: profile === 'LOW_FOCUSED' ? 'LOW' : 'MEDIUM', reviewFloor: 'OPTIONAL', preReview: '' };
   assert.equal(verifySnapshot(fixture(selected), selected).review, 'none');
@@ -117,6 +121,9 @@ rejected('task claim cannot lower machine floor', s => { s.classification.profil
 rejected('Human Gate before FINAL', s => { s.gate.created_at = s.gate.updated_at = time(5); });
 rejected('review after FINAL', s => { s.review.submitted_at = time(15); });
 rejected('bypass', s => { s.rules.bypass_actors.push({ actor_id: 1 }); });
+rejected('redacted bypass with changed revision', s => { delete s.rules.bypass_actors; s.rules.updated_at = time(15); });
+rejected('missing revision', s => { delete s.rules.updated_at; });
+rejected('wrong ruleset target', s => { s.rules.target = 'tag'; });
 rejected('non-strict', s => { s.rules.rules[3].parameters.strict_required_status_checks_policy = false; });
 rejected('wrong required app', s => { s.rules.rules[3].parameters.required_status_checks[0].integration_id = 1144995; });
 rejected('thread rule removed', s => { s.rules.rules[2].parameters.required_review_thread_resolution = false; });
