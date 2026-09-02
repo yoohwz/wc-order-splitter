@@ -88,6 +88,8 @@ PRECHECK must not make `Required CI` green. FINAL is explicit and stale-safe: it
 
 The complete final Technical Acceptance record must bind task, PR, independent reviewer authority ID, exact base/head/tree, final CI run/profile, artifacts=0, findings outcome, and no-drift attestation. The orchestrating surface re-reads and authenticates the record before reporting `READY_TO_FINALIZE`.
 
+WOS-GOV-010 and later normal tasks use the versioned merge CI evidence, Acceptance and Human Gate records in `docs/ci-workflow-contract.md`. The CI evidence remains Executor evidence or mechanical promotion only; Acceptance remains ChatGPT-owned, and Human Gate remains conditional human authority. After those distinct checkpoints, GitHub Actions may materialize `Required CI` on the current merge candidate through the metadata-only `MERGE_AUTHORITY` stage. No successful head FINAL, dispatch input, title/label/PR-body claim, or Executor record substitutes for these upstream roles. Finalize must re-read both successful FINAL and successful completed bridge/candidate authority before merge. The source-bound GOV-010 self-bootstrap has the same role boundaries; positive live proof is obtained only after its Acceptance/Human Gate and before its merge.
+
 ## Corrections, drift, and routing
 
 - A head-changing correction invalidates PRE_REVIEW, FINAL, Technical Acceptance, and Acceptance for the old head.

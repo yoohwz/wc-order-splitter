@@ -97,6 +97,10 @@ ChatGPT independently verifies scope/profile/review-trigger correctness, product
 
 On failure it records `ACCEPTANCE_CHANGES_REQUIRED` or `TECHNICAL_REVIEW_FOLLOWUP_REQUIRED`. On success it records exact-head `ACCEPTANCE_ACCEPTED`, re-resolves unchanged authority, records separate `HUMAN_GATE_APPROVED` because the authenticated human explicitly issued `Finalize`, squash-merges, proves exact-tree equivalence and successful exact-SHA Main attestation with artifacts=0, then records `POST_MERGE_ACCEPTED`.
 
+For WOS-GOV-010 and later normal tasks, the squash merge above is additionally gated by the post-Acceptance/Human-Gate `MERGE_AUTHORITY` stage in `docs/ci-workflow-contract.md`. Before dispatch, make the PR ready and resolve the live candidate; use the canonical versioned CI evidence, Acceptance and candidate-bound Human Gate records. The stage materializes the exact GitHub Actions `Required CI` on that candidate, without repeating FINAL. Re-read the successful completed bridge run, exact candidate/check/app, no-drift authority, and GitHub mergeability immediately before merge. Head FINAL success alone is not a merge-ready claim. LOW/no-trigger MEDIUM uses its Executor evidence; this adds no Independent Review. DIRECT remains under its separate direct contract.
+
+WOS-GOV-010's own positive live bridge proof belongs to this pre-merge Finalize step; `Run` cannot invent Acceptance/Human Gate to obtain it early. A failed bridge stops merge. A missing safe self-bootstrap or unrecognized live candidate authority stops `ARCHITECTURE_REVIEW_REQUIRED: WOS-GOV-010`.
+
 `Finalize` never publishes, tags, deploys, creates a public package, or changes production gates.
 
 ## Profile evidence

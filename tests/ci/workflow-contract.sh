@@ -54,6 +54,13 @@ assert_contains "$ci_workflow" 'requested_assurance:'
 assert_contains "$ci_workflow" 'independent_review_floor:'
 assert_contains "$ci_workflow" 'certification_stage:'
 assert_contains "$ci_workflow" 'pre_review_authority:'
+assert_contains "$ci_workflow" 'merge_authority:'
+assert_contains "$ci_workflow" '          - MERGE_AUTHORITY'
+assert_contains "$ci_workflow" 'name: FINAL binding /'
+assert_contains "$ci_workflow" 'name: Authenticate and attest merge candidate'
+assert_occurrences "$ci_workflow" 'checks: write' 1
+assert_occurrences "$ci_workflow" 'node tests/ci/merge-candidate-authority-contract.js' 3
+assert_contains "$ci_workflow" "if: always() && inputs.certification_stage != 'MERGE_AUTHORITY'"
 assert_contains "$ci_workflow" 'actions: read'
 assert_contains "$ci_workflow" 'issues: read'
 assert_contains "$ci_workflow" 'pull-requests: read'
