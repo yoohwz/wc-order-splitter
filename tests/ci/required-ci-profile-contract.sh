@@ -4,11 +4,9 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 aggregator="$repo_root/.github/scripts/verify-required-ci.sh"
+precheck_verifier="$repo_root/.github/scripts/verify-precheck-ci.sh"
 
-expect_success() {
-  "$aggregator" "$@" >/dev/null
-}
-
+expect_success() { "$aggregator" "$@" >/dev/null; }
 expect_failure() {
   if "$aggregator" "$@" >/dev/null 2>&1; then
     echo "required-ci-profile-contract-error: unexpectedly accepted: $*" >&2
@@ -16,23 +14,51 @@ expect_failure() {
   fi
 }
 
-expect_success success DIRECT_CSS_FAST strict_existing_css_modifications skipped skipped skipped skipped success
-expect_success success FULL path_outside_direct_css_allowlist success success success success skipped
+# classifier profile reason stage review php foundation package release focused domain precheck direct final-authority
+expect_success success DIRECT_FAST strict_existing_css_modifications FINAL false skipped skipped skipped skipped skipped skipped skipped success skipped
+expect_success success LOW_FOCUSED low_non_normative_or_presentation FINAL false skipped skipped skipped skipped success skipped skipped skipped skipped
+expect_success success LOW_FOCUSED task_assurance_raise FINAL true skipped skipped skipped skipped success skipped skipped skipped success
+expect_success success MEDIUM_DOMAIN bounded_client_runtime FINAL false skipped skipped skipped skipped success success skipped skipped skipped
+expect_success success MEDIUM_DOMAIN bounded_client_runtime FINAL true skipped skipped skipped skipped success success skipped skipped success
+expect_success success HIGH_DEEP governance_or_ci_control_plane FINAL true success success success skipped skipped success skipped skipped success
+expect_success success HIGH_FINANCIAL financial_or_stock_authority FINAL true success success success skipped skipped success skipped skipped success
+expect_success success RELEASE_CERT release_or_package_authority FINAL true success success success success skipped skipped skipped skipped success
+expect_success success FULL source_base_bootstrap FINAL false success success success success skipped skipped skipped skipped skipped
 
-expect_failure failure DIRECT_CSS_FAST strict_existing_css_modifications skipped skipped skipped skipped success
-expect_failure success '' missing_profile skipped skipped skipped skipped success
-expect_failure success UNKNOWN unknown_profile skipped skipped skipped skipped success
-expect_failure success DIRECT_CSS_FAST '' skipped skipped skipped skipped success
-expect_failure success DIRECT_CSS_FAST path_outside_direct_css_allowlist skipped skipped skipped skipped success
-expect_failure success DIRECT_CSS_FAST strict_existing_css_modifications success skipped skipped skipped success
-expect_failure success DIRECT_CSS_FAST strict_existing_css_modifications skipped skipped skipped skipped failure
-expect_failure success DIRECT_CSS_FAST strict_existing_css_modifications skipped skipped skipped skipped skipped
-expect_failure success FULL '' success success success success skipped
-expect_failure success FULL strict_existing_css_modifications success success success success skipped
-expect_failure success FULL workflow_changed success success success success success
-expect_failure success FULL workflow_changed skipped success success success skipped
-expect_failure success FULL workflow_changed success failure success success skipped
-expect_failure success FULL workflow_changed success success skipped success skipped
-expect_failure success FULL workflow_changed success success success cancelled skipped
+expect_failure failure LOW_FOCUSED low FINAL false skipped skipped skipped skipped success skipped skipped skipped skipped
+expect_failure success '' missing FINAL false skipped skipped skipped skipped success skipped skipped skipped skipped
+expect_failure success UNKNOWN unknown FINAL true skipped skipped skipped skipped skipped skipped skipped skipped success
+expect_failure success LOW_FOCUSED low PRECHECK false skipped skipped skipped skipped success skipped skipped skipped skipped
+expect_failure success HIGH_DEEP high PRECHECK true skipped skipped skipped skipped skipped success success skipped skipped
+expect_failure success HIGH_DEEP high FINAL false success success success skipped skipped success skipped skipped success
+expect_failure success HIGH_DEEP high FINAL true success success success skipped skipped success skipped skipped skipped
+expect_failure success HIGH_DEEP high FINAL true success success success skipped skipped skipped skipped skipped success
+expect_failure success RELEASE_CERT release FINAL true success success success skipped skipped skipped skipped skipped success
+expect_failure success DIRECT_FAST path_outside_direct FINAL false skipped skipped skipped skipped skipped skipped skipped success skipped
+expect_failure success DIRECT_FAST strict_existing_css_modifications FINAL false skipped skipped skipped skipped skipped skipped skipped skipped skipped
+expect_failure success LOW_FOCUSED low FINAL false skipped skipped skipped skipped success success skipped skipped skipped
+
+expect_precheck_success() { "$precheck_verifier" "$@" >/dev/null; }
+expect_precheck_failure() {
+  if "$precheck_verifier" "$@" >/dev/null 2>&1; then
+    echo "required-ci-profile-contract-error: PRECHECK unexpectedly accepted: $*" >&2
+    exit 1
+  fi
+}
+
+# classifier profile stage review php foundation package release focused profile-integration precheck direct final-authority
+expect_precheck_success success LOW_FOCUSED PRECHECK false skipped skipped skipped skipped skipped skipped success skipped skipped
+expect_precheck_success success LOW_FOCUSED PRECHECK true skipped skipped skipped skipped skipped skipped success skipped skipped
+expect_precheck_success success MEDIUM_DOMAIN PRECHECK false skipped skipped skipped skipped skipped success success skipped skipped
+expect_precheck_success success MEDIUM_DOMAIN PRECHECK true skipped skipped skipped skipped skipped success success skipped skipped
+expect_precheck_success success HIGH_DEEP PRECHECK true skipped skipped skipped skipped skipped success success skipped skipped
+expect_precheck_success success HIGH_FINANCIAL PRECHECK true skipped skipped skipped skipped skipped success success skipped skipped
+expect_precheck_success success RELEASE_CERT PRECHECK true skipped skipped skipped skipped skipped success success skipped skipped
+
+expect_precheck_failure success LOW_FOCUSED FINAL false skipped skipped skipped skipped skipped skipped success skipped skipped
+expect_precheck_failure success DIRECT_FAST PRECHECK false skipped skipped skipped skipped skipped skipped success success skipped
+expect_precheck_failure success HIGH_DEEP PRECHECK false skipped skipped skipped skipped skipped success success skipped skipped
+expect_precheck_failure success HIGH_DEEP PRECHECK true skipped skipped skipped skipped skipped success skipped skipped skipped
+expect_precheck_failure success HIGH_DEEP PRECHECK true success skipped skipped skipped skipped success success skipped skipped
 
 echo required-ci-profile-contract-ok

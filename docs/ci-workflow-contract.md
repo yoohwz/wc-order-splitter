@@ -1,45 +1,76 @@
-# CI and Package Workflow Contract
+# CI Workflow Contract
 
-## Verification boundaries
+## Authority model
 
-Normal implementation work uses the active WordPress Local plugin worktree and runs focused PHP, unit, integration, or browser evidence appropriate to the changed scope. Pull requests targeting `main` first run the repository-owned exact-diff classifier and receive one of two profiles: `DIRECT_CSS_FAST` or `FULL`. The exact protected context name remains `Required CI` and is the mechanical merge-authority status for both profiles.
+Normal work uses focused Local evidence followed by the repository-owned exact-diff classifier in `.github/scripts/classify-pr-scope.sh`. Assurance and CI are separate dimensions:
 
-`DIRECT_CSS_FAST` is available only when a `pull_request` has both a positive canonical direct branch signal matching `codex/direct/wos-direct-YYYYMMDD-HHMMSS` and a non-empty exact diff that modifies existing Git-tracked regular-text mode-`100644` `*.css` files beneath `css/` and nothing else. The branch signal is necessary but never sufficient. Classification executes the classifier object from the exact PR base; the bootstrap case where the base has no classifier selects `FULL`. Every path must have exact status `M`; additions, deletions, renames, copies, type/mode changes, symlinks, binary/LFS replacements, malformed authority, and non-PR events select `FULL`.
+- assurance decides whether fresh Independent Codex Review is required;
+- CI profile and stage decide which deterministic checks run for the exact head.
 
-FAST is a deliberately conservative lexical safe-subset for simple presentation CSS, not a CSS parser or an entitlement. The exact resulting blobs of every changed CSS file are inspected without stripping comments, joining line continuations, or decoding escapes. Any backslash, CSS comment delimiter, non-canonical ASCII control byte, `@` marker, case-insensitive `url(...)` or `expression(...)` token, `://`, or `//` marker selects `FULL`; scan failure also selects `FULL`. Richer but legitimate CSS—including local `url(...)`, at-rules, comments, and escape syntax—therefore pays the normal FULL CI cost by design. Ordinary horizontal tabs and newline framing remain permitted.
+The protected context remains exactly `Required CI`. Ruleset `21367637` remains strict, PR-only, squash-only, conversation-resolution-enabled, and without bypass actors. CI evidence is never ChatGPT Acceptance, Human Gate, release, or publication authority.
 
-The focused profile revalidates exact base/head and merge-candidate/tree authority, reruns the strict classifier, runs `git diff --check`, deterministic classifier/aggregator regressions, workflow topology assertions, and proves runtime, gate, distribution, workflow, version, and direct-governance objects unchanged. It creates and uploads no artifact. Hands-on visual evidence and fresh Independent Codex Review remain mandatory outside CI.
+The machine profiles are `DIRECT_FAST`, `LOW_FOCUSED`, `MEDIUM_DOMAIN`, `HIGH_DEEP`, `HIGH_FINANCIAL`, and `RELEASE_CERT`. `FULL` is accepted only as a source-base compatibility alias for bootstrap PRs whose exact base still owns the pre-WOS-GOV-009 classifier/aggregator.
 
-`FULL` remains the fail-closed default and retains PHP 7.4/8.1/8.3 syntax/unit contracts, architecture and production-gate contracts, package/distribution safety, and WooCommerce legacy/HPOS/HPOS-sync integration evidence. CI/governance/runtime/test/release/package changes—including changes to `.github/workflows/**`, classifier/aggregator scripts, tests, or this governance contract—therefore run the full matrix even when a branch is named like a direct branch. `Required CI` succeeds only for the exact expected success/skipped combination for the machine-selected profile; a missing classifier output, failed/cancelled job, or impossible combination fails closed.
+## Fail-closed selection
 
-On this user-owned repository, `Required CI` is the existing mechanical protected status from the GitHub Actions App; it is not a cryptographically distinct proof that one immutable workflow file produced the status. Repository code does not claim to solve same-App status-name spoofing for a malicious workflow-changing PR. Direct merge authority is instead multi-source: the candidate diff must mechanically exclude every CI/control-plane and non-CSS path, and Codex must authenticate the pre-edit direct authority, exact run identity/path/head, unchanged ruleset and review state, plus fresh exact-head Independent Technical Acceptance explicitly confirming direct eligibility and unchanged control-plane paths before recording `HUMAN_GATE_APPROVED_DIRECT`. Any drift fails closed. Workflow-changing PRs remain normal `FULL` work with ChatGPT Acceptance and conditional Human Gate.
+The classifier derives minimum CI, assurance, and Independent Review requirements from the complete exact base-to-head diff. PR title/body, task ID, labels, actor claims, and ordinary branch names cannot lower any floor. Dispatch inputs are accepted only when the authenticated owner-authored canonical Issue contains exact machine-readable `CI profile floor`, `Assurance floor`, and `Independent review floor` list fields. Each requested value may only raise its corresponding machine minimum. Mixed scope selects the strongest applicable floor; unknown or malformed authority selects a reviewed HIGH/RELEASE path.
 
-`push/main` runs only the lightweight `Main attestation`. It records the exact commit and tree SHA, verifies the code-owned production gates and gateway smoke contract, runs representative PHP/unit checks, and validates the distributable tree. It does not create or upload an installable archive.
+`DIRECT_FAST` requires a non-empty exact diff containing only status-`M` changes to existing Git-tracked regular-text mode-`100644` `*.css` files beneath `css/`. The changed lines may modify only an existing `border-radius` declaration, one declaration per line, with numeric zero or a non-negative numeric `px`, `rem`, `em`, or `%` value. Selector/rule changes, every other property, and reachability/state/accessibility semantics leave DIRECT. Each resulting blob is scanned without comment stripping, escape decoding, or line-continuation normalization. Any backslash, comment delimiter, non-canonical control byte, `@`, `url(...)`, `expression(...)`, `://`, `//`, binary/LFS replacement, object ambiguity, addition/deletion/rename/copy, or non-CSS path leaves DIRECT. Canonical Direct branch and human authority are separate governance requirements; the classifier does not consume them, so a branch/task claim cannot lower the complete-diff floor.
 
-Fast main attestation is safe only while repository rules require changes to `main` to enter through a pull request and require the canonical `Required CI` status. Independent Codex Technical Review, ChatGPT Acceptance Review where applicable, and Human Gate remain separate governance requirements under `docs/engineering-review-authority.md`. The compressed `Finalize` command may coordinate Acceptance and the user's explicit conditional Human Gate, but it must record them separately and cannot merge after failed Acceptance or head/base/CI drift. The sole `TRIVIAL / CODEX_DIRECT` exception omits ChatGPT Acceptance only under `docs/codex-direct-workflow.md`; it still requires pre-edit `DIRECT_HUMAN_AUTHORIZED`, protected-branch CI, independently persisted exact-head direct eligibility, `HUMAN_GATE_APPROVED_DIRECT`, and exact-tree post-merge proof. If those mechanical rules cannot be proven, stop with the task-defined branch-rules signal and do not merge a topology that removes the full `push/main` matrix.
+Typical floors are:
 
-## Exact-tree post-merge authority
+- deterministic direct CSS: `DIRECT_FAST`;
+- deterministic translation or non-semantic presentation outside the strict Direct envelope: `LOW_FOCUSED`;
+- bounded client runtime: `MEDIUM_DOMAIN`;
+- mutation/persistence/governance/workflow/unknown authority: `HIGH_DEEP`;
+- money/tax/payment/refund/price/stock authority, detected by explicit sensitive paths or conservative changed-content guards: `HIGH_FINANCIAL`;
+- release/version/package/distribution/Main-attestation authority: `RELEASE_CERT`.
 
-Post-merge acceptance must bind all of the following:
+MEDIUM semantic trigger scanning can only add Independent Review. The repository currently has no mechanically proven JavaScript no-trigger sub-envelope, so every JavaScript candidate is treated as ambiguous and review-required, including `fetch`, `XMLHttpRequest`, jQuery transport, `sendBeacon`, and project mutation helpers. A future no-trigger route must first gain a fail-closed proof contract; ambiguity selects review.
 
-1. the exact PR head/base and successful full PR CI;
-2. independent Codex `TECHNICAL_ACCEPTED`, ChatGPT `ACCEPTANCE_ACCEPTED` where applicable, and Human Gate for that exact unchanged head; an eligible direct task instead binds pre-edit `DIRECT_HUMAN_AUTHORIZED`, direct-eligibility-confirmed `TECHNICAL_ACCEPTED`, and `HUMAN_GATE_APPROVED_DIRECT`;
-3. the resulting `main` merge SHA and expected parent/base;
-4. equality between the merged commit tree SHA and the exact merge-candidate tree tested by PR CI;
-5. successful `Main attestation` for that exact main SHA.
+## Stages and review-first certification
 
-If exact tree equivalence cannot be proven, fail closed with `POST_MERGE_TREE_AUTHORITY_REQUIRED` and run the full verification workflow manually for the exact main revision. Do not infer equivalence from similar file lists or commit messages.
+`DIRECT_FAST` runs FINAL certification directly after its pre-edit authority. Every ordinary normal PR push runs unbound authority-discovery PRECHECK under a non-protected check whose identity contains `UNBOUND`; it never publishes a `Required CI` check and cannot be cited by PRE_REVIEW. Codex dispatches an exact-head task-bound PRECHECK for every review-required candidate, or task-bound FINAL for no-review work once all three Task Capsule floors are authenticated. This prevents an earlier cheaper machine-only result from appearing merge-ready before canonical task authority is applied.
 
-## Distribution and archive discipline
+Review-required candidates run discovery `PRECHECK` on each ordinary PR head, then an explicit stale-safe task-bound PRECHECK dispatch applies the canonical CI, assurance, and review floors before PRE_REVIEW. PRECHECK includes exact-diff validation, PHP 8.3 syntax/unit evidence, architecture/gate/governance/profile contracts, suite-completeness contracts, one canonical-storage affected-domain smoke where practical, cross-domain sentinels, and artifacts=0. It is engineering evidence only.
 
-`.github/scripts/validate-distribution-contract.sh` is the canonical repository-owned distribution-tree policy. Normal CI and the manual package workflow both use it, so required and forbidden runtime path lists have one source of truth.
+PRECHECK uses dynamically distinct non-protected job identities: discovery runs contain `UNBOUND`, while a task-bound dispatch emits `Risk-tiered PRECHECK / <TASK_ID> / <PROFILE>` and `PRECHECK authority only / <TASK_ID> / <PROFILE>`. The workflow emits no `Required CI` check at all for PRECHECK. `.github/scripts/verify-precheck-ci.sh` authenticates PRECHECK topology, while `.github/scripts/verify-required-ci.sh` rejects every non-`FINAL` stage. A skipped/neutral `Required CI` is forbidden because GitHub branch protection treats it as accepted. PRECHECK cannot satisfy branch protection.
 
-Normal CI validates only the distributable tree. It does not create a ZIP, checksum, or retained artifact. `.github/workflows/build-plugin.yml` is manual-only and adds archive integrity, deterministic rebuild, SHA-256, and upload checks after the shared tree contract passes.
+After a fresh source-read-only Independent Reviewer persists exact-head `PRE_REVIEW_CLEAN`, FINAL is triggered through `workflow_dispatch` with canonical task ID and Issue number, PR number, expected head, all three Task Capsule floors, requested stage, and immutable `issue-comment:ID` or `pr-review:ID` authority. The workflow:
 
-Manual dispatch and a successful artifact build are evidence only. They never imply release freeze, release, publication, deployment, or Human Gate authority. A sandbox artifact requires explicit authority in its canonical task; a release candidate requires the separate release workflow authority.
+1. re-resolves the open PR and requires base `main`;
+2. requires the dispatch ref/GitHub SHA and current PR head to equal `expected_head_sha`;
+3. reruns the base-owned classifier, allowing the requested profile only to raise the machine floor;
+4. loads the PRE_REVIEW validators from the exact PR base;
+5. authenticates owner-structured independent-review provenance, exact base/head/tree, PR-review `commit_id` where applicable, source-read-only attestations, and one unfenced/unquoted canonical record whose unique terminal outcome is `PRE_REVIEW_CLEAN`;
+6. authenticates the cited PRECHECK run as task-bound `workflow_dispatch` on the same head/profile/stage, with exactly one successful `Risk-tiered PRECHECK / <TASK_ID> / <PROFILE>` and `PRECHECK authority only / <TASK_ID> / <PROFILE>`, no `Required CI`, and artifacts=0;
+7. runs FINAL certification and only then permits successful `Required CI`.
 
-`Finalize <TASK_ID>` may merge an accepted implementation or release-bookkeeping PR, but it never invokes the manual package workflow and never authorizes tagging, publishing, deploying, or uploading a public artifact. Release freeze and publication remain separate exact-SHA/artifact authorities.
+Any head-changing correction invalidates the earlier PRE_REVIEW and returns to PRECHECK plus a new complete-diff Independent Review. A green FINAL run on the unchanged clean-review head may be mechanically promoted to persisted `TECHNICAL_ACCEPTED` by binding the PRE_REVIEW authority ID, exact head/tree, final run/profile, and artifacts=0. No duplicate source reread is required; no Executor-authored conclusion can replace the prior Independent Review.
 
-## Future task authority block
+## Profile topology
 
-New normal task Issues should reference stable repository contracts and bind only the task-specific authority delta: task ID/classification and `LOW`/`MEDIUM`/`HIGH` risk profile, exact source SHA, code-owned gate files plus the exact expected gate map, scope delta, verification profile, task-specific invariants, stop signals, and Independent Codex Technical Review / ChatGPT Acceptance Review / Human Gate boundary. Risk changes evidence depth, not protected-branch or authority requirements. A direct Issue is the narrow exception and must instead use the compact pre-edit authority block in `docs/codex-direct-workflow.md`; it cannot alter CI, package, release, or publication authority.
+- `DIRECT_FAST`: exact authority revalidation, strict lexical/object guard, diff check, classifier/aggregator/workflow regressions, unchanged runtime/gates/version/package/control-plane proof, artifacts=0.
+- `LOW_FOCUSED`: changed static syntax as applicable, exact diff, profile/aggregator/governance contracts, artifacts=0.
+- `MEDIUM_DOMAIN`: focused contracts plus affected-domain integration in HPOS by default and cross-domain sentinels; storage-sensitive task authority may raise the profile.
+- `HIGH_DEEP`: PHP 7.4/8.1/8.3, architecture/gates, package safety, affected deep/recovery/security suites across legacy/HPOS/HPOS-sync, HPOS real-worker lease exclusion, sentinels, artifacts=0.
+- `HIGH_FINANCIAL`: a strict superset of `HIGH_DEEP` affected runtime/recovery/concurrency evidence plus money/tax/payment/refund/stock specialization across legacy/HPOS/HPOS-sync, HPOS real-worker lease exclusion, sentinels, artifacts=0.
+- `RELEASE_CERT`: exhaustive certification equivalent to or stronger than the source-baseline FULL matrix, including every release-manifest suite artifact, all three storage modes, package/distribution/version authority, and artifacts=0.
+
+`tests/ci/integration-suites.tsv` is the repository-owned suite manifest. `tests/ci/integration-suite-contract.sh` binds baseline source `ab7b1db49ff7b82ad1bb7fae3bbbafd56a5eb328` / tree `b44f54e597e8f03d6d83c30acf55eb162535e96d` and proves every integration artifact invoked by that FULL workflow remains in the `release` union. Focused profiles select tagged affected-domain suites and sentinels; they do not delete or weaken the release set.
+
+The escaped-defect guard set must keep financial per-rate evidence, PII-free canonical authority, controller/confirmation replay, legacy/current production-boundary replay, presentation-vs-persisted authority separation, and fault-injection/recovery paths represented in profile or suite-routing contracts.
+
+## Bootstrap and exact protected result
+
+WOS-GOV-009 itself is a one-time source-base bootstrap. Its PR base owns the old `FULL` classifier and aggregator, so `.github/workflows/ci.yml` preserves the legacy job IDs and exact FULL PHP/architecture/package/legacy-HPOS-HPOS-sync matrix. The Required aggregator is loaded from the exact PR base. Therefore WOS-GOV-009 cannot use PRECHECK promotion, no-review DIRECT, LOW, or MEDIUM shortcuts to accept itself.
+
+For prospective profiles, the risk-tiered aggregator requires the exact success/skipped topology. Missing classifier output, PRECHECK presented as FINAL, wrong/missing/skipped jobs, stale authority, or an impossible profile/review combination fails closed.
+
+On this user-owned repository, `Required CI` is a GitHub Actions App status, not cryptographic proof of an immutable workflow file. Governance therefore re-authenticates exact diff, base-loaded control scripts, run identity/path/head, ruleset, review authority, unresolved threads, and post-merge tree. Workflow-changing PRs always require HIGH governance and ChatGPT Acceptance.
+
+## Main and package boundary
+
+`.github/workflows/main-attestation.yml` remains push/main plus authenticated exact-SHA manual attestation, verifies parent/tree/distribution/gates, and uploads no artifact. Fast attestation is safe only while ruleset `21367637` enforces PR entry and strict `Required CI`.
+
+`.github/workflows/build-plugin.yml` remains manual-only. Neither `Run`, `Finalize`, `Required CI`, Technical Acceptance, Human Gate, nor post-merge acceptance authorizes package creation, tag, GitHub Release, WordPress.org publication, deployment, or production-gate change. `WOS-REL-001` remains separately frozen and publication-gated.
