@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const { verifySnapshot, materialize, checkResult } = require('../../.github/scripts/merge-candidate-authority.js');
 
 const repo = 'yoohwz/wc-order-splitter';
@@ -121,6 +122,13 @@ for (const conclusion of ['skipped', 'neutral', null, 'failure', 'cancelled', 't
 rejected('missing FINAL job', s => { s.jobs.shift(); });
 rejected('skipped FINAL job', s => { s.jobs[0].conclusion = 'skipped'; });
 rejected('duplicate FINAL', s => { s.jobs.push(s.jobs[0]); });
+rejected('missing FINAL binding', s => { s.jobs.pop(); });
+rejected('skipped FINAL binding', s => { s.jobs[1].conclusion = 'skipped'; });
+rejected('neutral FINAL binding', s => { s.jobs[1].conclusion = 'neutral'; });
+rejected('incomplete FINAL binding', s => { s.jobs[1].status = 'in_progress'; });
+rejected('duplicate FINAL binding', s => { s.jobs.push(s.jobs[1]); });
+rejected('raw-name FINAL binding', s => { s.jobs[1].name = 'FINAL binding / ${{ needs.classify-pr-scope.outputs.task_id }}'; });
+rejected('unbound FINAL task', s => { s.jobs[1].name = s.jobs[1].name.replace('WOS-GOV-010', 'WOS-GOV-009'); });
 rejected('unbound FINAL profile', s => { s.jobs[1].name = s.jobs[1].name.replace('HIGH_DEEP', 'LOW_FOCUSED'); });
 rejected('unbound FINAL base', s => { s.jobs[1].name = s.jobs[1].name.replace(base, head); });
 rejected('unbound FINAL review', s => { s.jobs[1].name = s.jobs[1].name.replace('pr-review:42', 'none'); });
@@ -213,6 +221,56 @@ async function simulation(change = () => {}, selected = input) {
   catch (error) { return { error, calls, check }; }
 }
 
+function verifyFinalBindingScheduling(workflow) {
+  const sections = workflow.split(/^  final-binding:\n/m);
+  assert.equal(sections.length, 2, 'exactly one FINAL binding job definition');
+  const job = sections[1].split(/^  [\w-]+:\n/m)[0];
+  assert(job.includes('    needs: [classify-pr-scope, required]\n'));
+  const condition = job.match(/^    if: >-\n((?:      .+\n)+)/m)?.[1].trim();
+  // This exact boolean-only subset is shared by GitHub expressions and JS.
+  // Evaluate the source predicate, not a separately maintained copy of it.
+  assert.deepEqual(condition?.split(/\s*&&\s*/), [
+    '!cancelled()', "github.event_name == 'workflow_dispatch'", "inputs.certification_stage == 'FINAL'",
+    "needs['classify-pr-scope'].result == 'success'", "needs['classify-pr-scope'].outputs.stage == 'FINAL'",
+    "needs.required.result == 'success'",
+  ]);
+  const name = job.match(/^    name: (.+)$/m)[1];
+  const initial = { event: 'workflow_dispatch', requested: 'FINAL', stage: 'FINAL', classifier: 'success',
+    required: 'success', cancelled: false, optional: ['skipped', 'skipped', 'skipped', 'skipped'] };
+  const schedule = (state, predicate = condition) => {
+    const context = { github: { event_name: state.event },
+      inputs: { certification_stage: state.requested, pre_review_authority: input.preReview },
+      needs: { 'classify-pr-scope': { result: state.classifier,
+        outputs: { stage: state.stage, task_id: input.task, profile: input.profile, base_sha: base } },
+      required: { result: state.required } }, cancelled: () => state.cancelled };
+    // Model GitHub's implicit success()/ancestor-skip guard. A live FINAL must
+    // still prove the real scheduler; this local model is not CI authority.
+    const explicitStatus = /\b(?:success|failure|always|cancelled)\s*\(/.test(predicate);
+    const implicitSuccess = !state.cancelled && [state.classifier, state.required, ...state.optional].every(value => value === 'success');
+    if ((!explicitStatus && !implicitSuccess) || !vm.runInNewContext(predicate, context)) return [];
+    return [{ id: 12, run_id: 100, status: 'completed', conclusion: 'success',
+      name: name.replace(/\$\{\{\s*(.*?)\s*\}\}/g, (_, expression) => vm.runInNewContext(expression, context)) }];
+  };
+  const binding = schedule(initial);
+  assert.equal(binding.length, 1, 'optional ancestor skips must not suppress successful FINAL binding');
+  const snapshot = fixture();
+  snapshot.jobs = [snapshot.jobs[0], ...binding];
+  assert.equal(verifySnapshot(snapshot, input).final, 100, 'scheduled exact binding satisfies the unchanged verifier');
+  assert.equal(schedule({ ...initial, optional: ['success'] }).length, 1);
+  assert.equal(schedule(initial, condition.replace(/^!cancelled\(\)\s*&&\s*/, '')).length, 0,
+    'regression reproduces the implicit skip that blocked live FINAL 33613591709');
+  const negatives = [
+    { event: 'push' }, { event: 'pull_request' }, { cancelled: true },
+    { requested: 'PRECHECK' }, { requested: 'MERGE_AUTHORITY' },
+    { stage: 'PRECHECK' }, { stage: 'MERGE_AUTHORITY' }, { stage: '' },
+  ];
+  for (const result of ['failure', 'skipped', 'cancelled', '', undefined]) {
+    negatives.push({ classifier: result }, { required: result });
+  }
+  for (const change of negatives) assert.equal(schedule({ ...initial, ...change }).length, 0, `binding must reject ${JSON.stringify(change)}`);
+  return { positive: 2, negative: negatives.length, implicitSkipReproduction: 1 };
+}
+
 (async () => {
   let result = await simulation();
   assert.equal(result.result.candidate, candidate);
@@ -237,6 +295,7 @@ async function simulation(change = () => {}, selected = input) {
   assert.equal(result.result.review, 'none', 'LOW adds no independent-review lifecycle');
 
   const workflow = fs.readFileSync(path.join(__dirname, '../../.github/workflows/ci.yml'), 'utf8');
+  const scheduling = verifyFinalBindingScheduling(workflow);
   assert(workflow.includes("if: inputs.certification_stage != 'MERGE_AUTHORITY'"));
   assert(workflow.includes("if: always() && inputs.certification_stage != 'MERGE_AUTHORITY'"));
   assert.equal((workflow.match(/checks: write/g) || []).length, 1);
@@ -248,5 +307,5 @@ async function simulation(change = () => {}, selected = input) {
   assert(bridge.includes('test "$base_sha" = 545b82b452adfc4d43fd4744f3f83d7a8f5e68fb'));
   assert(!bridge.includes('name: Required CI'), 'skipped bridge jobs cannot publish a protected check');
   assert(!bridge.includes('npm ') && !bridge.includes('wp-env') && !bridge.includes('upload-artifact'), 'bridge is metadata-only');
-  console.log(`merge-candidate-authority-contract-ok negative-cases=${assertions} untrusted-adverse-cases=${ignoredAdverse} live-writes=mocked`);
+  console.log(`merge-candidate-authority-contract-ok negative-cases=${assertions} untrusted-adverse-cases=${ignoredAdverse} final-binding-scheduling=${JSON.stringify(scheduling)} live-writes=mocked`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

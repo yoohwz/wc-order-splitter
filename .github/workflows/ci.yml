@@ -1637,7 +1637,10 @@ jobs:
     name: FINAL binding / ${{ needs['classify-pr-scope'].outputs.task_id }} / ${{ needs['classify-pr-scope'].outputs.profile }} / ${{ needs['classify-pr-scope'].outputs.base_sha }} / ${{ inputs.pre_review_authority || 'none' }}
     needs: [classify-pr-scope, required]
     if: >-
+      !cancelled() &&
       github.event_name == 'workflow_dispatch' &&
+      inputs.certification_stage == 'FINAL' &&
+      needs['classify-pr-scope'].result == 'success' &&
       needs['classify-pr-scope'].outputs.stage == 'FINAL' &&
       needs.required.result == 'success'
     runs-on: ubuntu-latest
