@@ -61,38 +61,34 @@ require_value run-status "$(jq -r '.status' <<< "$run_json")" completed
 require_value run-conclusion "$(jq -r '.conclusion' <<< "$run_json")" success
 require_value run-head "$(jq -r '.head_sha' <<< "$run_json")" "$head_sha"
 run_event=$(jq -r '.event' <<< "$run_json")
-case "$run_event" in pull_request|workflow_dispatch) ;; *)
-  echo "pre-review-authority-error: run-event is $run_event, expected pull_request or workflow_dispatch" >&2
+if [[ "$run_event" != workflow_dispatch ]]; then
+  echo "pre-review-authority-error: run-event is $run_event, expected task-bound workflow_dispatch" >&2
   exit 1
-  ;;
-esac
+fi
 require_value workflow-path "$(jq -r '.path' <<< "$run_json")" .github/workflows/ci.yml
 require_value artifact-count "$(gh api "repos/$repo/actions/runs/$run_id/artifacts" --jq '.total_count')" 0
-if [[ "$run_event" == pull_request ]]; then
-  jq -e --argjson pr "$pr_number" --arg base "$base_sha" --arg head "$head_sha" \
-    '.pull_requests | any(.number == $pr and .base.sha == $base and .head.sha == $head)' \
-    <<< "$run_json" >/dev/null || {
-    echo 'pre-review-authority-error: PRECHECK run is not bound to the exact PR/base/head' >&2
-    exit 1
-  }
-else
-  gh api "repos/$repo/pulls/$pr_number" > "$pr_json"
-  require_value pr-state "$(jq -r '.state' "$pr_json")" open
-  require_value pr-base "$(jq -r '.base.sha' "$pr_json")" "$base_sha"
-  require_value pr-head "$(jq -r '.head.sha' "$pr_json")" "$head_sha"
-fi
+gh api "repos/$repo/pulls/$pr_number" > "$pr_json"
+require_value pr-state "$(jq -r '.state' "$pr_json")" open
+require_value pr-base "$(jq -r '.base.sha' "$pr_json")" "$base_sha"
+require_value pr-head "$(jq -r '.head.sha' "$pr_json")" "$head_sha"
 
 gh api "repos/$repo/actions/runs/$run_id/jobs?per_page=100" > "$jobs_json"
-jq -e '[.jobs[] | select(.name == "Risk-tiered PRECHECK / deterministic contracts")] | length == 1 and .[0].conclusion == "success"' "$jobs_json" >/dev/null || {
-  echo 'pre-review-authority-error: PRECHECK job did not succeed' >&2
+expected_precheck_job="Risk-tiered PRECHECK / $task_id / $expected_profile"
+expected_authority_job="PRECHECK authority only / $task_id / $expected_profile"
+jq -e --arg expected "$expected_precheck_job" \
+  '[.jobs[] | select(.name | startswith("Risk-tiered PRECHECK / "))] | length == 1 and .[0].name == $expected and .[0].conclusion == "success"' \
+  "$jobs_json" >/dev/null || {
+  echo "pre-review-authority-error: exact task/profile/stage PRECHECK job did not succeed: $expected_precheck_job" >&2
   exit 1
 }
 jq -e '[.jobs[] | select(.name == "Required CI")] | length == 0' "$jobs_json" >/dev/null || {
   echo 'pre-review-authority-error: PRECHECK run published the protected Required CI context' >&2
   exit 1
 }
-jq -e '[.jobs[] | select(.name == "PRECHECK authority only")] | length == 1 and .[0].conclusion == "success"' "$jobs_json" >/dev/null || {
-  echo 'pre-review-authority-error: PRECHECK authority-only topology did not succeed' >&2
+jq -e --arg expected "$expected_authority_job" \
+  '[.jobs[] | select(.name | startswith("PRECHECK authority only / "))] | length == 1 and .[0].name == $expected and .[0].conclusion == "success"' \
+  "$jobs_json" >/dev/null || {
+  echo "pre-review-authority-error: exact task/profile/stage authority topology did not succeed: $expected_authority_job" >&2
   exit 1
 }
 

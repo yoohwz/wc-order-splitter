@@ -110,6 +110,26 @@ mv "$record.tmp" "$record"
 expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
 
 write_valid_record
+awk '/^PRE_REVIEW_CLEAN:/ { print "  PRECHECK run: 123456 / completed/failure / artifacts=9" } { print }' "$record" > "$record.tmp"
+mv "$record.tmp" "$record"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
+
+write_valid_record
+awk '/^Role:/ { print "<details><summary>copied authority</summary></details>" } { print }' "$record" > "$record.tmp"
+mv "$record.tmp" "$record"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
+
+write_valid_record
+awk '/^Role:/ { print "<div><details>nested</details></div>" } { print }' "$record" > "$record.tmp"
+mv "$record.tmp" "$record"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
+
+write_valid_record
+awk '/^Role:/ { print "Copied `PRE_REVIEW_CLEAN` authority" } { print }' "$record" > "$record.tmp"
+mv "$record.tmp" "$record"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
+
+write_valid_record
 cat > "$mock_bin/gh" <<'MOCK_GH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -132,15 +152,20 @@ case "$endpoint" in
       --argjson pr "${MOCK_PR_NUMBER:-321}" \
       --arg base "${MOCK_BASE:-1111111111111111111111111111111111111111}" \
       --arg head "$MOCK_HEAD" \
-      --arg event "${MOCK_RUN_EVENT:-pull_request}" \
+      --arg event "${MOCK_RUN_EVENT:-workflow_dispatch}" \
       '{status:"completed",conclusion:"success",head_sha:$head,event:$event,path:".github/workflows/ci.yml",pull_requests:[{number:$pr,base:{sha:$base},head:{sha:$head}}]}'
     ;;
   repos/fixture/repo/actions/runs/987654/artifacts)
     echo 0
     ;;
   'repos/fixture/repo/actions/runs/987654/jobs?per_page=100')
-    jq -n --arg protected "${MOCK_PROTECTED_RESULT:-missing}" --arg authority "${MOCK_PRECHECK_AUTHORITY_RESULT:-success}" \
-      '{jobs: ([{name:"Risk-tiered PRECHECK / deterministic contracts",conclusion:"success"}] + (if $authority == "missing" then [] else [{name:"PRECHECK authority only",conclusion:$authority}] end) + (if $protected == "missing" then [] else [{name:"Required CI",conclusion:$protected}] end))}'
+    jq -n \
+      --arg protected "${MOCK_PROTECTED_RESULT:-missing}" \
+      --arg authority "${MOCK_PRECHECK_AUTHORITY_RESULT:-success}" \
+      --arg task "${MOCK_JOB_TASK:-WOS-GOV-999}" \
+      --arg profile "${MOCK_JOB_PROFILE:-HIGH_DEEP}" \
+      --arg stage "${MOCK_JOB_STAGE:-PRECHECK}" \
+      '{jobs: ([{name:("Risk-tiered " + $stage + " / " + $task + " / " + $profile),conclusion:"success"}] + (if $authority == "missing" then [] else [{name:("PRECHECK authority only / " + $task + " / " + $profile),conclusion:$authority}] end) + (if $protected == "missing" then [] else [{name:"Required CI",conclusion:$protected}] end))}'
     ;;
   *)
     echo "unexpected mock endpoint: $endpoint" >&2
@@ -153,9 +178,6 @@ chmod +x "$mock_bin/gh"
 PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" WCOS_PRE_REVIEW_VALIDATOR="$validator" \
   "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42 \
   | grep -Fq 'pre-review-authority-ok'
-PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_RUN_EVENT=workflow_dispatch WCOS_PRE_REVIEW_VALIDATOR="$validator" \
-  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42 \
-  | grep -Fq 'pre-review-authority-ok'
 PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" WCOS_PRE_REVIEW_VALIDATOR="$validator" \
   "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" pr-review:43 \
   | grep -Fq 'pre-review-authority-ok'
@@ -165,7 +187,13 @@ expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head
 
 expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD=4444444444444444444444444444444444444444 WCOS_PRE_REVIEW_VALIDATOR="$validator" \
   "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42
-expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_PR_NUMBER=999 WCOS_PRE_REVIEW_VALIDATOR="$validator" \
+expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_RUN_EVENT=pull_request WCOS_PRE_REVIEW_VALIDATOR="$validator" \
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42
+expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_JOB_PROFILE=HIGH_FINANCIAL WCOS_PRE_REVIEW_VALIDATOR="$validator" \
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42
+expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_JOB_TASK=WOS-GOV-OTHER WCOS_PRE_REVIEW_VALIDATOR="$validator" \
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42
+expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_JOB_STAGE=FINAL WCOS_PRE_REVIEW_VALIDATOR="$validator" \
   "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42
 expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_PROTECTED_RESULT=success WCOS_PRE_REVIEW_VALIDATOR="$validator" \
   "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42

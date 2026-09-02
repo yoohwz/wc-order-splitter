@@ -32,6 +32,21 @@ on:
           - HIGH_DEEP
           - HIGH_FINANCIAL
           - RELEASE_CERT
+      requested_assurance:
+        description: Canonical Task Capsule assurance floor; classifier may only raise it
+        required: true
+        type: choice
+        options:
+          - LOW
+          - MEDIUM
+          - HIGH
+      independent_review_floor:
+        description: Canonical Task Capsule Independent Review floor
+        required: true
+        type: choice
+        options:
+          - OPTIONAL
+          - REQUIRED
       certification_stage:
         description: PRECHECK before review/evidence or FINAL certification
         required: true
@@ -93,6 +108,8 @@ jobs:
           INPUT_TASK_ISSUE_NUMBER: ${{ inputs.task_issue_number }}
           EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
           INPUT_REQUESTED_PROFILE: ${{ inputs.requested_profile }}
+          INPUT_REQUESTED_ASSURANCE: ${{ inputs.requested_assurance }}
+          INPUT_REVIEW_FLOOR: ${{ inputs.independent_review_floor }}
           INPUT_CERTIFICATION_STAGE: ${{ inputs.certification_stage }}
         run: |
           set -euo pipefail
@@ -117,6 +134,8 @@ jobs:
           [[ "$INPUT_TASK_ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]]
           [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
           case "$INPUT_REQUESTED_PROFILE" in LOW_FOCUSED|MEDIUM_DOMAIN|HIGH_DEEP|HIGH_FINANCIAL|RELEASE_CERT) ;; *) exit 1 ;; esac
+          case "$INPUT_REQUESTED_ASSURANCE" in LOW|MEDIUM|HIGH) ;; *) exit 1 ;; esac
+          case "$INPUT_REVIEW_FLOOR" in OPTIONAL|REQUIRED) ;; *) exit 1 ;; esac
           case "$INPUT_CERTIFICATION_STAGE" in PRECHECK|FINAL) ;; *) exit 1 ;; esac
           expected_head=$(printf '%s' "$EXPECTED_HEAD_SHA" | tr '[:upper:]' '[:lower:]')
           pr_json=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$INPUT_PR_NUMBER")
@@ -137,7 +156,19 @@ jobs:
           jq -e --arg task "$INPUT_TASK_ID" '.title | contains($task)' <<< "$issue_json" >/dev/null
           issue_body=$(jq -r '.body // ""' <<< "$issue_json")
           grep -Fqx -- "- **Task:** \`$INPUT_TASK_ID\`" <<< "$issue_body"
-          grep -Fqx -- "- **CI profile floor:** \`$INPUT_REQUESTED_PROFILE\`" <<< "$issue_body"
+          require_unique_issue_field() {
+            local label=$1
+            local expected=$2
+            local exact_count
+            local total_count
+            exact_count=$(grep -Fxc -- "- **$label:** \`$expected\`" <<< "$issue_body" || true)
+            total_count=$(grep -Fc -- "**$label:**" <<< "$issue_body" || true)
+            test "$exact_count" = 1
+            test "$total_count" = 1
+          }
+          require_unique_issue_field 'CI profile floor' "$INPUT_REQUESTED_PROFILE"
+          require_unique_issue_field 'Assurance floor' "$INPUT_REQUESTED_ASSURANCE"
+          require_unique_issue_field 'Independent review floor' "$INPUT_REVIEW_FLOOR"
           {
             printf 'pr_number=%s\n' "$INPUT_PR_NUMBER"
             printf 'task_id=%s\n' "$INPUT_TASK_ID"
@@ -156,6 +187,8 @@ jobs:
           PR_HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
           PR_HEAD_REF: ${{ steps.resolve.outputs.head_ref }}
           REQUESTED_PROFILE: ${{ inputs.requested_profile }}
+          REQUESTED_ASSURANCE: ${{ inputs.requested_assurance }}
+          REQUESTED_REVIEW_FLOOR: ${{ inputs.independent_review_floor }}
           REQUESTED_STAGE: ${{ inputs.certification_stage }}
           PRE_REVIEW_AUTHORITY: ${{ inputs.pre_review_authority }}
         run: |
@@ -179,7 +212,7 @@ jobs:
 
           git show "$PR_BASE_SHA:.github/scripts/classify-pr-scope.sh" > "$base_classifier"
           chmod +x "$base_classifier"
-          "$base_classifier" pull_request "$PR_BASE_SHA" "$PR_HEAD_SHA" "$PR_HEAD_REF" "$classifier_output" "$REQUESTED_PROFILE"
+          "$base_classifier" pull_request "$PR_BASE_SHA" "$PR_HEAD_SHA" "$PR_HEAD_REF" "$classifier_output" "$REQUESTED_PROFILE" "$REQUESTED_ASSURANCE" "$REQUESTED_REVIEW_FLOOR"
 
           profile=$(sed -n 's/^profile=//p' "$classifier_output" | tail -n 1)
           reason=$(sed -n 's/^reason=//p' "$classifier_output" | tail -n 1)
@@ -1212,7 +1245,7 @@ jobs:
           echo 'focused-profile-artifacts=0'
 
   precheck:
-    name: Risk-tiered PRECHECK / deterministic contracts
+    name: Risk-tiered PRECHECK / ${{ needs['classify-pr-scope'].outputs.task_id || 'UNBOUND' }} / ${{ needs['classify-pr-scope'].outputs.profile }}
     needs: classify-pr-scope
     if: >-
       needs['classify-pr-scope'].outputs.stage == 'PRECHECK'
@@ -1462,7 +1495,7 @@ jobs:
           echo 'direct-css-fast-artifacts=0'
 
   required:
-    name: ${{ (needs['classify-pr-scope'].outputs.profile == 'FULL' || needs['classify-pr-scope'].outputs.profile == 'DIRECT_CSS_FAST' || needs['classify-pr-scope'].outputs.stage == 'FINAL') && 'Required CI' || 'PRECHECK authority only' }}
+    name: ${{ (needs['classify-pr-scope'].outputs.profile == 'FULL' || needs['classify-pr-scope'].outputs.profile == 'DIRECT_CSS_FAST' || needs['classify-pr-scope'].outputs.stage == 'FINAL') && 'Required CI' || format('PRECHECK authority only / {0} / {1}', needs['classify-pr-scope'].outputs.task_id || 'UNBOUND', needs['classify-pr-scope'].outputs.profile || 'UNRESOLVED') }}
     if: always()
     needs:
       - classify-pr-scope

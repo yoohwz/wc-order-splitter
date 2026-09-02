@@ -36,7 +36,7 @@ If the request is outside the direct envelope, Codex makes no source edit and st
 - `Thực hiện <TASK_ID>`
 - `Execute <TASK_ID>`
 
-Meaning: resolve the canonical task and execute its complete assurance/profile loop. Ordinary normal pushes emit only non-protected `PRECHECK authority only`; task-bound dispatch authenticates the Task Capsule CI floor. LOW/no-trigger MEDIUM then runs focused FINAL CI and persists Executor evidence. Review-required MEDIUM/HIGH runs task-raised PRECHECK where needed, fresh Independent PRE_REVIEW, bounded correction, stale-safe FINAL, and review-bound Technical Acceptance. Source-bound legacy/bootstrap tasks retain their current FULL review sequence. If required reviewer separation is unavailable, stop `INDEPENDENT_REVIEW_DISPATCH_REQUIRED`; a fourth head-changing cycle stops `TECHNICAL_ESCALATION_REQUIRED`.
+Meaning: resolve the canonical task and execute its complete assurance/profile loop. Ordinary normal pushes emit only non-protected, `UNBOUND` PRECHECK discovery evidence. A task-bound dispatch authenticates the Task Capsule CI profile floor, assurance floor, and Independent Review floor. LOW/no-trigger MEDIUM then runs focused FINAL CI and persists Executor evidence. Every review-required candidate runs a task-bound PRECHECK, fresh Independent PRE_REVIEW, bounded correction, stale-safe FINAL, and review-bound Technical Acceptance even when the task floors do not raise the machine-selected CI profile. Source-bound legacy/bootstrap tasks retain their current FULL review sequence. If required reviewer separation is unavailable, stop `INDEPENDENT_REVIEW_DISPATCH_REQUIRED`; a fourth head-changing cycle stops `TECHNICAL_ESCALATION_REQUIRED`.
 
 ### Resume
 
@@ -408,7 +408,7 @@ Codex must first determine where the task stopped and continue from there. Examp
 - Issue exists but branch does not: create/switch only as authorized by the task contract.
 - Branch exists with work but no PR: inspect current diff/tests and continue implementation.
 - Draft PR exists with failing CI: inspect failures and follow the task's failure boundary.
-- Task is review-required with successful exact-head PRECHECK: do not run FINAL yet; dispatch a fresh Independent Reviewer and persist PRE_REVIEW. Source-bound `TECHNICAL_REVIEW_REQUIRED` follows its legacy review contract.
+- Task is review-required with successful exact-head task-bound PRECHECK authenticating the Task Capsule CI profile, assurance, and Independent Review floors: do not run FINAL yet; dispatch a fresh Independent Reviewer and persist PRE_REVIEW. Source-bound `TECHNICAL_REVIEW_REQUIRED` follows its legacy review contract.
 - Task has authenticated `EXECUTOR_EVIDENCE_READY` under LOW/no-trigger MEDIUM: route to `Finalize`; do not invent Technical Acceptance.
 - Task has `PRE_REVIEW_CLEAN` on unchanged head but no FINAL: trigger stale-safe FINAL with the immutable review authority ID.
 - Task has `TECHNICAL_CHANGES_REQUIRED`: resume only the authenticated correction tranche, count the head-changing cycle, and obtain new exact-head CI plus complete Independent Review; never exceed three automatic cycles.
@@ -487,7 +487,7 @@ Operator:
 
 `Chạy WOS-MERGE-009`
 
-Codex resolves the Issue and runs its assurance/profile loop: no-review LOW/MEDIUM returns persisted Executor evidence; reviewed work runs PRECHECK, fresh PRE_REVIEW and FINAL before Technical Acceptance. WOS-GOV-009 itself uses source-base FULL review.
+Codex resolves the Issue and runs its assurance/profile loop: no-review LOW/MEDIUM returns persisted Executor evidence; reviewed work runs task-bound PRECHECK authenticating all three Task Capsule floors, fresh PRE_REVIEW, and FINAL before Technical Acceptance. WOS-GOV-009 itself uses source-base FULL review.
 
 Operator in Codex after WOS-GOV-009 activation:
 
@@ -517,7 +517,7 @@ Operator opens a new Codex reviewer task:
 
 `Technical Review WOS-MERGE-009`
 
-The Independent Codex Reviewer fallback resolves the complete exact PR head and PRECHECK, stays source read-only, and persists `PRE_REVIEW_CLEAN` or `PRE_REVIEW_CHANGES_REQUIRED`; source-bound bootstrap tasks retain their Technical Review outcome. Clean risk-tiered review proceeds to stale-safe FINAL before Finalize.
+The Independent Codex Reviewer fallback resolves the complete exact PR head and task-bound PRECHECK, authenticates its task/profile/stage identity and all three Task Capsule floors, stays source read-only, and persists `PRE_REVIEW_CLEAN` or `PRE_REVIEW_CHANGES_REQUIRED`; source-bound bootstrap tasks retain their Technical Review outcome. Clean risk-tiered review proceeds to stale-safe FINAL before Finalize.
 
 Operator:
 

@@ -22,7 +22,7 @@ Executor evidence is not Technical Acceptance and must never be presented as ind
 
 ### MEDIUM
 
-MEDIUM is semantic-triggered. ChatGPT Create binds the expected requirement, while the complete machine-classified diff can only escalate it. AJAX/REST/client-server mutation authority, nonce/capability/security, persistence/meta/customer/order writes, status/eligibility, operational compatibility adapters, webhook/email/outbound effects, replay/recovery/state-machine authority, changed expected test behavior, CI/workflow/normative governance, or package/release control makes Independent Review mandatory. Ambiguity selects review.
+MEDIUM is semantic-triggered. ChatGPT Create binds separate machine-readable `Assurance floor` and `Independent review floor` Task Capsule fields, while the complete machine-classified diff can only escalate either one. AJAX/REST/client-server mutation authority, nonce/capability/security, persistence/meta/customer/order writes, status/eligibility, operational compatibility adapters, webhook/email/outbound effects, replay/recovery/state-machine authority, changed expected test behavior, CI/workflow/normative governance, or package/release control makes Independent Review mandatory. Ambiguity selects review.
 
 A no-trigger MEDIUM candidate may follow LOW assurance with stronger domain CI. A triggered MEDIUM candidate follows the review-first lifecycle below.
 
@@ -45,14 +45,14 @@ After a separately persisted exact-head `PRE_REVIEW_CLEAN` and unchanged green F
 
 ### Independent Codex Reviewer
 
-The reviewer must run in a fresh conversation/agent/worktree/cloud context that does not reuse the Executor session. It is source read-only/no-implementation-write; governance metadata persistence is allowed. It resolves the complete exact base/head/tree/diff, task capsule and stable contract blobs, PRECHECK evidence, profile floor, review triggers, relevant runtime/tests, and prior correction delta.
+The reviewer must run in a fresh conversation/agent/worktree/cloud context that does not reuse the Executor session. It is source read-only/no-implementation-write; governance metadata persistence is allowed. It resolves the complete exact base/head/tree/diff, Task Capsule and stable contract blobs, task-bound PRECHECK evidence, CI/assurance/review floors, review triggers, relevant runtime/tests, and prior correction delta.
 
 For review-first candidates it persists one immutable structured GitHub record per exact head:
 
 - `PRE_REVIEW_CLEAN: <TASK_ID> / PR #N / exact head <SHA>`; or
 - `PRE_REVIEW_CHANGES_REQUIRED: <TASK_ID> / PR #N / exact head <SHA>`.
 
-The record must begin with the canonical `## Independent Codex PRE_REVIEW — <TASK_ID>` header and end with exactly one canonical outcome. It must include exactly one `Role: independent_codex_reviewer`, `Canonical Issue: #N`, fresh-context and executor-session-not-reused attestations, source read-only/no-implementation-write, complete-diff and PRECHECK-evidence-reviewed attestations, exact base/head/tree, exact `PRECHECK profile: <PROFILE> / stage PRECHECK`, PRECHECK run completed/success/artifacts=0, blocking findings, and reproduction evidence. Conflicting, duplicate, quoted, backtick-fenced, or tilde-fenced outcomes are invalid regardless of indentation. A PR review record must bind GitHub's immutable `commit_id` to the exact reviewed head; any head change invalidates it.
+The record must begin with the canonical `## Independent Codex PRE_REVIEW — <TASK_ID>` header and end with exactly one canonical outcome. It must include exactly one `Role: independent_codex_reviewer`, `Canonical Issue: #N`, fresh-context and executor-session-not-reused attestations, source read-only/no-implementation-write, complete-diff and PRECHECK-evidence-reviewed attestations, exact base/head/tree, exact `PRECHECK profile: <PROFILE> / stage PRECHECK`, task-bound PRECHECK run completed/success/artifacts=0, blocking findings, and reproduction evidence. The cited run must be `workflow_dispatch` and expose exactly one successful `Risk-tiered PRECHECK / <TASK_ID> / <PROFILE>` plus `PRECHECK authority only / <TASK_ID> / <PROFILE>`, with no `Required CI`. Conflicting, duplicate, indented, quoted, backtick/tilde-fenced, or HTML-wrapped authority fields are invalid. A PR review record must bind GitHub's immutable `commit_id` to the exact reviewed head; any head change invalidates it.
 
 After clean review, FINAL CI is mechanical. A second complete source reread is unnecessary when the head/tree is unchanged. FINAL failure requiring source change returns to new PRECHECK plus complete fresh PRE_REVIEW. A failure caused only by transient infrastructure may be rerun only after exact authority is revalidated.
 
@@ -100,7 +100,7 @@ The complete final Technical Acceptance record must bind task, PR, independent r
 
 ## Task Capsule and reviewer packet
 
-New normal Issues should store a compact Task Capsule: exact source main/tree/attestation, dependency authority IDs, assurance and CI floor, product/behavior delta, changed invariants, acceptance delta, stop conditions, and release boundary. Stable repository contracts are referenced by path plus blob SHA/version rather than copied.
+New normal Issues should store a compact Task Capsule: exact source main/tree/attestation, dependency authority IDs, machine-readable `CI profile floor`, `Assurance floor`, and `Independent review floor`, product/behavior delta, changed invariants, acceptance delta, stop conditions, and release boundary. Stable repository contracts are referenced by path plus blob SHA/version rather than copied.
 
 Reviewer packets contain exact base/head/tree/merge candidate, changed paths/domains, Task Capsule, stable contract blobs, PRECHECK run, prior findings and correction delta, and selected CI profile/stage/test delta.
 

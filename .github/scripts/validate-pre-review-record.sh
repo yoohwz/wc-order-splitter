@@ -60,7 +60,7 @@ last_nonempty=$(awk 'NF { line=$0 } END { print line }' "$body_file")
   echo 'pre-review-record-error: clean terminal must be the last nonempty line' >&2
   exit 1
 }
-if grep -Eiq '(```|~~~|<!--|-->)|^[[:space:]]*(>|</?(blockquote|pre|code)([[:space:]>]))' "$body_file"; then
+if grep -Eiq '(`|~~~|[<>])' "$body_file"; then
   echo 'pre-review-record-error: quoted or fenced authority is not accepted' >&2
   exit 1
 fi
@@ -97,6 +97,7 @@ for prefix in \
   'Exact head:' \
   'Exact head tree:' \
   'PRECHECK profile:' \
+  'PRECHECK run:' \
   'PRE_REVIEW_CLEAN:'; do
   require_unique_prefix "$prefix"
 done
@@ -108,10 +109,6 @@ precheck_line=$(grep -E '^PRECHECK run: [1-9][0-9]* / completed/success / artifa
 }
 [[ "$(printf '%s\n' "$precheck_line" | wc -l | tr -d ' ')" -eq 1 ]] || {
   echo 'pre-review-record-error: ambiguous PRECHECK run attestation' >&2
-  exit 1
-}
-[[ "$(grep -c '^PRECHECK run:' "$body_file" || true)" -eq 1 ]] || {
-  echo 'pre-review-record-error: conflicting PRECHECK run attestation' >&2
   exit 1
 }
 run_id=$(printf '%s\n' "$precheck_line" | sed -E 's/^PRECHECK run: ([0-9]+) \/.*/\1/')

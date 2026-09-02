@@ -17,6 +17,7 @@ expect_failure() {
 # classifier profile reason stage review php foundation package release focused domain precheck direct final-authority
 expect_success success DIRECT_FAST strict_existing_css_modifications FINAL false skipped skipped skipped skipped skipped skipped skipped success skipped
 expect_success success LOW_FOCUSED low_non_normative_or_presentation FINAL false skipped skipped skipped skipped success skipped skipped skipped skipped
+expect_success success LOW_FOCUSED task_assurance_raise FINAL true skipped skipped skipped skipped success skipped skipped skipped success
 expect_success success MEDIUM_DOMAIN bounded_client_runtime FINAL false skipped skipped skipped skipped success success skipped skipped skipped
 expect_success success MEDIUM_DOMAIN bounded_client_runtime FINAL true skipped skipped skipped skipped success success skipped skipped success
 expect_success success HIGH_DEEP governance_or_ci_control_plane FINAL true success success success skipped skipped success skipped skipped success
@@ -47,6 +48,7 @@ expect_precheck_failure() {
 
 # classifier profile stage review php foundation package release focused profile-integration precheck direct final-authority
 expect_precheck_success success LOW_FOCUSED PRECHECK false skipped skipped skipped skipped skipped skipped success skipped skipped
+expect_precheck_success success LOW_FOCUSED PRECHECK true skipped skipped skipped skipped skipped skipped success skipped skipped
 expect_precheck_success success MEDIUM_DOMAIN PRECHECK false skipped skipped skipped skipped skipped success success skipped skipped
 expect_precheck_success success MEDIUM_DOMAIN PRECHECK true skipped skipped skipped skipped skipped success success skipped skipped
 expect_precheck_success success HIGH_DEEP PRECHECK true skipped skipped skipped skipped skipped success success skipped skipped

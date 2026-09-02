@@ -29,11 +29,11 @@ CI profile/stage decides deterministic certification cost:
 - `RELEASE_CERT`
 - stage `PRECHECK` or `FINAL` for review-required candidates.
 
-Task/label/title/body/actor claims cannot lower the machine-derived minimum. Canonical task authority or manual hints may only raise it.
+Task/label/title/body/actor claims cannot lower the machine-derived minimum. Canonical task authority separately binds CI, assurance, and review floors; each may only raise its corresponding machine-derived minimum.
 
 ## Create
 
-`Create <TASK_ID>` is a ChatGPT command. ChatGPT resolves accepted source, creates/updates the owner-authored canonical Issue Task Capsule, assigns LOW/MEDIUM/HIGH, and records the exact machine-readable `CI profile floor` list field with a profile value plus MEDIUM review triggers, scope/invariants/evidence/stop conditions/release boundary before `TASK_READY`.
+`Create <TASK_ID>` is a ChatGPT command. ChatGPT resolves accepted source, creates/updates the owner-authored canonical Issue Task Capsule, and records three independent exact machine-readable list fields before `TASK_READY`: `CI profile floor` (`LOW_FOCUSED` through `RELEASE_CERT`), `Assurance floor` (`LOW`, `MEDIUM`, or `HIGH`), and `Independent review floor` (`OPTIONAL` or `REQUIRED`). It also binds MEDIUM review triggers, scope/invariants/evidence/stop conditions/release boundary. The complete diff may only raise these floors.
 
 Task Capsules reference stable repository contracts by exact path plus blob SHA/version and store only the task-specific delta. Plan Review remains exceptional for an unresolved product or architecture decision.
 
@@ -61,7 +61,7 @@ This is not `TECHNICAL_ACCEPTED`. After authenticating it, Codex reports:
 
 ### Review-required MEDIUM and HIGH
 
-Ordinary pushes run PRECHECK only and emit no `Required CI` check. If canonical task authority raises the machine floor, Codex first dispatches a stale-safe PRECHECK bound to the Task Capsule profile. Only the distinct `PRECHECK authority only` check succeeds. After successful exact-head PRECHECK, Codex dispatches a fresh source-read-only Independent Reviewer.
+Ordinary pushes run unbound discovery PRECHECK only and emit no `Required CI` check. Every review-required candidate then receives a stale-safe task-bound PRECHECK dispatch, even when the Task Capsule does not raise the machine profile. Its exact job identities bind `PRECHECK`, task ID, and selected profile; dispatch resolution separately authenticates the Task Capsule's CI, assurance, and review floors. Only this run may be cited by PRE_REVIEW. After its success, Codex dispatches a fresh source-read-only Independent Reviewer.
 
 The reviewer automatically persists and re-reads one immutable record:
 

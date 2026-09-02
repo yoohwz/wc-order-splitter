@@ -47,10 +47,6 @@ require_result final-authority "$final_authority_result" skipped
 
 case "$ci_profile" in
   LOW_FOCUSED)
-    [[ "$review_required" == false ]] || {
-      echo 'precheck-ci-error: LOW_FOCUSED unexpectedly requires review' >&2
-      exit 1
-    }
     require_result profile-integration "$profile_integration_result" skipped
     ;;
   MEDIUM_DOMAIN)

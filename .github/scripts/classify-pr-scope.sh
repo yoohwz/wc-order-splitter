@@ -8,6 +8,8 @@ head_sha=${3:-}
 head_ref=${4:-}
 output_file=${5:-}
 requested_profile=${6:-}
+requested_assurance=${7:-}
+requested_review_floor=${8:-}
 
 profile=HIGH_DEEP
 reason=fail_closed_default
@@ -80,6 +82,7 @@ direct_safe=true
 css_security_trigger=false
 css_ambiguity_trigger=false
 css_control_trigger=false
+css_low_safe=true
 changed_count=0
 while IFS= read -r -d '' status; do
   if ! IFS= read -r -d '' path; then
@@ -118,15 +121,32 @@ while IFS= read -r -d '' status; do
           || perl -0777 -ne '$unsafe ||= /[\x00-\x08\x0b-\x1f\x7f]/; END { exit($unsafe ? 0 : 1) }' "$resulting_file"; then
           css_ambiguity_trigger=true
         fi
-        if [[ "$status" == A || "$status" == D ]] \
-          && { LC_ALL=C grep -Eiq '(display|visibility|opacity|pointer-events|position|z-index|overflow|clip|transform|width|height|inset|top|right|bottom|left|cursor|content)[[:space:]]*:' "$resulting_file" \
-            || LC_ALL=C grep -Eiq '(:focus|:disabled|\[aria-|\.is-|\.has-|warning|error|confirm|action|button|submit|busy|locked|hidden)' "$resulting_file"; }; then
-          css_control_trigger=true
-        fi
       else
         css_ambiguity_trigger=true
       fi
     fi
+
+    # LOW CSS must be mechanically proven to change only a numeric
+    # border-radius declaration. Selectors/braces are accepted only for a
+    # complete added/deleted rule whose declarations all stay in that subset.
+    while IFS= read -r css_diff_line; do
+      case "$css_diff_line" in
+        '--- '*|'+++ '*|'@@ '*) continue ;;
+        +*|-*)
+          css_candidate=${css_diff_line:1}
+          if [[ "$css_candidate" =~ ^[[:space:]]*border-radius:[[:space:]]*(0|[0-9]+([.][0-9]+)?(px|rem|em|%))[[:space:]]*\;[[:space:]]*$ ]]; then
+            continue
+          fi
+          if [[ "$status" == A || "$status" == D ]] \
+            && { [[ -z "${css_candidate//[[:space:]]/}" ]] \
+              || [[ "$css_candidate" =~ ^[[:space:]]*[^\{\}\;]+[[:space:]]*\{[[:space:]]*$ ]] \
+              || [[ "$css_candidate" =~ ^[[:space:]]*\}[[:space:]]*$ ]]; }; then
+            continue
+          fi
+          css_low_safe=false
+          ;;
+      esac
+    done < <(git diff --unified=0 --no-ext-diff --no-textconv "$base_sha" "$head_sha" -- "$path")
   fi
 
   if [[ "$status" != M || ! "$path" =~ ^css/[^[:cntrl:]]+\.css$ ]]; then
@@ -265,7 +285,21 @@ else
         ;;
     esac
 
-    if [[ "$path" == inc/domain/class-wcos-merge-commercial-policy.php \
+    financial_context_trigger=false
+    case "$path" in
+      inc/*.php|tests/integration/*.php|tests/unit/*.php|js/*.js)
+        financial_ref=$head_sha
+        [[ "$status" == D ]] && financial_ref=$base_sha
+        if [[ "$(git cat-file -t "$financial_ref:$path" 2>/dev/null || true)" == blob ]] \
+          && git show "$financial_ref:$path" > "$resulting_file" \
+          && LC_ALL=C grep -Eiq '(calculate_totals[[:space:]]*\(|WCOS_(Merge_Financial_Authority|Merge_Commercial_Policy|Amount_Allocator|Tax_Item_Synchronizer|Order_Totals_Rebuilder|Price_Precision_Scope)|->(get|set)_(total|subtotal|total_tax|shipping_tax|cart_tax|discount_total|shipping_total)[[:space:]]*\(|_reduced_stock)' "$resulting_file"; then
+          financial_context_trigger=true
+        fi
+        ;;
+    esac
+
+    if [[ "$financial_context_trigger" == true \
+      || "$path" == inc/domain/class-wcos-merge-commercial-policy.php \
       || "$path" == inc/domain/class-wcos-merge-plan.php \
       || "$path" == inc/domain/class-wcos-merge-preflight.php \
       || "$path" == inc/domain/class-wcos-merge-order-service.php \
@@ -294,14 +328,17 @@ else
         # client/server mutation or outbound authority, so ambiguity reviews.
         medium_review_trigger=true
         ;;
-      css/*|languages/*)
+      css/*)
         if [[ "$css_security_trigger" == true || "$css_control_trigger" == true ]]; then
           raise_floor 3 css_security_semantics security
-        elif [[ "$css_ambiguity_trigger" == true ]]; then
+        elif [[ "$css_ambiguity_trigger" == true || "$css_low_safe" != true ]]; then
           raise_floor 3 css_object_or_escape_ambiguity unknown
         else
           raise_floor 1 low_non_normative_or_presentation presentation
         fi
+        ;;
+      languages/*)
+        raise_floor 1 low_non_normative_or_presentation presentation
         ;;
       *)
         raise_floor 3 unknown_scope_fail_closed unknown
@@ -351,6 +388,16 @@ else
   esac
 fi
 
+assurance_rank() {
+  case "$1" in
+    DIRECT) echo 0 ;;
+    LOW) echo 1 ;;
+    MEDIUM) echo 2 ;;
+    HIGH) echo 3 ;;
+    *) echo 99 ;;
+  esac
+}
+
 profile_rank() {
   case "$1" in
     DIRECT_FAST) echo 0 ;;
@@ -389,6 +436,42 @@ if [[ -n "$requested_profile" ]]; then
       storage_matrix='["hpos"]'
     fi
   fi
+fi
+
+if [[ -n "$requested_assurance" ]]; then
+  requested_assurance_rank=$(assurance_rank "$requested_assurance")
+  machine_assurance_rank=$(assurance_rank "$assurance")
+  if [[ "$requested_assurance_rank" -eq 99 || "$requested_assurance" == DIRECT ]]; then
+    profile=RELEASE_CERT
+    reason=invalid_requested_assurance_fail_closed
+    assurance=HIGH
+    review_required=true
+    stage=PRECHECK
+    storage_matrix='["hpos"]'
+  elif [[ "$requested_assurance_rank" -gt "$machine_assurance_rank" ]]; then
+    assurance=$requested_assurance
+  fi
+fi
+
+case "$requested_review_floor" in
+  '') ;;
+  OPTIONAL) ;;
+  REQUIRED) review_required=true ;;
+  *)
+    profile=RELEASE_CERT
+    reason=invalid_requested_review_floor_fail_closed
+    assurance=HIGH
+    review_required=true
+    stage=PRECHECK
+    storage_matrix='["hpos"]'
+    ;;
+esac
+
+if [[ "$assurance" == HIGH ]]; then
+  review_required=true
+fi
+if [[ "$review_required" == true && "$profile" != DIRECT_FAST ]]; then
+  stage=PRECHECK
 fi
 
 emit_result

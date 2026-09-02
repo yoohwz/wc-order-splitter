@@ -65,10 +65,6 @@ case "$ci_profile" in
     require_result final-authority "$final_authority_result" skipped
     ;;
   LOW_FOCUSED)
-    [[ "$review_required" == false ]] || {
-      echo 'required-ci-error: LOW_FOCUSED unexpectedly requires Independent Review' >&2
-      exit 1
-    }
     require_result focused "$focused_result" success
     require_result direct-fast "$direct_result" skipped
     require_result php-syntax "$php_syntax_result" skipped
@@ -77,7 +73,11 @@ case "$ci_profile" in
     require_result release-integration "$release_integration_result" skipped
     require_result profile-integration "$profile_integration_result" skipped
     require_result precheck "$precheck_result" skipped
-    require_result final-authority "$final_authority_result" skipped
+    if [[ "$review_required" == true ]]; then
+      require_result final-authority "$final_authority_result" success
+    else
+      require_result final-authority "$final_authority_result" skipped
+    fi
     ;;
   MEDIUM_DOMAIN)
     require_result focused "$focused_result" success
