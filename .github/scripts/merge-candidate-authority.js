@@ -96,6 +96,51 @@ function verifyRules(rules) {
     required_review_thread_resolution: true, required_reviewers: [] }, 'PR rules unchanged');
 }
 
+function adverseCheckpoint(record, input, base, tree) {
+  // Apply the same direct-record boundary to negative authority as to approval.
+  // A token in an example, copied transcript, reference comment, or a different
+  // role's evidence is data, not an Independent Review or human decision.
+  const formats = {
+    PRE_REVIEW_CHANGES_REQUIRED: ['Independent Codex PRE_REVIEW', 'independent_codex_reviewer'],
+    TECHNICAL_CHANGES_REQUIRED: ['Independent Codex Technical Review', 'independent_codex_reviewer'],
+    ACCEPTANCE_CHANGES_REQUIRED: ['Merge Acceptance', 'chatgpt_acceptance_reviewer'],
+    HUMAN_GATE_REVOKED: ['Merge Human Gate', 'repository_owner'],
+  };
+  try {
+    owner(record);
+    const body = lines(record.body);
+    const terminal = body[body.length - 1];
+    const token = terminal?.split(': ')[0];
+    if (!Object.hasOwn(formats, token)) return null;
+    const [header, role] = formats[token];
+    equal(body[0], `## ${header} — ${input.task}`, 'direct adverse header');
+    equal(terminal, `${token}: ${input.task} / PR #${input.pr} / exact head ${input.head}`, 'direct adverse terminal');
+    const required = { Role: role, 'Canonical Issue': `#${input.issue}`,
+      'Exact base': base, 'Exact head': input.head, 'Exact head tree': tree };
+    if (role === 'independent_codex_reviewer') {
+      Object.assign(required, { 'Fresh context': 'yes', 'Executor session reused': 'no',
+        'Source read-only/no-implementation-write': 'yes', 'Complete diff reviewed': 'yes' });
+    } else {
+      Object.assign(required, { 'Record version': 'merge-authority-v1', PR: `#${input.pr}` });
+    }
+    for (const [key, value] of Object.entries(required)) {
+      equal(body.filter(line => line.includes(`${key}:`)), [`${key}: ${value}`], `direct adverse ${key}`);
+    }
+    equal(body.filter(line => /^(PRE_REVIEW_CHANGES_REQUIRED|TECHNICAL_CHANGES_REQUIRED|ACCEPTANCE_CHANGES_REQUIRED|HUMAN_GATE_REVOKED):/.test(line)), [terminal], 'unique adverse outcome');
+    if (record.commit_id !== undefined) {
+      equal(role, 'independent_codex_reviewer', 'PR review role');
+      equal(record.commit_id, input.head, 'adverse PR review commit');
+      need(Number.isFinite(Date.parse(record.submitted_at)), 'adverse review timestamp');
+    } else {
+      equal(record.issue_url, `https://api.github.com/repos/${REPO}/issues/${input.issue}`, 'adverse canonical Issue');
+      need(record.created_at && record.created_at === record.updated_at && Number.isFinite(Date.parse(record.created_at)), 'immutable adverse Issue record');
+    }
+    return token;
+  } catch {
+    return null; // Unauthenticated/quoted evidence is never promoted to a stop.
+  }
+}
+
 function verifySnapshot(s, input) {
   equal(input.repo, REPO, 'repository');
   need(ID.test(input.pr) && ID.test(input.issue) && /^WOS-[A-Z0-9-]+$/.test(input.task), 'task identifiers');
@@ -184,18 +229,12 @@ function verifySnapshot(s, input) {
   equal(s.bridge.run_attempt, 1, 'bridge requires fresh dispatch, not rerun');
   equal(s.bridgeArtifacts.total_count, 0, 'bridge artifacts');
   for (const record of [...s.comments, ...s.reviews]) {
-    if (record.user?.id !== OWNER.id || record.author_association !== 'OWNER') continue;
-    const body = record.body || '';
-    // Later direct adverse checkpoints invalidate the decision; quoted tokens
-    // are not authority. Re-dispatch cannot erase a correction/revocation.
-    for (const line of body.split('\n')) {
-      const adverse = /^(PRE_REVIEW_CHANGES_REQUIRED|TECHNICAL_CHANGES_REQUIRED|ACCEPTANCE_CHANGES_REQUIRED|HUMAN_GATE_REVOKED): /.exec(line);
-      if (!adverse || !line.includes(input.task) || !line.includes(input.head)) continue;
-      const baseline = adverse[1] === 'ACCEPTANCE_CHANGES_REQUIRED' ? s.acceptance.created_at :
-        adverse[1] === 'HUMAN_GATE_REVOKED' ? s.gate.created_at :
-          (s.review?.submitted_at || s.review?.created_at || s.final.created_at);
-      if (Date.parse(record.created_at || record.submitted_at) >= Date.parse(baseline)) fail('later adverse governance checkpoint');
-    }
+    const adverse = adverseCheckpoint(record, input, s.pr.base.sha, s.head.tree.sha);
+    if (!adverse) continue;
+    const baseline = adverse === 'ACCEPTANCE_CHANGES_REQUIRED' ? s.acceptance.created_at :
+      adverse === 'HUMAN_GATE_REVOKED' ? s.gate.created_at :
+        (s.review?.submitted_at || s.review?.created_at || s.final.created_at);
+    if (Date.parse(record.submitted_at || record.created_at) >= Date.parse(baseline)) fail('later adverse governance checkpoint');
   }
   return { version: 'merge-authority-v1', repository: REPO, task: input.task, issue: input.issue, pr: input.pr,
     base: s.pr.base.sha, head: input.head, tree: s.head.tree.sha, candidate: s.candidate.sha,

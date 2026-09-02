@@ -59,6 +59,7 @@ function fixture(selected = input) {
 }
 
 let assertions = 0;
+let ignoredAdverse = 0;
 function rejected(label, change) {
   const snapshot = fixture();
   change(snapshot);
@@ -78,6 +79,24 @@ for (const profile of ['LOW_FOCUSED', 'MEDIUM_DOMAIN']) {
 }
 const release = { ...input, profile: 'RELEASE_CERT' };
 assert.equal(verifySnapshot(fixture(release), release).profile, 'RELEASE_CERT');
+
+function adverseRecord(token, at = 25) {
+  const formats = {
+    PRE_REVIEW_CHANGES_REQUIRED: ['Independent Codex PRE_REVIEW', 'independent_codex_reviewer'],
+    TECHNICAL_CHANGES_REQUIRED: ['Independent Codex Technical Review', 'independent_codex_reviewer'],
+    ACCEPTANCE_CHANGES_REQUIRED: ['Merge Acceptance', 'chatgpt_acceptance_reviewer'],
+    HUMAN_GATE_REVOKED: ['Merge Human Gate', 'repository_owner'],
+  };
+  const [header, role] = formats[token];
+  const fields = { Role: role, 'Canonical Issue': '#132', 'Exact base': base, 'Exact head': head, 'Exact head tree': tree };
+  if (role === 'independent_codex_reviewer') Object.assign(fields, { 'Fresh context': 'yes', 'Executor session reused': 'no',
+    'Source read-only/no-implementation-write': 'yes', 'Complete diff reviewed': 'yes' });
+  else Object.assign(fields, { 'Record version': 'merge-authority-v1', PR: '#133' });
+  return { ...actor, issue_url: `https://api.github.com/repos/${repo}/issues/132`, created_at: time(at), updated_at: time(at),
+    body: [`## ${header} — WOS-GOV-010`, ...Object.entries(fields).map(([key, value]) => `${key}: ${value}`),
+      `${token}: WOS-GOV-010 / PR #133 / exact head ${head}`].join('\n') };
+}
+
 rejected('changes-required has no validated clean review', s => { s.reviewVerified = false; });
 rejected('clean without FINAL', s => { s.final.status = 'queued'; });
 rejected('failed FINAL', s => { s.final.conclusion = 'failure'; });
@@ -130,9 +149,56 @@ rejected('non-strict', s => { s.rules.rules[3].parameters.strict_required_status
 rejected('wrong required app', s => { s.rules.rules[3].parameters.required_status_checks[0].integration_id = 1144995; });
 rejected('thread rule removed', s => { s.rules.rules[2].parameters.required_review_thread_resolution = false; });
 for (const token of ['PRE_REVIEW_CHANGES_REQUIRED', 'TECHNICAL_CHANGES_REQUIRED', 'ACCEPTANCE_CHANGES_REQUIRED', 'HUMAN_GATE_REVOKED']) {
-  rejected(`later ${token}`, s => { s.comments.push({ ...actor, created_at: time(25), body: `${token}: WOS-GOV-010 / PR #133 / exact head ${head}` }); });
+  rejected(`later direct ${token}`, s => { s.comments.push(adverseRecord(token)); });
+  const direct = adverseRecord(token);
+  const rawEvidence = fixture();
+  rawEvidence.comments.push({ ...direct, body: `Role: codex_executor\n${token}: WOS-GOV-010 / PR #133 / exact head ${head}` });
+  assert.doesNotThrow(() => verifySnapshot(rawEvidence, input), `raw Executor ${token} is not authority`);
+  ignoredAdverse++;
+  for (const [label, change] of [
+    ['backtick fence', record => { record.body = `\`\`\`text\n${record.body}\n\`\`\``; }],
+    ['tilde fence', record => { record.body = `~~~text\n${record.body}\n~~~`; }],
+    ['HTML comment', record => { record.body = `<!--\n${record.body}\n-->`; }],
+    ['HTML wrapper', record => { record.body = `<details>\n${record.body}\n</details>`; }],
+    ['blockquote', record => { record.body = record.body.split('\n').map(line => `> ${line}`).join('\n'); }],
+    ['copied transcript', record => { record.body = `Copied evidence only:\n${record.body}`; }],
+    ['Executor role', record => { record.body = record.body.replace(/^Role: .+$/m, 'Role: codex_executor'); }],
+    ['missing role', record => { record.body = record.body.replace(/^Role: .+\n/m, ''); }],
+    ['duplicate role', record => { record.body = record.body.replace(/^Role: (.+)$/m, 'Role: $1\nRole: $1'); }],
+    ['different Issue', record => { record.issue_url = record.issue_url.replace('/132', '/131'); }],
+    ['edited evidence', record => { record.updated_at = time(26); }],
+    ['different actor', record => { record.user = { login: 'someone', id: 1 }; }],
+    ['different task', record => { record.body = record.body.replaceAll('WOS-GOV-010', 'WOS-GOV-0100'); }],
+  ]) {
+    const snapshot = fixture(), record = clone(direct);
+    change(record);
+    snapshot.comments.push(record);
+    assert.doesNotThrow(() => verifySnapshot(snapshot, input), `${label} ${token} must remain evidence, not authority`);
+    ignoredAdverse++;
+  }
 }
-rejected('adverse review before mechanical evidence still blocks', s => { s.reviews.push({ ...actor, submitted_at: time(15), body: `PRE_REVIEW_CHANGES_REQUIRED: WOS-GOV-010 / PR #133 / exact head ${head}` }); });
+rejected('adverse PR review before mechanical evidence still blocks', s => {
+  const record = adverseRecord('PRE_REVIEW_CHANGES_REQUIRED', 15);
+  delete record.issue_url;
+  delete record.created_at;
+  delete record.updated_at;
+  s.reviews.push({ ...record, commit_id: head, submitted_at: time(15) });
+});
+const wrongCommit = fixture();
+wrongCommit.reviews.push({ ...adverseRecord('PRE_REVIEW_CHANGES_REQUIRED'), commit_id: base, submitted_at: time(25) });
+assert.doesNotThrow(() => verifySnapshot(wrongCommit, input), 'PR review must bind its actual commit');
+ignoredAdverse++;
+for (const [label, change] of [
+  ['reused Executor session', record => { record.body = record.body.replace('Executor session reused: no', 'Executor session reused: yes'); }],
+  ['non-fresh reviewer', record => { record.body = record.body.replace('Fresh context: yes', 'Fresh context: no'); }],
+  ['incomplete diff', record => { record.body = record.body.replace('Complete diff reviewed: yes', 'Complete diff reviewed: no'); }],
+]) {
+  const snapshot = fixture(), record = adverseRecord('PRE_REVIEW_CHANGES_REQUIRED');
+  change(record);
+  snapshot.comments.push(record);
+  assert.doesNotThrow(() => verifySnapshot(snapshot, input), `${label} is not Independent Review authority`);
+  ignoredAdverse++;
+}
 
 async function simulation(change = () => {}, selected = input) {
   let snapshot = fixture(selected), calls = [], check, collected = 0;
@@ -182,5 +248,5 @@ async function simulation(change = () => {}, selected = input) {
   assert(bridge.includes('test "$base_sha" = 545b82b452adfc4d43fd4744f3f83d7a8f5e68fb'));
   assert(!bridge.includes('name: Required CI'), 'skipped bridge jobs cannot publish a protected check');
   assert(!bridge.includes('npm ') && !bridge.includes('wp-env') && !bridge.includes('upload-artifact'), 'bridge is metadata-only');
-  console.log(`merge-candidate-authority-contract-ok negative-cases=${assertions} live-writes=mocked`);
+  console.log(`merge-candidate-authority-contract-ok negative-cases=${assertions} untrusted-adverse-cases=${ignoredAdverse} live-writes=mocked`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
