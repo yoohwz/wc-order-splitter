@@ -48,14 +48,14 @@ on:
           - OPTIONAL
           - REQUIRED
       certification_stage:
-        description: PRECHECK before review/evidence or FINAL certification
+        description: PRECHECK or FINAL certification
         required: true
         type: choice
         options:
           - PRECHECK
           - FINAL
       pre_review_authority:
-        description: FINAL-only immutable issue-comment:ID or pr-review:ID containing PRE_REVIEW_CLEAN when review is required
+        description: FINAL immutable issue-comment:ID or pr-review:ID containing required PRE_REVIEW_CLEAN
         required: false
         type: string
 
@@ -378,6 +378,7 @@ jobs:
           tests/ci/required-ci-profile-contract.sh
           tests/ci/integration-suite-contract.sh
           tests/ci/pre-review-authority-contract.sh
+          node tests/ci/merge-candidate-authority-contract.js
 
       - name: Enforce persisted Merge authority reads
         shell: bash
@@ -1238,6 +1239,7 @@ jobs:
           tests/ci/required-ci-profile-contract.sh
           tests/ci/integration-suite-contract.sh
           tests/ci/pre-review-authority-contract.sh
+          node tests/ci/merge-candidate-authority-contract.js
           tests/ci/workflow-contract.sh
           while IFS= read -r changed_js; do
             test -z "$changed_js" || node --check "$changed_js"
@@ -1280,6 +1282,7 @@ jobs:
           tests/ci/required-ci-profile-contract.sh
           tests/ci/integration-suite-contract.sh
           tests/ci/pre-review-authority-contract.sh
+          node tests/ci/merge-candidate-authority-contract.js
           tests/ci/merge-canonical-read-contract.sh
           tests/ci/workflow-contract.sh
           echo "precheck-profile=$CI_PROFILE"
@@ -1623,3 +1626,18 @@ jobs:
           needs['classify-pr-scope'].outputs.stage != 'PRECHECK' &&
           needs['classify-pr-scope'].outputs.stage != 'FINAL')
         run: exit 1
+
+  final-binding:
+    name: FINAL binding / ${{ needs['classify-pr-scope'].outputs.task_id }} / ${{ needs['classify-pr-scope'].outputs.profile }} / ${{ needs['classify-pr-scope'].outputs.base_sha }} / ${{ inputs.pre_review_authority || 'none' }}
+    needs: [classify-pr-scope, required]
+    if: >-
+      !cancelled() &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.certification_stage == 'FINAL' &&
+      needs['classify-pr-scope'].result == 'success' &&
+      needs['classify-pr-scope'].outputs.stage == 'FINAL' &&
+      needs.required.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bind successful FINAL without creating a merge-ready claim
+        run: echo 'FINAL head certification is not merge-candidate authority; artifacts=0'

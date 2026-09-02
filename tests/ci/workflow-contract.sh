@@ -4,6 +4,7 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 ci_workflow="$repo_root/.github/workflows/ci.yml"
+bridge_workflow="$repo_root/.github/workflows/merge-authority.yml"
 main_workflow="$repo_root/.github/workflows/main-attestation.yml"
 package_workflow="$repo_root/.github/workflows/build-plugin.yml"
 distribution_script="$repo_root/.github/scripts/validate-distribution-contract.sh"
@@ -40,7 +41,7 @@ assert_before() {
   }
 }
 
-ruby -e 'require "yaml"; ARGV.each { |file| Psych.parse_file(file) }' "$ci_workflow" "$main_workflow" "$package_workflow"
+ruby -e 'require "yaml"; ARGV.each { |file| Psych.parse_file(file) }' "$ci_workflow" "$main_workflow" "$package_workflow" "$bridge_workflow"
 
 assert_contains "$ci_workflow" 'pull_request:'
 assert_contains "$ci_workflow" 'workflow_dispatch:'
@@ -54,6 +55,18 @@ assert_contains "$ci_workflow" 'requested_assurance:'
 assert_contains "$ci_workflow" 'independent_review_floor:'
 assert_contains "$ci_workflow" 'certification_stage:'
 assert_contains "$ci_workflow" 'pre_review_authority:'
+assert_absent "$ci_workflow" 'merge_authority:'
+assert_absent "$ci_workflow" 'MERGE_AUTHORITY'
+assert_contains "$ci_workflow" 'name: FINAL binding /'
+assert_absent "$ci_workflow" 'checks: write'
+assert_contains "$bridge_workflow" 'types: [ready_for_review]'
+assert_contains "$bridge_workflow" 'checks: read'
+assert_contains "$bridge_workflow" 'if: always()'
+assert_absent "$bridge_workflow" 'workflow_dispatch'
+assert_absent "$bridge_workflow" 'checks: write'
+assert_absent "$bridge_workflow" 'continue-on-error'
+assert_occurrences "$ci_workflow" 'node tests/ci/merge-candidate-authority-contract.js' 3
+assert_contains "$ci_workflow" 'if: always()'
 assert_contains "$ci_workflow" 'actions: read'
 assert_contains "$ci_workflow" 'issues: read'
 assert_contains "$ci_workflow" 'pull-requests: read'

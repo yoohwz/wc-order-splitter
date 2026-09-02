@@ -48,6 +48,75 @@ After a fresh source-read-only Independent Reviewer persists exact-head `PRE_REV
 
 Any head-changing correction invalidates the earlier PRE_REVIEW and returns to PRECHECK plus a new complete-diff Independent Review. A green FINAL run on the unchanged clean-review head may be mechanically promoted to persisted `TECHNICAL_ACCEPTED` by binding the PRE_REVIEW authority ID, exact head/tree, final run/profile, and artifacts=0. No duplicate source reread is required; no Executor-authored conclusion can replace the prior Independent Review.
 
+## Strict merge-candidate authority (WOS-GOV-010)
+
+FINAL remains exact-head certification with protected `Required CI`; it is **not** by itself proof that GitHub considers a PR merge-ready. A workflow-dispatch check can remain successful while the PR rollup selects a different pull-request suite. A regenerated test-merge SHA also has no inherited check. Resolve the live state rather than inferring mergeability from an earlier run.
+
+The metadata-only native bridge is `.github/workflows/merge-authority.yml`, triggered only by `pull_request: ready_for_review` against `main`. The failed custom Check Run architecture and `workflow_dispatch MERGE_AUTHORITY` input/path are retired: do not retry them, lengthen polling, manually patch a check, or create a status through another integration. Ordinary discovery CI and expensive FINAL certification are unchanged.
+
+All governed non-DIRECT PRs remain draft through PRECHECK, required Independent Review, FINAL, task-appropriate evidence, and ChatGPT Acceptance. While the PR is still draft, ChatGPT persists a new Human Gate that binds the exact base/head/tree/current candidate and `PR state: draft`. Only after that record is authenticated may ChatGPT mark the unchanged PR ready once. That transition triggers the native bridge; no dispatch inputs or title/label claims grant authority.
+
+GitHub's [native pull-request semantics](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request) supply `GITHUB_REF=refs/pull/PR/merge` and `GITHUB_SHA` equal to the event merge commit. This is distinct from the Actions REST run/suite/check `head_sha`, which identifies the PR branch head: the existing native discovery run `33615919165` demonstrates that API representation. Do not require these different fields to be identical or mistake a manually created unassociated candidate check for a PR-native check. The verifier binds both the runner's exact candidate/ref/workflow source and the live native run/suite/check's exact PR association, head, base, workflow path and app `15368`. Positive live recognition still has to be proven during Finalize.
+
+A base-owned scope job resolves the owner-authored canonical Issue and complete-diff classification. Only canonical Direct task/branch plus proven `DIRECT_FAST / DIRECT / false` and no normal-task floor is excluded; this emits no protected check and grants no Direct approval. A normal task whose CSS happens to fit the direct lexical envelope still uses its Task Capsule floors and normal authority. The dependent native job uses `always()`: for governed, invalid, failed or missing scope it is named exactly `Required CI` and must run. Scope failure, invalid scope, or any failed verification exits failure, never skipped/neutral success. Proven DIRECT instead uses the non-protected name `Native bridge not applicable to DIRECT` and retains its existing lifecycle.
+
+Both jobs have read-only permissions, including `checks: read`, and check out the exact event merge SHA without persisted credentials. No Checks API write or second certification occurs. Before its native protected job may complete, the verifier authenticates twice:
+
+- real owner-triggered `pull_request / ready_for_review`, first run attempt, exact event PR/base/head/candidate, merge ref and workflow ref/source; candidate parents current base/head, candidate tree equal to the reviewed head tree, current main unchanged;
+- owner login/numeric ID, exact canonical PR/Issue/Task Capsule, independently raised CI/assurance/review floors;
+- latest direct immutable current-head Human Gate, distinct CI evidence and Acceptance, their exact references, roles, schemas and chronology; malformed/edited latest positive authority cannot fall back to an older Gate;
+- Gate's draft-state attestation and exactly one owner ready transition since that Gate, bound to the event timestamp; a repeat transition or rerun cannot reuse it;
+- `EXECUTOR_EVIDENCE_READY` for LOW/no-trigger MEDIUM, or independently grounded `TECHNICAL_ACCEPTED` plus the exact-base PRE_REVIEW validator for reviewed work;
+- successful exact-head FINAL, app/check/suite/run/attempt/profile/artifacts=0 and exact successful `FINAL binding / TASK / PROFILE / BASE / PRE_REVIEW_REFERENCE_OR_none`;
+- native running protected check, app/suite/PR association, artifacts=0, pinned ruleset and all paginated unresolved threads=0;
+- later direct PRE_REVIEW/Technical/Acceptance changes-required or Human Gate revocation, with authenticated role/provenance, all remain blocking.
+
+The `native-merge-authority-verified` log attestation binds the immutable event merge ref/candidate, base/head/tree, FINAL and native run/check/suite identities, evidence/Acceptance/Gate/review IDs and record digest, artifacts=0 and threads=0. It is not a claim that its own running job is already successful or that GitHub is already clean.
+
+After the job completes, ChatGPT must independently re-read the successful native run/check (never skipped/neutral), its candidate-bound attestation and native PR association, current owner ruleset including bypass actors, full current authority and current candidate. Require `mergeable=true` and `mergeable_state=clean` immediately before squash merge. If GitHub does not recognize this native merge-context authority, stop before merge. A failure/cancellation is not authority, and there is no custom check to flip manually.
+
+There is no atomic API across mutable authority, job completion and merge. Head/base drift requires fresh task-appropriate certification/review/Acceptance/Human Gate. Candidate regeneration with unchanged base/head/tree requires a newly bound Gate while draft and a new ready transition, never copying prior authority or silently reusing the old event. Do not repeat expensive FINAL solely for candidate regeneration. Strict up-to-date and unresolved-thread protection remain active across the final merge race.
+
+GitHub's [ruleset API](https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset) redacts `bypass_actors` unless the caller can write the ruleset. Actions must not gain Administration permission for this read. The verifier pins the owner-authenticated source ruleset revision `updated_at=2026-08-25T10:09:48.838+07:00` (history version `47541914`, owner actor `152001663`, verified empty bypass list) and all visible constraints; a missing/changed revision fails closed even when hidden fields are redacted. If the bypass field is visible it must be empty. Finalize must use owner authority to re-read the complete ruleset, including bypass actors, before Human Gate and immediately before merge. Future intentional ruleset edits require a separately reviewed pin transition, never an automatic revision update.
+
+### Canonical bridge records
+
+Each record is a new top-level comment on the canonical task Issue by the authenticated owner. Never edit an existing record. It starts with its exact header, contains one of each field and no other fields, and ends with its exact terminal. Records contain plain unfenced text, without backticks, indentation, HTML, quoted transcripts, or a footer. A separate navigation/reference comment may carry `NEXT_ACTION_HINT`.
+
+All three records contain these common fields (replace placeholders with exact values):
+
+```text
+Record version: merge-authority-v1
+Canonical Issue: #ISSUE
+PR: #PR
+Exact base: BASE_SHA
+Exact head: HEAD_SHA
+Exact head tree: TREE_SHA
+CI profile: SELECTED_PROFILE
+Assurance: SELECTED_ASSURANCE
+Review required: true_OR_false
+PRE_REVIEW authority: pr-review:ID_OR_issue-comment:ID_OR_none
+FINAL run: RUN_ID
+FINAL attempt: ATTEMPT
+Artifacts: 0
+```
+
+Evidence: header `## Merge CI evidence — TASK`; fields `Role: codex_executor` and `Evidence kind: TECHNICAL_ACCEPTED` for reviewed work, or `Evidence kind: EXECUTOR_EVIDENCE_READY` for no-review work. Terminal `TECHNICAL_ACCEPTED: TASK / PR #PR / exact head HEAD_SHA` or the corresponding `EXECUTOR_EVIDENCE_READY` terminal. This is mechanical post-FINAL promotion of the separately authenticated review, not a new technical conclusion.
+
+Acceptance: header `## Merge Acceptance — TASK`; fields `Role: chatgpt_acceptance_reviewer` and `Evidence authority: issue-comment:ID`. Terminal `ACCEPTANCE_ACCEPTED: TASK / PR #PR / exact head HEAD_SHA`. A separate accompanying comment may explain Acceptance findings; the Executor cannot issue this record.
+
+Human Gate: header `## Merge Human Gate — TASK`; fields `Role: repository_owner`, `Evidence authority: issue-comment:ID`, `Acceptance authority: issue-comment:ID`, `Human command: Finalize TASK`, `Merge candidate: CANDIDATE_SHA`, `Merge candidate tree: TREE_SHA`, `Unresolved review threads: 0`, and `PR state: draft`. Persist while draft and before the ready transition. Terminal `HUMAN_GATE_APPROVED: TASK / PR #PR / exact head HEAD_SHA`. This comes only from the authenticated human's conditional Finalize authority, not from `Run`, CI, a PR body, or a title/label.
+
+### Source-bound self-bootstrap
+
+WOS-GOV-010 itself still uses GOV-009 task-bound PRECHECK, fresh Independent PRE_REVIEW, and FINAL. Since its exact source base lacks the new verifier/workflow, the native loader has one bootstrap: repository `yoohwz/wc-order-splitter`, task `WOS-GOV-010`, Issue `132`, PR `133`, source base `545b82b452adfc4d43fd4744f3f83d7a8f5e68fb`, HIGH_DEEP floor, HIGH assurance and REQUIRED review. Only there may it load the newly reviewed/accepted verifier from the event's exact head; classifier and PRE_REVIEW validators remain base-owned. The native workflow comes from the exact event merge context. Source/tree proof, fresh review, green FINAL, new Acceptance and draft-bound Human Gate remain mandatory before protected success. After accepted main owns the verifier, the fallback is inert; other missing-verifier bases fail closed.
+
+The replacement is authorized by Issue #132 `issue-comment:5508357529`, with old Human Gate revoked by `5508342233`. It permits one replacement source head, not a correction-budget reset: focused local evidence, fresh pre-push Independent advisory, push once, task-bound PRECHECK, fresh complete-diff Independent PRE_REVIEW, FINAL/live binding, then mechanical Technical Acceptance. A material finding requiring another source head after that push stops `ARCHITECTURE_REVIEW_REQUIRED` and requires a new governance task. Old-head approvals are historical only.
+
+Positive native merge-context check and GitHub recognition occur only after new ChatGPT Acceptance and Human Gate while draft, then mark-ready during Finalize, **before merge**. `READY_TO_FINALIZE` does not claim live bridge success. Unrecognized native authority stops `ARCHITECTURE_REVIEW_REQUIRED: WOS-GOV-010`; do not merge or weaken protection.
+
+After GOV-010 is terminally accepted, WOS-COMPAT-007 requires explicit ChatGPT/Human rebind to the new main and fresh required certification authority. Its old Acceptance/Human Gate cannot be reused. No consumer rebind or release authority is implicit in this bridge.
+
 ## Profile topology
 
 - `DIRECT_FAST`: exact authority revalidation, strict lexical/object guard, diff check, classifier/aggregator/workflow regressions, unchanged runtime/gates/version/package/control-plane proof, artifacts=0.
