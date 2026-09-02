@@ -13,7 +13,7 @@ The machine profiles are `DIRECT_FAST`, `LOW_FOCUSED`, `MEDIUM_DOMAIN`, `HIGH_DE
 
 ## Fail-closed selection
 
-The classifier derives the minimum profile from the complete exact base-to-head diff. PR title/body, task ID, labels, actor claims, and ordinary branch names are not classifier inputs and cannot lower the floor. A manually requested profile may only raise it. Mixed scope selects the strongest applicable floor; unknown or malformed authority selects a reviewed HIGH/RELEASE path.
+The classifier derives the minimum profile from the complete exact base-to-head diff. PR title/body, task ID, labels, actor claims, and ordinary branch names are not classifier inputs and cannot lower the floor. A dispatch profile may only raise it and is accepted only when the authenticated owner-authored canonical Issue contains the exact machine-readable Task Capsule list field named `CI profile floor` with the requested profile value. Mixed scope selects the strongest applicable floor; unknown or malformed authority selects a reviewed HIGH/RELEASE path.
 
 `DIRECT_FAST` requires a non-empty exact diff containing only status-`M` changes to existing Git-tracked regular-text mode-`100644` `*.css` files beneath `css/`. The changed lines may modify only an existing `border-radius` declaration, one declaration per line, with numeric zero or a non-negative numeric `px`, `rem`, `em`, or `%` value. Selector/rule changes, every other property, and reachability/state/accessibility semantics leave DIRECT. Each resulting blob is scanned without comment stripping, escape decoding, or line-continuation normalization. Any backslash, comment delimiter, non-canonical control byte, `@`, `url(...)`, `expression(...)`, `://`, `//`, binary/LFS replacement, object ambiguity, addition/deletion/rename/copy, or non-CSS path leaves DIRECT. Canonical Direct branch and human authority are separate governance requirements; the classifier does not consume them, so a branch/task claim cannot lower the complete-diff floor.
 
@@ -30,20 +30,20 @@ MEDIUM semantic trigger scanning can only add Independent Review. The repository
 
 ## Stages and review-first certification
 
-`DIRECT_FAST`, `LOW_FOCUSED`, and no-trigger `MEDIUM_DOMAIN` run FINAL certification directly.
+`DIRECT_FAST` runs FINAL certification directly after its pre-edit authority. Every ordinary normal PR push runs authority-discovery PRECHECK under the non-protected check name `PRECHECK authority only`; it never publishes a `Required CI` check. Codex then dispatches an exact-head task-bound PRECHECK when the canonical Task Capsule raises the machine floor, or task-bound FINAL for LOW/no-trigger MEDIUM once the floor is authenticated. This prevents an earlier cheaper machine-only result from appearing merge-ready before canonical task authority is applied.
 
-Review-required MEDIUM, all HIGH, and RELEASE candidates run `PRECHECK` on each ordinary PR head. PRECHECK includes exact-diff validation, PHP 8.3 syntax/unit evidence, architecture/gate/governance/profile contracts, suite-completeness contracts, one canonical-storage affected-domain smoke where practical, cross-domain sentinels, and artifacts=0. It is engineering evidence only.
+Review-required MEDIUM, all HIGH, and RELEASE candidates run `PRECHECK` on each ordinary PR head; an explicit stale-safe PRECHECK dispatch applies any stronger canonical task floor before PRE_REVIEW. PRECHECK includes exact-diff validation, PHP 8.3 syntax/unit evidence, architecture/gate/governance/profile contracts, suite-completeness contracts, one canonical-storage affected-domain smoke where practical, cross-domain sentinels, and artifacts=0. It is engineering evidence only.
 
-The `Required CI` job is skipped for PRECHECK. `.github/scripts/verify-required-ci.sh` also rejects every non-`FINAL` stage, so PRECHECK cannot satisfy branch protection even if invoked incorrectly.
+PRECHECK uses a dynamically distinct successful check named `PRECHECK authority only`; the workflow emits no `Required CI` check at all for that run. `.github/scripts/verify-precheck-ci.sh` authenticates PRECHECK topology, while `.github/scripts/verify-required-ci.sh` rejects every non-`FINAL` stage. A skipped/neutral `Required CI` is forbidden because GitHub branch protection treats it as accepted. PRECHECK cannot satisfy branch protection.
 
-After a fresh source-read-only Independent Reviewer persists exact-head `PRE_REVIEW_CLEAN`, FINAL is triggered through `workflow_dispatch` with canonical task ID and Issue number, PR number, expected head, requested profile, and immutable `issue-comment:ID` or `pr-review:ID` authority. The workflow:
+After a fresh source-read-only Independent Reviewer persists exact-head `PRE_REVIEW_CLEAN`, FINAL is triggered through `workflow_dispatch` with canonical task ID and Issue number, PR number, expected head, Task Capsule profile floor, requested stage, and immutable `issue-comment:ID` or `pr-review:ID` authority. The workflow:
 
 1. re-resolves the open PR and requires base `main`;
 2. requires the dispatch ref/GitHub SHA and current PR head to equal `expected_head_sha`;
 3. reruns the base-owned classifier, allowing the requested profile only to raise the machine floor;
 4. loads the PRE_REVIEW validators from the exact PR base;
 5. authenticates owner-structured independent-review provenance, exact base/head/tree, PR-review `commit_id` where applicable, source-read-only attestations, and one unfenced/unquoted canonical record whose unique terminal outcome is `PRE_REVIEW_CLEAN`;
-6. authenticates the bound PRECHECK run as pull-request CI on the same head with successful PRECHECK jobs, skipped `Required CI`, and artifacts=0;
+6. authenticates the bound PRECHECK run as CI on the same head/profile with successful PRECHECK jobs, exactly one successful `PRECHECK authority only`, no `Required CI` check, and artifacts=0;
 7. runs FINAL certification and only then permits successful `Required CI`.
 
 Any head-changing correction invalidates the earlier PRE_REVIEW and returns to PRECHECK plus a new complete-diff Independent Review. A green FINAL run on the unchanged clean-review head may be mechanically promoted to persisted `TECHNICAL_ACCEPTED` by binding the PRE_REVIEW authority ID, exact head/tree, final run/profile, and artifacts=0. No duplicate source reread is required; no Executor-authored conclusion can replace the prior Independent Review.
@@ -54,7 +54,7 @@ Any head-changing correction invalidates the earlier PRE_REVIEW and returns to P
 - `LOW_FOCUSED`: changed static syntax as applicable, exact diff, profile/aggregator/governance contracts, artifacts=0.
 - `MEDIUM_DOMAIN`: focused contracts plus affected-domain integration in HPOS by default and cross-domain sentinels; storage-sensitive task authority may raise the profile.
 - `HIGH_DEEP`: PHP 7.4/8.1/8.3, architecture/gates, package safety, affected deep/recovery/security suites across legacy/HPOS/HPOS-sync, HPOS real-worker lease exclusion, sentinels, artifacts=0.
-- `HIGH_FINANCIAL`: PHP/architecture/package evidence plus money/tax/payment/refund/stock/replay/recovery suites across legacy/HPOS/HPOS-sync, HPOS real-worker lease exclusion, sentinels, artifacts=0.
+- `HIGH_FINANCIAL`: a strict superset of `HIGH_DEEP` affected runtime/recovery/concurrency evidence plus money/tax/payment/refund/stock specialization across legacy/HPOS/HPOS-sync, HPOS real-worker lease exclusion, sentinels, artifacts=0.
 - `RELEASE_CERT`: exhaustive certification equivalent to or stronger than the source-baseline FULL matrix, including every release-manifest suite artifact, all three storage modes, package/distribution/version authority, and artifacts=0.
 
 `tests/ci/integration-suites.tsv` is the repository-owned suite manifest. `tests/ci/integration-suite-contract.sh` binds baseline source `ab7b1db49ff7b82ad1bb7fae3bbbafd56a5eb328` / tree `b44f54e597e8f03d6d83c30acf55eb162535e96d` and proves every integration artifact invoked by that FULL workflow remains in the `release` union. Focused profiles select tagged affected-domain suites and sentinels; they do not delete or weaken the release set.

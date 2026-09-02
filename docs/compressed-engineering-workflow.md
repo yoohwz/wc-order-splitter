@@ -33,7 +33,7 @@ Task/label/title/body/actor claims cannot lower the machine-derived minimum. Can
 
 ## Create
 
-`Create <TASK_ID>` is a ChatGPT command. ChatGPT resolves accepted source, creates/updates the canonical Issue Task Capsule, assigns LOW/MEDIUM/HIGH, binds the expected CI floor and MEDIUM review triggers, scope/invariants/evidence/stop conditions/release boundary, and records `TASK_READY`.
+`Create <TASK_ID>` is a ChatGPT command. ChatGPT resolves accepted source, creates/updates the owner-authored canonical Issue Task Capsule, assigns LOW/MEDIUM/HIGH, and records the exact machine-readable `CI profile floor` list field with a profile value plus MEDIUM review triggers, scope/invariants/evidence/stop conditions/release boundary before `TASK_READY`.
 
 Task Capsules reference stable repository contracts by exact path plus blob SHA/version and store only the task-specific delta. Plan Review remains exceptional for an unresolved product or architecture decision.
 
@@ -51,7 +51,7 @@ DIRECT follows its pre-edit authority and deterministic merge lifecycle in `docs
 
 ### LOW and no-trigger MEDIUM
 
-Codex waits for exact-head FINAL `Required CI`, persists and re-reads structured executor evidence:
+The ordinary push first proves the machine floor under non-protected `PRECHECK authority only`. Codex dispatches stale-safe task-bound FINAL using the authenticated Task Capsule floor, waits for exact-head `Required CI`, and persists/re-reads structured executor evidence:
 
 `EXECUTOR_EVIDENCE_READY: <TASK_ID> / PR #N / exact head <SHA> / profile <PROFILE> / Required CI <RUN_ID> / artifacts=0 / persisted authority <Issue comment ID>`.
 
@@ -61,7 +61,7 @@ This is not `TECHNICAL_ACCEPTED`. After authenticating it, Codex reports:
 
 ### Review-required MEDIUM and HIGH
 
-Ordinary pushes run PRECHECK only. `Required CI` remains skipped and cannot authorize merge. After successful exact-head PRECHECK, Codex dispatches a fresh source-read-only Independent Reviewer.
+Ordinary pushes run PRECHECK only and emit no `Required CI` check. If canonical task authority raises the machine floor, Codex first dispatches a stale-safe PRECHECK bound to the Task Capsule profile. Only the distinct `PRECHECK authority only` check succeeds. After successful exact-head PRECHECK, Codex dispatches a fresh source-read-only Independent Reviewer.
 
 The reviewer automatically persists and re-reads one immutable record:
 
@@ -119,7 +119,7 @@ PRECHECK then Independent PRE_REVIEW; FINAL includes PHP/architecture/package ev
 
 ### HIGH_FINANCIAL
 
-PRECHECK then Independent PRE_REVIEW; FINAL includes money/tax/payment/refund/stock/replay/recovery evidence across legacy/HPOS/HPOS-sync, real-worker lease exclusion, sentinels, artifacts=0. Classification uses explicit sensitive paths plus conservative changed-content guards so generic runtime filenames cannot bypass this profile.
+PRECHECK then Independent PRE_REVIEW; FINAL preserves every `HIGH_DEEP` affected runtime/recovery/concurrency suite and adds money/tax/payment/refund/stock specialization across legacy/HPOS/HPOS-sync, real-worker lease exclusion, sentinels, artifacts=0. Classification uses explicit actual financial caller paths plus conservative changed-content guards so generic runtime filenames cannot bypass this profile.
 
 ### RELEASE_CERT
 

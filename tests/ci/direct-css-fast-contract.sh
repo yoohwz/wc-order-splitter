@@ -12,9 +12,12 @@ git -C "$fixture_root" config user.name 'WOS CI Fixture'
 git -C "$fixture_root" config user.email 'wos-ci@example.invalid'
 mkdir -p "$fixture_root/css" "$fixture_root/js" "$fixture_root/inc/domain" "$fixture_root/tests/ci" "$fixture_root/tests/integration" "$fixture_root/.github/workflows" "$fixture_root/.github/scripts" "$fixture_root/docs" "$fixture_root/languages"
 printf '.fixture {\n  border-radius: 4px;\n}\n' > "$fixture_root/css/admin.css"
+printf '.wcos-confirm {\n  display: none;\n}\n' > "$fixture_root/css/control.css"
 printf 'window.WCOSView = { color: "black" };\n' > "$fixture_root/js/admin.js"
 printf '<?php return true;\n' > "$fixture_root/inc/domain/class-runtime.php"
 printf '<?php return true;\n' > "$fixture_root/inc/domain/class-financial-authority.php"
+printf '<?php return true;\n' > "$fixture_root/inc/domain/class-wcos-merge-commercial-policy.php"
+printf '<?php return true;\n' > "$fixture_root/inc/domain/class-wcos-merge-plan.php"
 printf '# Fixture\n' > "$fixture_root/readme.txt"
 printf 'name: Fixture\n' > "$fixture_root/.github/workflows/ci.yml"
 printf '#!/usr/bin/env bash\n' > "$fixture_root/tests/ci/fixture.sh"
@@ -113,6 +116,22 @@ printf '.added { color: red; }\n' > "$fixture_root/css/added.css"
 commit_case added-css >/dev/null
 assert_facts LOW_FOCUSED LOW false FINAL added-css-not-direct pull_request "$base_sha" "$(git -C "$fixture_root" rev-parse HEAD)" codex/direct/wos-direct-20260902-120000
 
+for added_control_css in \
+  '.wcos-confirm { display: none; }' \
+  '.wcos-action { pointer-events: none; }' \
+  '.wcos-warning[aria-hidden="true"] { opacity: 0; }' \
+  'button:disabled { visibility: hidden; }'; do
+  reset_fixture
+  printf '%s\n' "$added_control_css" > "$fixture_root/css/added-control.css"
+  commit_case added-control-css >/dev/null
+  assert_facts HIGH_DEEP HIGH true PRECHECK added-control-css-reviews
+done
+
+reset_fixture
+rm "$fixture_root/css/control.css"
+commit_case deleted-control-css >/dev/null
+assert_facts HIGH_DEEP HIGH true PRECHECK deleted-control-css-reviews
+
 reset_fixture
 rm "$fixture_root/css/admin.css"
 ln -s missing.css "$fixture_root/css/admin.css"
@@ -128,6 +147,7 @@ reset_fixture
 printf '\nmsgid "Navy"\nmsgstr ""\n' >> "$fixture_root/languages/fixture.pot"
 commit_case low-translation >/dev/null
 assert_facts LOW_FOCUSED LOW false FINAL low-translation
+assert_facts MEDIUM_DOMAIN MEDIUM false FINAL canonical-floor-raises-low-to-medium pull_request "$base_sha" "$(git -C "$fixture_root" rev-parse HEAD)" codex/wos-medium MEDIUM_DOMAIN
 
 reset_fixture
 printf '\nNormative authority disguised as a product note.\n' >> "$fixture_root/docs/product-note.md"
@@ -160,11 +180,28 @@ printf '\nchanged\n' >> "$fixture_root/inc/domain/class-runtime.php"
 commit_case high-runtime >/dev/null
 assert_facts HIGH_DEEP HIGH true PRECHECK high-runtime pull_request "$base_sha" "$(git -C "$fixture_root" rev-parse HEAD)" codex/direct/wos-direct-20260902-120000
 assert_facts HIGH_DEEP HIGH true PRECHECK low-hint-cannot-lower-runtime pull_request "$base_sha" "$(git -C "$fixture_root" rev-parse HEAD)" codex/direct/wos-direct-20260902-120000 LOW_FOCUSED
+assert_facts HIGH_FINANCIAL HIGH true PRECHECK canonical-floor-raises-deep-to-financial pull_request "$base_sha" "$(git -C "$fixture_root" rev-parse HEAD)" codex/wos-financial HIGH_FINANCIAL
+assert_facts RELEASE_CERT HIGH true PRECHECK canonical-floor-raises-deep-to-release pull_request "$base_sha" "$(git -C "$fixture_root" rev-parse HEAD)" codex/wos-release RELEASE_CERT
 
 reset_fixture
 printf '\n$order->set_total("10.00");\n' >> "$fixture_root/inc/domain/class-runtime.php"
 commit_case generic-path-financial >/dev/null
 assert_facts HIGH_FINANCIAL HIGH true PRECHECK generic-path-financial-content
+
+reset_fixture
+printf '\nWCOS_Merge_Financial_Authority::target_has_history($authority);\n' >> "$fixture_root/inc/domain/class-runtime.php"
+commit_case generic-financial-caller >/dev/null
+assert_facts HIGH_FINANCIAL HIGH true PRECHECK generic-financial-caller-content
+
+reset_fixture
+printf '\nchanged\n' >> "$fixture_root/inc/domain/class-wcos-merge-commercial-policy.php"
+commit_case explicit-commercial-financial-caller-path >/dev/null
+assert_facts HIGH_FINANCIAL HIGH true PRECHECK explicit-commercial-financial-caller-path
+
+reset_fixture
+printf '\nchanged\n' >> "$fixture_root/inc/domain/class-wcos-merge-plan.php"
+commit_case explicit-financial-caller-path >/dev/null
+assert_facts HIGH_FINANCIAL HIGH true PRECHECK explicit-financial-caller-path
 
 reset_fixture
 printf '\nchanged\n' >> "$fixture_root/inc/domain/class-financial-authority.php"

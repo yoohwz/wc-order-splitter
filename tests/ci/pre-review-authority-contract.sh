@@ -15,6 +15,7 @@ issue=654
 base=1111111111111111111111111111111111111111
 head=2222222222222222222222222222222222222222
 tree=3333333333333333333333333333333333333333
+profile=HIGH_DEEP
 
 write_valid_record() {
   {
@@ -31,6 +32,7 @@ write_valid_record() {
     echo "Exact base: $base"
     echo "Exact head: $head"
     echo "Exact head tree: $tree"
+    echo "PRECHECK profile: $profile / stage PRECHECK"
     echo 'PRECHECK run: 987654 / completed/success / artifacts=0'
     echo "PRE_REVIEW_CLEAN: $task / PR #$pr / exact head $head"
   } > "$record"
@@ -44,46 +46,68 @@ expect_failure() {
 }
 
 write_valid_record
-"$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" | grep -Fq 'precheck_run_id=987654'
-expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" 4444444444444444444444444444444444444444 "$tree"
-expect_failure "$validator" "$record" WOS-OTHER-999 "$pr" "$issue" "$base" "$head" "$tree"
-expect_failure "$validator" "$record" "$task" "$pr" 999 "$base" "$head" "$tree"
+"$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile" | grep -Fq 'precheck_run_id=987654'
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" 4444444444444444444444444444444444444444 "$tree" "$profile"
+expect_failure "$validator" "$record" WOS-OTHER-999 "$pr" "$issue" "$base" "$head" "$tree" "$profile"
+expect_failure "$validator" "$record" "$task" "$pr" 999 "$base" "$head" "$tree" "$profile"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" HIGH_FINANCIAL
 
 write_valid_record
 sed '/Fresh context: yes/d' "$record" > "$record.tmp"
 mv "$record.tmp" "$record"
-expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
 
 write_valid_record
 sed 's/completed\/success/completed\/failure/' "$record" > "$record.tmp"
 mv "$record.tmp" "$record"
-expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
 
 write_valid_record
 printf '%s\n' 'PRECHECK run: 987655 / completed/success / artifacts=0' >> "$record"
-expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
 
 write_valid_record
 printf '%s\n' 'Blocking findings: copied clean signal' >> "$record"
-expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
 
 write_valid_record
 printf '%s\n' "PRE_REVIEW_CHANGES_REQUIRED: $task / PR #$pr / exact head $head" >> "$record"
-expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
 
 write_valid_record
 printf '%s\n' "PRE_REVIEW_CLEAN: $task / PR #$pr / exact head $head" >> "$record"
-expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
 
 write_valid_record
 { echo '```text'; cat "$record"; echo '```'; } > "$record.tmp"
 mv "$record.tmp" "$record"
-expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
 
 write_valid_record
 sed 's/^Role:/> Role:/' "$record" > "$record.tmp"
 mv "$record.tmp" "$record"
-expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
+
+write_valid_record
+awk '/^Role:/ { print "~~~text" } { print }' "$record" > "$record.tmp"
+mv "$record.tmp" "$record"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
+
+write_valid_record
+awk '/^Role:/ { print "<!--" } { print }' "$record" > "$record.tmp"
+mv "$record.tmp" "$record"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
+
+write_valid_record
+awk '/^Role:/ { print "<pre>" } { print }' "$record" > "$record.tmp"
+mv "$record.tmp" "$record"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
+
+write_valid_record
+awk -v conflict="  PRE_REVIEW_CHANGES_REQUIRED: $task / PR #$pr / exact head $head" \
+  '/^PRE_REVIEW_CLEAN:/ { print conflict } { print }' "$record" > "$record.tmp"
+mv "$record.tmp" "$record"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree" "$profile"
 
 write_valid_record
 cat > "$mock_bin/gh" <<'MOCK_GH'
@@ -99,19 +123,24 @@ case "$endpoint" in
     jq -n --rawfile body "$MOCK_RECORD" --arg commit_id "${MOCK_REVIEW_COMMIT:-2222222222222222222222222222222222222222}" \
       '{author_association:"OWNER",commit_id:$commit_id,body:$body}'
     ;;
+  repos/fixture/repo/pulls/321)
+    jq -n --arg base "${MOCK_BASE:-1111111111111111111111111111111111111111}" --arg head "$MOCK_HEAD" \
+      '{state:"open",base:{sha:$base},head:{sha:$head}}'
+    ;;
   repos/fixture/repo/actions/runs/987654)
     jq -n \
       --argjson pr "${MOCK_PR_NUMBER:-321}" \
       --arg base "${MOCK_BASE:-1111111111111111111111111111111111111111}" \
       --arg head "$MOCK_HEAD" \
-      '{status:"completed",conclusion:"success",head_sha:$head,event:"pull_request",path:".github/workflows/ci.yml",pull_requests:[{number:$pr,base:{sha:$base},head:{sha:$head}}]}'
+      --arg event "${MOCK_RUN_EVENT:-pull_request}" \
+      '{status:"completed",conclusion:"success",head_sha:$head,event:$event,path:".github/workflows/ci.yml",pull_requests:[{number:$pr,base:{sha:$base},head:{sha:$head}}]}'
     ;;
   repos/fixture/repo/actions/runs/987654/artifacts)
     echo 0
     ;;
   'repos/fixture/repo/actions/runs/987654/jobs?per_page=100')
-    jq -n --arg required "${MOCK_REQUIRED_RESULT:-skipped}" \
-      '{jobs: ([{name:"Risk-tiered PRECHECK / deterministic contracts",conclusion:"success"}] + (if $required == "missing" then [] else [{name:"Required CI",conclusion:$required}] end))}'
+    jq -n --arg protected "${MOCK_PROTECTED_RESULT:-missing}" --arg authority "${MOCK_PRECHECK_AUTHORITY_RESULT:-success}" \
+      '{jobs: ([{name:"Risk-tiered PRECHECK / deterministic contracts",conclusion:"success"}] + (if $authority == "missing" then [] else [{name:"PRECHECK authority only",conclusion:$authority}] end) + (if $protected == "missing" then [] else [{name:"Required CI",conclusion:$protected}] end))}'
     ;;
   *)
     echo "unexpected mock endpoint: $endpoint" >&2
@@ -122,22 +151,33 @@ MOCK_GH
 chmod +x "$mock_bin/gh"
 
 PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" WCOS_PRE_REVIEW_VALIDATOR="$validator" \
-  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" issue-comment:42 \
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42 \
+  | grep -Fq 'pre-review-authority-ok'
+PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_RUN_EVENT=workflow_dispatch WCOS_PRE_REVIEW_VALIDATOR="$validator" \
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42 \
   | grep -Fq 'pre-review-authority-ok'
 PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" WCOS_PRE_REVIEW_VALIDATOR="$validator" \
-  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" pr-review:43 \
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" pr-review:43 \
   | grep -Fq 'pre-review-authority-ok'
 
 expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_REVIEW_COMMIT=4444444444444444444444444444444444444444 WCOS_PRE_REVIEW_VALIDATOR="$validator" \
-  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" pr-review:43
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" pr-review:43
 
 expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD=4444444444444444444444444444444444444444 WCOS_PRE_REVIEW_VALIDATOR="$validator" \
-  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" issue-comment:42
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42
 expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_PR_NUMBER=999 WCOS_PRE_REVIEW_VALIDATOR="$validator" \
-  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" issue-comment:42
-expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_REQUIRED_RESULT=success WCOS_PRE_REVIEW_VALIDATOR="$validator" \
-  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" issue-comment:42
-expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_REQUIRED_RESULT=missing WCOS_PRE_REVIEW_VALIDATOR="$validator" \
-  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" issue-comment:42
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42
+expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_PROTECTED_RESULT=success WCOS_PRE_REVIEW_VALIDATOR="$validator" \
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42
+expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_PROTECTED_RESULT=skipped WCOS_PRE_REVIEW_VALIDATOR="$validator" \
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42
+expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_PRECHECK_AUTHORITY_RESULT=missing WCOS_PRE_REVIEW_VALIDATOR="$validator" \
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42
+expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_PRECHECK_AUTHORITY_RESULT=failure WCOS_PRE_REVIEW_VALIDATOR="$validator" \
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42
+expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_RUN_EVENT=push WCOS_PRE_REVIEW_VALIDATOR="$validator" \
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42
+expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_RUN_EVENT=workflow_dispatch MOCK_BASE=9999999999999999999999999999999999999999 WCOS_PRE_REVIEW_VALIDATOR="$validator" \
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" "$profile" issue-comment:42
 
 echo pre-review-authority-contract-ok

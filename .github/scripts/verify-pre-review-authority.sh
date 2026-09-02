@@ -9,8 +9,9 @@ task_issue_number=${4:-}
 base_sha=${5:-}
 head_sha=${6:-}
 head_tree=${7:-}
-authority=${8:-}
-output_file=${9:-}
+expected_profile=${8:-}
+authority=${9:-}
+output_file=${10:-}
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 validator=${WCOS_PRE_REVIEW_VALIDATOR:-$repo_root/.github/scripts/validate-pre-review-record.sh}
 
@@ -23,7 +24,8 @@ record_id=${BASH_REMATCH[2]}
 record_json=$(mktemp)
 body_file=$(mktemp)
 jobs_json=$(mktemp)
-trap 'rm -f "$record_json" "$body_file" "$jobs_json"' EXIT
+pr_json=$(mktemp)
+trap 'rm -f "$record_json" "$body_file" "$jobs_json" "$pr_json"' EXIT
 
 require_value() {
   local label=$1 actual=$2 expected=$3
@@ -50,7 +52,7 @@ association=$(jq -r '.author_association // ""' "$record_json")
   exit 1
 }
 jq -r '.body // ""' "$record_json" > "$body_file"
-validation=$("$validator" "$body_file" "$task_id" "$pr_number" "$task_issue_number" "$base_sha" "$head_sha" "$head_tree")
+validation=$("$validator" "$body_file" "$task_id" "$pr_number" "$task_issue_number" "$base_sha" "$head_sha" "$head_tree" "$expected_profile")
 run_id=$(printf '%s\n' "$validation" | sed -n 's/^precheck_run_id=//p')
 [[ "$run_id" =~ ^[1-9][0-9]*$ ]] || { echo 'pre-review-authority-error: validator returned no PRECHECK run' >&2; exit 1; }
 
@@ -58,23 +60,39 @@ run_json=$(gh api "repos/$repo/actions/runs/$run_id")
 require_value run-status "$(jq -r '.status' <<< "$run_json")" completed
 require_value run-conclusion "$(jq -r '.conclusion' <<< "$run_json")" success
 require_value run-head "$(jq -r '.head_sha' <<< "$run_json")" "$head_sha"
-require_value run-event "$(jq -r '.event' <<< "$run_json")" pull_request
+run_event=$(jq -r '.event' <<< "$run_json")
+case "$run_event" in pull_request|workflow_dispatch) ;; *)
+  echo "pre-review-authority-error: run-event is $run_event, expected pull_request or workflow_dispatch" >&2
+  exit 1
+  ;;
+esac
 require_value workflow-path "$(jq -r '.path' <<< "$run_json")" .github/workflows/ci.yml
 require_value artifact-count "$(gh api "repos/$repo/actions/runs/$run_id/artifacts" --jq '.total_count')" 0
-jq -e --argjson pr "$pr_number" --arg base "$base_sha" --arg head "$head_sha" \
-  '.pull_requests | any(.number == $pr and .base.sha == $base and .head.sha == $head)' \
-  <<< "$run_json" >/dev/null || {
-  echo 'pre-review-authority-error: PRECHECK run is not bound to the exact PR/base/head' >&2
-  exit 1
-}
+if [[ "$run_event" == pull_request ]]; then
+  jq -e --argjson pr "$pr_number" --arg base "$base_sha" --arg head "$head_sha" \
+    '.pull_requests | any(.number == $pr and .base.sha == $base and .head.sha == $head)' \
+    <<< "$run_json" >/dev/null || {
+    echo 'pre-review-authority-error: PRECHECK run is not bound to the exact PR/base/head' >&2
+    exit 1
+  }
+else
+  gh api "repos/$repo/pulls/$pr_number" > "$pr_json"
+  require_value pr-state "$(jq -r '.state' "$pr_json")" open
+  require_value pr-base "$(jq -r '.base.sha' "$pr_json")" "$base_sha"
+  require_value pr-head "$(jq -r '.head.sha' "$pr_json")" "$head_sha"
+fi
 
 gh api "repos/$repo/actions/runs/$run_id/jobs?per_page=100" > "$jobs_json"
 jq -e '[.jobs[] | select(.name == "Risk-tiered PRECHECK / deterministic contracts")] | length == 1 and .[0].conclusion == "success"' "$jobs_json" >/dev/null || {
   echo 'pre-review-authority-error: PRECHECK job did not succeed' >&2
   exit 1
 }
-jq -e '[.jobs[] | select(.name == "Required CI")] | length == 1 and .[0].conclusion == "skipped"' "$jobs_json" >/dev/null || {
-  echo 'pre-review-authority-error: PRECHECK run did not emit exactly one skipped Required CI' >&2
+jq -e '[.jobs[] | select(.name == "Required CI")] | length == 0' "$jobs_json" >/dev/null || {
+  echo 'pre-review-authority-error: PRECHECK run published the protected Required CI context' >&2
+  exit 1
+}
+jq -e '[.jobs[] | select(.name == "PRECHECK authority only")] | length == 1 and .[0].conclusion == "success"' "$jobs_json" >/dev/null || {
+  echo 'pre-review-authority-error: PRECHECK authority-only topology did not succeed' >&2
   exit 1
 }
 

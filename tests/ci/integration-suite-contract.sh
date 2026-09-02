@@ -45,6 +45,7 @@ medium_list=$("$runner" MEDIUM_DOMAIN FINAL --list)
 deep_precheck_list=$("$runner" HIGH_DEEP PRECHECK --list)
 deep_final_list=$("$runner" HIGH_DEEP FINAL --list)
 financial_list=$("$runner" HIGH_FINANCIAL FINAL --list)
+financial_precheck_list=$("$runner" HIGH_FINANCIAL PRECHECK --list)
 
 printf '%s\n' "$medium_list" | grep -Fxq 'tests/integration/order-actions-launcher-row-smoke.php'
 printf '%s\n' "$deep_precheck_list" | grep -Fxq 'tests/integration/governance-smoke.php'
@@ -56,6 +57,24 @@ printf '%s\n' "$financial_list" | grep -Fxq 'tests/integration/duplicate-smoke.p
 printf '%s\n' "$financial_list" | grep -Fxq 'tests/integration/return-enabled-production-smoke.php'
 printf '%s\n' "$financial_list" | grep -Fxq 'tests/integration/bulk-return-enabled-controller-smoke.php'
 printf '%s\n' "$financial_list" | grep -Fxq 'tests/integration/order-actions-launcher-row-smoke.php'
+printf '%s\n' "$financial_precheck_list" | grep -Fxq 'tests/integration/operation-control-smoke.php'
+
+# A stronger financial profile must retain every deep affected-domain suite.
+while IFS= read -r deep_suite; do
+  printf '%s\n' "$financial_list" | grep -Fxq "$deep_suite"
+done <<< "$deep_final_list"
+for affected_suite in \
+  tests/integration/operation-control-smoke.php \
+  tests/integration/lease-operation-binding-smoke.php \
+  tests/integration/return-recovery-foundation-smoke.php \
+  tests/integration/return-service-adapter-smoke.php \
+  tests/integration/return-review-confirm-authority-smoke.php \
+  tests/integration/bulk-return-fail-stop-smoke.php \
+  tests/integration/bulk-return-partial-eligibility-smoke.php \
+  tests/integration/bulk-return-near-limit-smoke.php \
+  tests/integration/source-save-crash-smoke.php; do
+  printf '%s\n' "$financial_list" | grep -Fxq "$affected_suite"
+done
 
 # Escaped-bug regression capital remains routed into durable suites.
 grep -Fq 'cancelling nonzero per-rate taxes' "$repo_root/tests/integration/compat-merge-financial-history-smoke.php"

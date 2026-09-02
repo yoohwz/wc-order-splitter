@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: Open PR number to certify after PRE_REVIEW_CLEAN
+        description: Open PR number to inspect or certify
         required: true
         type: string
       task_id:
@@ -19,25 +19,33 @@ on:
         required: true
         type: string
       expected_head_sha:
-        description: Exact unchanged PR head authorized for FINAL certification
+        description: Exact unchanged PR head authorized for this stage
         required: true
         type: string
       requested_profile:
-        description: Profile request; classifier may raise it and never lower its machine floor
+        description: Canonical Task Capsule CI profile floor; classifier may only raise it
         required: true
         type: choice
         options:
+          - LOW_FOCUSED
           - MEDIUM_DOMAIN
           - HIGH_DEEP
           - HIGH_FINANCIAL
           - RELEASE_CERT
-      pre_review_authority:
-        description: Immutable issue-comment:ID or pr-review:ID containing PRE_REVIEW_CLEAN
+      certification_stage:
+        description: PRECHECK before review/evidence or FINAL certification
         required: true
+        type: choice
+        options:
+          - PRECHECK
+          - FINAL
+      pre_review_authority:
+        description: FINAL-only immutable issue-comment:ID or pr-review:ID containing PRE_REVIEW_CLEAN when review is required
+        required: false
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -84,6 +92,8 @@ jobs:
           INPUT_TASK_ID: ${{ inputs.task_id }}
           INPUT_TASK_ISSUE_NUMBER: ${{ inputs.task_issue_number }}
           EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+          INPUT_REQUESTED_PROFILE: ${{ inputs.requested_profile }}
+          INPUT_CERTIFICATION_STAGE: ${{ inputs.certification_stage }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == pull_request ]]; then
@@ -106,6 +116,8 @@ jobs:
           [[ "$INPUT_TASK_ID" =~ ^WOS-[A-Z0-9-]+$ ]]
           [[ "$INPUT_TASK_ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]]
           [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          case "$INPUT_REQUESTED_PROFILE" in LOW_FOCUSED|MEDIUM_DOMAIN|HIGH_DEEP|HIGH_FINANCIAL|RELEASE_CERT) ;; *) exit 1 ;; esac
+          case "$INPUT_CERTIFICATION_STAGE" in PRECHECK|FINAL) ;; *) exit 1 ;; esac
           expected_head=$(printf '%s' "$EXPECTED_HEAD_SHA" | tr '[:upper:]' '[:lower:]')
           pr_json=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$INPUT_PR_NUMBER")
           test "$(jq -r '.state' <<< "$pr_json")" = open
@@ -115,11 +127,17 @@ jobs:
           head_ref=$(jq -r '.head.ref' <<< "$pr_json")
           test "$head_sha" = "$expected_head"
           test "$GITHUB_SHA" = "$expected_head"
+          pr_body=$(jq -r '.body // ""' <<< "$pr_json")
+          grep -Fqx -- "- Canonical Issue: #$INPUT_TASK_ISSUE_NUMBER" <<< "$pr_body"
+          grep -Fqx -- "- Task: \`$INPUT_TASK_ID\`" <<< "$pr_body"
           issue_json=$(gh api "repos/$GITHUB_REPOSITORY/issues/$INPUT_TASK_ISSUE_NUMBER")
           test "$(jq -r '.pull_request // empty' <<< "$issue_json")" = ''
           test "$(jq -r '.state' <<< "$issue_json")" = open
           test "$(jq -r '.author_association' <<< "$issue_json")" = OWNER
           jq -e --arg task "$INPUT_TASK_ID" '.title | contains($task)' <<< "$issue_json" >/dev/null
+          issue_body=$(jq -r '.body // ""' <<< "$issue_json")
+          grep -Fqx -- "- **Task:** \`$INPUT_TASK_ID\`" <<< "$issue_body"
+          grep -Fqx -- "- **CI profile floor:** \`$INPUT_REQUESTED_PROFILE\`" <<< "$issue_body"
           {
             printf 'pr_number=%s\n' "$INPUT_PR_NUMBER"
             printf 'task_id=%s\n' "$INPUT_TASK_ID"
@@ -138,6 +156,8 @@ jobs:
           PR_HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
           PR_HEAD_REF: ${{ steps.resolve.outputs.head_ref }}
           REQUESTED_PROFILE: ${{ inputs.requested_profile }}
+          REQUESTED_STAGE: ${{ inputs.certification_stage }}
+          PRE_REVIEW_AUTHORITY: ${{ inputs.pre_review_authority }}
         run: |
           set -euo pipefail
           test -n "$PR_BASE_SHA"
@@ -191,14 +211,28 @@ jobs:
           test "$stage" = PRECHECK || test "$stage" = FINAL
           test -n "$storage_matrix"
 
-          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
-            test "$review_required" = true
-            case "$profile" in MEDIUM_DOMAIN|HIGH_DEEP|HIGH_FINANCIAL|RELEASE_CERT) ;; *) exit 1 ;; esac
-            stage=FINAL
-            case "$profile" in
-              MEDIUM_DOMAIN) storage_matrix='["hpos"]' ;;
-              *) storage_matrix='["legacy","hpos","hpos-sync"]' ;;
-            esac
+          if [[ "$EVENT_NAME" == pull_request && "$profile" != FULL && "$profile" != DIRECT_CSS_FAST && "$profile" != DIRECT_FAST ]]; then
+            stage=PRECHECK
+            storage_matrix='["hpos"]'
+          elif [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            case "$profile" in LOW_FOCUSED|MEDIUM_DOMAIN|HIGH_DEEP|HIGH_FINANCIAL|RELEASE_CERT) ;; *) exit 1 ;; esac
+            if [[ "$REQUESTED_STAGE" == PRECHECK ]]; then
+              test -z "$PRE_REVIEW_AUTHORITY"
+              stage=PRECHECK
+              storage_matrix='["hpos"]'
+            else
+              stage=FINAL
+              if [[ "$review_required" == true ]]; then
+                test -n "$PRE_REVIEW_AUTHORITY"
+              else
+                test -z "$PRE_REVIEW_AUTHORITY"
+              fi
+              case "$profile" in
+                LOW_FOCUSED) storage_matrix='["none"]' ;;
+                MEDIUM_DOMAIN) storage_matrix='["hpos"]' ;;
+                *) storage_matrix='["legacy","hpos","hpos-sync"]' ;;
+              esac
+            fi
           fi
 
           {
@@ -1181,8 +1215,7 @@ jobs:
     name: Risk-tiered PRECHECK / deterministic contracts
     needs: classify-pr-scope
     if: >-
-      needs['classify-pr-scope'].outputs.stage == 'PRECHECK' &&
-      needs['classify-pr-scope'].outputs.review_required == 'true'
+      needs['classify-pr-scope'].outputs.stage == 'PRECHECK'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout complete authority graph
@@ -1347,6 +1380,7 @@ jobs:
           TASK_ISSUE_NUMBER: ${{ needs['classify-pr-scope'].outputs.task_issue_number }}
           PR_BASE_SHA: ${{ needs['classify-pr-scope'].outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs['classify-pr-scope'].outputs.head_sha }}
+          CI_PROFILE: ${{ needs['classify-pr-scope'].outputs.profile }}
           PRE_REVIEW_AUTHORITY: ${{ inputs.pre_review_authority }}
         run: |
           set -euo pipefail
@@ -1359,7 +1393,7 @@ jobs:
           git show "$PR_BASE_SHA:.github/scripts/verify-pre-review-authority.sh" > "$verifier"
           git show "$PR_BASE_SHA:.github/scripts/validate-pre-review-record.sh" > "$validator"
           chmod +x "$verifier" "$validator"
-          WCOS_PRE_REVIEW_VALIDATOR="$validator" "$verifier" "$GITHUB_REPOSITORY" "$PR_NUMBER" "$TASK_ID" "$TASK_ISSUE_NUMBER" "$PR_BASE_SHA" "$PR_HEAD_SHA" "$head_tree" "$PRE_REVIEW_AUTHORITY"
+          WCOS_PRE_REVIEW_VALIDATOR="$validator" "$verifier" "$GITHUB_REPOSITORY" "$PR_NUMBER" "$TASK_ID" "$TASK_ISSUE_NUMBER" "$PR_BASE_SHA" "$PR_HEAD_SHA" "$head_tree" "$CI_PROFILE" "$PRE_REVIEW_AUTHORITY"
           echo 'final-authority-artifacts=0'
 
   direct-css-fast:
@@ -1428,12 +1462,8 @@ jobs:
           echo 'direct-css-fast-artifacts=0'
 
   required:
-    name: Required CI
-    if: >-
-      always() &&
-      (needs['classify-pr-scope'].outputs.profile == 'FULL' ||
-      needs['classify-pr-scope'].outputs.profile == 'DIRECT_CSS_FAST' ||
-      needs['classify-pr-scope'].outputs.stage == 'FINAL')
+    name: ${{ (needs['classify-pr-scope'].outputs.profile == 'FULL' || needs['classify-pr-scope'].outputs.profile == 'DIRECT_CSS_FAST' || needs['classify-pr-scope'].outputs.stage == 'FINAL') && 'Required CI' || 'PRECHECK authority only' }}
+    if: always()
     needs:
       - classify-pr-scope
       - php-syntax
@@ -1453,6 +1483,10 @@ jobs:
           fetch-depth: 0
 
       - name: Verify all required jobs passed
+        if: >-
+          needs['classify-pr-scope'].outputs.profile == 'FULL' ||
+          needs['classify-pr-scope'].outputs.profile == 'DIRECT_CSS_FAST' ||
+          needs['classify-pr-scope'].outputs.stage == 'FINAL'
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ needs['classify-pr-scope'].outputs.base_sha }}
@@ -1506,3 +1540,53 @@ jobs:
               "$INTEGRATION_RESULT" \
               "$DIRECT_CSS_FAST_RESULT"
           fi
+
+      - name: Verify PRECHECK topology without publishing protected authority
+        if: >-
+          needs['classify-pr-scope'].outputs.profile != 'FULL' &&
+          needs['classify-pr-scope'].outputs.profile != 'DIRECT_CSS_FAST' &&
+          needs['classify-pr-scope'].outputs.stage == 'PRECHECK'
+        env:
+          PR_BASE_SHA: ${{ needs['classify-pr-scope'].outputs.base_sha }}
+          CLASSIFIER_RESULT: ${{ needs['classify-pr-scope'].result }}
+          CI_PROFILE: ${{ needs['classify-pr-scope'].outputs.profile }}
+          CI_STAGE: ${{ needs['classify-pr-scope'].outputs.stage }}
+          REVIEW_REQUIRED: ${{ needs['classify-pr-scope'].outputs.review_required }}
+          PHP_SYNTAX_RESULT: ${{ needs['php-syntax'].result }}
+          FOUNDATION_RESULT: ${{ needs['foundation-contract'].result }}
+          PACKAGE_RESULT: ${{ needs['package-check'].result }}
+          INTEGRATION_RESULT: ${{ needs['integration-smoke'].result }}
+          FOCUSED_RESULT: ${{ needs['focused-contract'].result }}
+          PROFILE_INTEGRATION_RESULT: ${{ needs['profile-integration'].result }}
+          PRECHECK_RESULT: ${{ needs['precheck'].result }}
+          DIRECT_CSS_FAST_RESULT: ${{ needs['direct-css-fast'].result }}
+          FINAL_AUTHORITY_RESULT: ${{ needs['final-authority'].result }}
+        run: |
+          set -euo pipefail
+          verifier="$RUNNER_TEMP/verify-precheck-ci.sh"
+          git cat-file -e "$PR_BASE_SHA:.github/scripts/verify-precheck-ci.sh"
+          git show "$PR_BASE_SHA:.github/scripts/verify-precheck-ci.sh" > "$verifier"
+          chmod +x "$verifier"
+          "$verifier" \
+            "$CLASSIFIER_RESULT" \
+            "$CI_PROFILE" \
+            "$CI_STAGE" \
+            "$REVIEW_REQUIRED" \
+            "$PHP_SYNTAX_RESULT" \
+            "$FOUNDATION_RESULT" \
+            "$PACKAGE_RESULT" \
+            "$INTEGRATION_RESULT" \
+            "$FOCUSED_RESULT" \
+            "$PROFILE_INTEGRATION_RESULT" \
+            "$PRECHECK_RESULT" \
+            "$DIRECT_CSS_FAST_RESULT" \
+            "$FINAL_AUTHORITY_RESULT"
+
+      - name: Reject unresolved certification topology
+        if: >-
+          needs['classify-pr-scope'].result != 'success' ||
+          (needs['classify-pr-scope'].outputs.profile != 'FULL' &&
+          needs['classify-pr-scope'].outputs.profile != 'DIRECT_CSS_FAST' &&
+          needs['classify-pr-scope'].outputs.stage != 'PRECHECK' &&
+          needs['classify-pr-scope'].outputs.stage != 'FINAL')
+        run: exit 1

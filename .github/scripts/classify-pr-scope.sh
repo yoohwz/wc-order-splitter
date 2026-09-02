@@ -91,10 +91,12 @@ while IFS= read -r -d '' status; do
   changed_count=$((changed_count + 1))
   printf '%s\t%s\n' "$status" "$path" >> "$changed_paths"
 
-  if [[ "$path" =~ ^css/ && "$status" != D ]]; then
-    generic_head_entry=$(git ls-tree "$head_sha" -- "$path" || true)
-    generic_head_mode=${generic_head_entry%% *}
-    if [[ -z "$generic_head_entry" || "$generic_head_mode" != 100644 || "$(git cat-file -t "$head_sha:$path" 2>/dev/null || true)" != blob ]]; then
+  if [[ "$path" =~ ^css/ ]]; then
+    generic_ref=$head_sha
+    [[ "$status" == D ]] && generic_ref=$base_sha
+    generic_entry=$(git ls-tree "$generic_ref" -- "$path" || true)
+    generic_mode=${generic_entry%% *}
+    if [[ -z "$generic_entry" || "$generic_mode" != 100644 || "$(git cat-file -t "$generic_ref:$path" 2>/dev/null || true)" != blob ]]; then
       css_ambiguity_trigger=true
     else
       generic_numstat=$(git diff --numstat --no-ext-diff --no-textconv "$base_sha" "$head_sha" -- "$path" || true)
@@ -103,7 +105,7 @@ while IFS= read -r -d '' status; do
       generic_deletions=${generic_rest%%$'\t'*}
       if [[ ! "$generic_additions" =~ ^[0-9]+$ || ! "$generic_deletions" =~ ^[0-9]+$ ]]; then
         css_ambiguity_trigger=true
-      elif git show "$head_sha:$path" > "$resulting_file"; then
+      elif git show "$generic_ref:$path" > "$resulting_file"; then
         if [[ "$(sed -n '1p' "$resulting_file")" == 'version https://git-lfs.github.com/spec/v1' ]]; then
           css_ambiguity_trigger=true
         fi
@@ -115,6 +117,11 @@ while IFS= read -r -d '' status; do
         if LC_ALL=C grep -Fq -- '\' "$resulting_file" \
           || perl -0777 -ne '$unsafe ||= /[\x00-\x08\x0b-\x1f\x7f]/; END { exit($unsafe ? 0 : 1) }' "$resulting_file"; then
           css_ambiguity_trigger=true
+        fi
+        if [[ "$status" == A || "$status" == D ]] \
+          && { LC_ALL=C grep -Eiq '(display|visibility|opacity|pointer-events|position|z-index|overflow|clip|transform|width|height|inset|top|right|bottom|left|cursor|content)[[:space:]]*:' "$resulting_file" \
+            || LC_ALL=C grep -Eiq '(:focus|:disabled|\[aria-|\.is-|\.has-|warning|error|confirm|action|button|submit|busy|locked|hidden)' "$resulting_file"; }; then
+          css_control_trigger=true
         fi
       else
         css_ambiguity_trigger=true
@@ -258,12 +265,18 @@ else
         ;;
     esac
 
-    if [[ "$path" == *financial* || "$path" == *refund* || "$path" == *payment* || "$path" == *price* \
+    if [[ "$path" == inc/domain/class-wcos-merge-commercial-policy.php \
+      || "$path" == inc/domain/class-wcos-merge-plan.php \
+      || "$path" == inc/domain/class-wcos-merge-preflight.php \
+      || "$path" == inc/domain/class-wcos-merge-order-service.php \
+      || "$path" == inc/domain/class-wcos-merge-recovery-snapshot.php \
+      || "$path" == inc/domain/class-wcos-merge-journal-context.php \
+      || "$path" == *financial* || "$path" == *refund* || "$path" == *payment* || "$path" == *price* \
       || "$path" == *money* || "$path" == *reduced-stock* || "$path" == *stock-marker* \
       || "$path" == *order-totals* || "$path" == *tax-variation* ]] \
       || git diff --unified=0 --no-ext-diff "$base_sha" "$head_sha" -- "$path" \
         | sed -n '/^[+-][^+-]/p' \
-        | LC_ALL=C grep -Eiq '(^|[^[:alnum:]])(total|totals|subtotal|fee|fees|coupon|coupons|transaction|currency|amount|tax|taxes|refund|payment|price|money|_reduced_stock|stock)([^[:alnum:]]|$)'; then
+        | LC_ALL=C grep -Eiq '(^|[^[:alnum:]])(financial|settlement|total|totals|subtotal|fee|fees|coupon|coupons|transaction|currency|amount|tax|taxes|refund|payment|price|money|_reduced_stock|stock)([^[:alnum:]]|$)'; then
       raise_floor 4 financial_or_stock_authority financial
       continue
     fi

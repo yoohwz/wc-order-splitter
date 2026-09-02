@@ -9,6 +9,7 @@ task_issue_number=${4:-}
 base_sha=${5:-}
 head_sha=${6:-}
 head_tree=${7:-}
+expected_profile=${8:-}
 
 [[ -f "$body_file" ]] || { echo 'pre-review-record-error: body file is missing' >&2; exit 1; }
 [[ "$task_id" =~ ^WOS-[A-Z0-9-]+$ ]] || { echo 'pre-review-record-error: invalid task ID' >&2; exit 1; }
@@ -17,6 +18,11 @@ head_tree=${7:-}
 for sha in "$base_sha" "$head_sha" "$head_tree"; do
   [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'pre-review-record-error: invalid exact SHA/tree' >&2; exit 1; }
 done
+case "$expected_profile" in MEDIUM_DOMAIN|HIGH_DEEP|HIGH_FINANCIAL|RELEASE_CERT) ;; *)
+  echo 'pre-review-record-error: invalid expected PRECHECK profile' >&2
+  exit 1
+  ;;
+esac
 
 require_unique_line() {
   local line=$1
@@ -54,11 +60,11 @@ last_nonempty=$(awk 'NF { line=$0 } END { print line }' "$body_file")
   echo 'pre-review-record-error: clean terminal must be the last nonempty line' >&2
   exit 1
 }
-if grep -Eq '^[[:space:]]*(```|>)' "$body_file"; then
+if grep -Eiq '(```|~~~|<!--|-->)|^[[:space:]]*(>|</?(blockquote|pre|code)([[:space:]>]))' "$body_file"; then
   echo 'pre-review-record-error: quoted or fenced authority is not accepted' >&2
   exit 1
 fi
-if grep -Eq '^(PRE_REVIEW_CHANGES_REQUIRED|TECHNICAL_ACCEPTED|TECHNICAL_CHANGES_REQUIRED):' "$body_file"; then
+if grep -Eq '(PRE_REVIEW_CHANGES_REQUIRED|TECHNICAL_ACCEPTED|TECHNICAL_CHANGES_REQUIRED):' "$body_file"; then
   echo 'pre-review-record-error: conflicting review outcome is present' >&2
   exit 1
 fi
@@ -75,6 +81,7 @@ require_unique_line "Canonical Issue: #$task_issue_number"
 require_unique_line "Exact base: $base_sha"
 require_unique_line "Exact head: $head_sha"
 require_unique_line "Exact head tree: $head_tree"
+require_unique_line "PRECHECK profile: $expected_profile / stage PRECHECK"
 require_unique_line "$terminal"
 
 for prefix in \
@@ -89,6 +96,7 @@ for prefix in \
   'Exact base:' \
   'Exact head:' \
   'Exact head tree:' \
+  'PRECHECK profile:' \
   'PRE_REVIEW_CLEAN:'; do
   require_unique_prefix "$prefix"
 done

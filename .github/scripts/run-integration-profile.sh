@@ -12,8 +12,8 @@ case "$profile/$stage" in
   MEDIUM_DOMAIN/FINAL) wanted='medium,sentinel' ;;
   HIGH_DEEP/PRECHECK) wanted='precheck,sentinel' ;;
   HIGH_DEEP/FINAL) wanted='deep,sentinel' ;;
-  HIGH_FINANCIAL/PRECHECK) wanted='precheck-financial,sentinel' ;;
-  HIGH_FINANCIAL/FINAL) wanted='financial,sentinel' ;;
+  HIGH_FINANCIAL/PRECHECK) wanted='precheck,precheck-financial,sentinel' ;;
+  HIGH_FINANCIAL/FINAL) wanted='deep,financial,sentinel' ;;
   RELEASE_CERT/PRECHECK) wanted='precheck,precheck-financial,sentinel' ;;
   *)
     echo "integration-profile-error: unsupported profile/stage $profile/$stage" >&2

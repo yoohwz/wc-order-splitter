@@ -36,7 +36,7 @@ If the request is outside the direct envelope, Codex makes no source edit and st
 - `Thực hiện <TASK_ID>`
 - `Execute <TASK_ID>`
 
-Meaning: resolve the canonical task and execute its complete assurance/profile loop. LOW/no-trigger MEDIUM runs focused FINAL CI and persists Executor evidence. Review-required MEDIUM/HIGH runs PRECHECK, fresh Independent PRE_REVIEW, bounded correction, stale-safe FINAL, and review-bound Technical Acceptance. Source-bound legacy/bootstrap tasks retain their current FULL review sequence. If required reviewer separation is unavailable, stop `INDEPENDENT_REVIEW_DISPATCH_REQUIRED`; a fourth head-changing cycle stops `TECHNICAL_ESCALATION_REQUIRED`.
+Meaning: resolve the canonical task and execute its complete assurance/profile loop. Ordinary normal pushes emit only non-protected `PRECHECK authority only`; task-bound dispatch authenticates the Task Capsule CI floor. LOW/no-trigger MEDIUM then runs focused FINAL CI and persists Executor evidence. Review-required MEDIUM/HIGH runs task-raised PRECHECK where needed, fresh Independent PRE_REVIEW, bounded correction, stale-safe FINAL, and review-bound Technical Acceptance. Source-bound legacy/bootstrap tasks retain their current FULL review sequence. If required reviewer separation is unavailable, stop `INDEPENDENT_REVIEW_DISPATCH_REQUIRED`; a fourth head-changing cycle stops `TECHNICAL_ESCALATION_REQUIRED`.
 
 ### Resume
 
