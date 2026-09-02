@@ -79,6 +79,7 @@ fi
 direct_safe=true
 css_security_trigger=false
 css_ambiguity_trigger=false
+css_control_trigger=false
 changed_count=0
 while IFS= read -r -d '' status; do
   if ! IFS= read -r -d '' path; then
@@ -129,6 +130,26 @@ while IFS= read -r -d '' status; do
     continue
   fi
 
+  direct_declaration_changes=0
+  while IFS= read -r diff_line; do
+    case "$diff_line" in
+      '--- '*|'+++ '*|'@@ '*) continue ;;
+      +*|-*)
+        declaration=${diff_line:1}
+        if [[ "$declaration" =~ ^[[:space:]]*border-radius:[[:space:]]*(0|[0-9]+([.][0-9]+)?(px|rem|em|%))[[:space:]]*\;[[:space:]]*$ ]]; then
+          direct_declaration_changes=$((direct_declaration_changes + 1))
+        else
+          direct_safe=false
+          if [[ "$declaration" =~ (display|visibility|opacity|pointer-events|position|z-index|overflow|clip|transform|width|height|inset|top|right|bottom|left|cursor|content)[[:space:]]*: ]] \
+            || [[ "$declaration" =~ (:focus|:disabled|\[aria-|\.is-|\.has-|warning|error|confirm|action|button|submit|busy|locked|hidden) ]]; then
+            css_control_trigger=true
+          fi
+        fi
+        ;;
+    esac
+  done < <(git diff --unified=0 --no-ext-diff --no-textconv "$base_sha" "$head_sha" -- "$path")
+  [[ "$direct_declaration_changes" -gt 0 ]] || direct_safe=false
+
   base_entry=$(git ls-tree "$base_sha" -- "$path") || direct_safe=false
   head_entry=$(git ls-tree "$head_sha" -- "$path") || direct_safe=false
   if [[ -z "$base_entry" || -z "$head_entry" ]]; then
@@ -157,6 +178,10 @@ while IFS= read -r -d '' status; do
     direct_safe=false
     css_ambiguity_trigger=true
     continue
+  fi
+  if [[ "$additions" -eq 0 || "$additions" -ne "$deletions" \
+    || "$direct_declaration_changes" -ne $((additions + deletions)) ]]; then
+    direct_safe=false
   fi
   if ! git show "$head_sha:$path" > "$resulting_file"; then
     direct_safe=false
@@ -229,10 +254,21 @@ else
     case "$path" in
       wc-order-splitter.php|readme.txt|.distignore|package.json|package-lock.json|.github/workflows/build-plugin.yml|.github/workflows/main-attestation.yml|.github/scripts/validate-distribution-contract.sh|tests/ci/distribution-contract.sh)
         raise_floor 5 release_or_package_authority release
+        continue
         ;;
-      *financial*|*refund*|*payment*|*tax*|*price*|*money*|*reduced-stock*|*stock-marker*)
-        raise_floor 4 financial_or_stock_authority financial
-        ;;
+    esac
+
+    if [[ "$path" == *financial* || "$path" == *refund* || "$path" == *payment* || "$path" == *price* \
+      || "$path" == *money* || "$path" == *reduced-stock* || "$path" == *stock-marker* \
+      || "$path" == *order-totals* || "$path" == *tax-variation* ]] \
+      || git diff --unified=0 --no-ext-diff "$base_sha" "$head_sha" -- "$path" \
+        | sed -n '/^[+-][^+-]/p' \
+        | LC_ALL=C grep -Eiq '(^|[^[:alnum:]])(total|totals|subtotal|fee|fees|coupon|coupons|transaction|currency|amount|tax|taxes|refund|payment|price|money|_reduced_stock|stock)([^[:alnum:]]|$)'; then
+      raise_floor 4 financial_or_stock_authority financial
+      continue
+    fi
+
+    case "$path" in
       .github/*|tests/ci/*|AGENTS.md|docs/*)
         raise_floor 3 governance_or_ci_control_plane control-plane
         ;;
@@ -241,13 +277,12 @@ else
         ;;
       js/*)
         raise_floor 2 bounded_client_runtime client-ui
-        if git diff --unified=0 --no-ext-diff "$base_sha" "$head_sha" -- "$path" \
-          | LC_ALL=C grep -Eiq '(ajax|rest|fetch|nonce|capabilit|permission|persist|storage|meta|status|webhook|email|replay|recovery|state[_ -]?machine|expected|assert)'; then
-          medium_review_trigger=true
-        fi
+        # No current JavaScript sub-envelope mechanically proves absence of
+        # client/server mutation or outbound authority, so ambiguity reviews.
+        medium_review_trigger=true
         ;;
       css/*|languages/*)
-        if [[ "$css_security_trigger" == true ]]; then
+        if [[ "$css_security_trigger" == true || "$css_control_trigger" == true ]]; then
           raise_floor 3 css_security_semantics security
         elif [[ "$css_ambiguity_trigger" == true ]]; then
           raise_floor 3 css_object_or_escape_ambiguity unknown

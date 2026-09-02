@@ -103,7 +103,7 @@ On failure it records `ACCEPTANCE_CHANGES_REQUIRED` or `TECHNICAL_REVIEW_FOLLOWU
 
 ### DIRECT_FAST
 
-Strict base/head object and lexical direct envelope, exact diff, classifier/aggregator/workflow regressions, unchanged runtime/gate/version/package/control-plane proof, artifacts=0.
+Strict base/head object and lexical direct envelope, exact diff limited to paired numeric `border-radius` declaration edits, classifier/aggregator/workflow regressions, unchanged runtime/gate/version/package/control-plane proof, artifacts=0.
 
 ### LOW_FOCUSED
 
@@ -119,7 +119,7 @@ PRECHECK then Independent PRE_REVIEW; FINAL includes PHP/architecture/package ev
 
 ### HIGH_FINANCIAL
 
-PRECHECK then Independent PRE_REVIEW; FINAL includes money/tax/payment/refund/stock/replay/recovery evidence across legacy/HPOS/HPOS-sync, real-worker lease exclusion, sentinels, artifacts=0.
+PRECHECK then Independent PRE_REVIEW; FINAL includes money/tax/payment/refund/stock/replay/recovery evidence across legacy/HPOS/HPOS-sync, real-worker lease exclusion, sentinels, artifacts=0. Classification uses explicit sensitive paths plus conservative changed-content guards so generic runtime filenames cannot bypass this profile.
 
 ### RELEASE_CERT
 

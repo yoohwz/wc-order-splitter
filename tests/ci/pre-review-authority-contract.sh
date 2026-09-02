@@ -18,6 +18,8 @@ tree=3333333333333333333333333333333333333333
 
 write_valid_record() {
   {
+    echo "## Independent Codex PRE_REVIEW — $task"
+    echo
     echo 'Role: independent_codex_reviewer'
     echo 'Fresh context: yes'
     echo 'Executor session reused: no'
@@ -62,6 +64,28 @@ printf '%s\n' 'PRECHECK run: 987655 / completed/success / artifacts=0' >> "$reco
 expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree"
 
 write_valid_record
+printf '%s\n' 'Blocking findings: copied clean signal' >> "$record"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree"
+
+write_valid_record
+printf '%s\n' "PRE_REVIEW_CHANGES_REQUIRED: $task / PR #$pr / exact head $head" >> "$record"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree"
+
+write_valid_record
+printf '%s\n' "PRE_REVIEW_CLEAN: $task / PR #$pr / exact head $head" >> "$record"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree"
+
+write_valid_record
+{ echo '```text'; cat "$record"; echo '```'; } > "$record.tmp"
+mv "$record.tmp" "$record"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree"
+
+write_valid_record
+sed 's/^Role:/> Role:/' "$record" > "$record.tmp"
+mv "$record.tmp" "$record"
+expect_failure "$validator" "$record" "$task" "$pr" "$issue" "$base" "$head" "$tree"
+
+write_valid_record
 cat > "$mock_bin/gh" <<'MOCK_GH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -70,6 +94,10 @@ endpoint=${2:-}
 case "$endpoint" in
   repos/fixture/repo/issues/comments/42)
     jq -n --rawfile body "$MOCK_RECORD" '{author_association:"OWNER",issue_url:"https://api.github.test/repos/fixture/repo/issues/654",body:$body}'
+    ;;
+  repos/fixture/repo/pulls/321/reviews/43)
+    jq -n --rawfile body "$MOCK_RECORD" --arg commit_id "${MOCK_REVIEW_COMMIT:-2222222222222222222222222222222222222222}" \
+      '{author_association:"OWNER",commit_id:$commit_id,body:$body}'
     ;;
   repos/fixture/repo/actions/runs/987654)
     jq -n \
@@ -96,6 +124,12 @@ chmod +x "$mock_bin/gh"
 PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" WCOS_PRE_REVIEW_VALIDATOR="$validator" \
   "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" issue-comment:42 \
   | grep -Fq 'pre-review-authority-ok'
+PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" WCOS_PRE_REVIEW_VALIDATOR="$validator" \
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" pr-review:43 \
+  | grep -Fq 'pre-review-authority-ok'
+
+expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD="$head" MOCK_REVIEW_COMMIT=4444444444444444444444444444444444444444 WCOS_PRE_REVIEW_VALIDATOR="$validator" \
+  "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" pr-review:43
 
 expect_failure env PATH="$mock_bin:$PATH" MOCK_RECORD="$record" MOCK_HEAD=4444444444444444444444444444444444444444 WCOS_PRE_REVIEW_VALIDATOR="$validator" \
   "$authority_verifier" fixture/repo "$pr" "$task" "$issue" "$base" "$head" "$tree" issue-comment:42

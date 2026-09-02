@@ -52,7 +52,7 @@ For review-first candidates it persists one immutable structured GitHub record p
 - `PRE_REVIEW_CLEAN: <TASK_ID> / PR #N / exact head <SHA>`; or
 - `PRE_REVIEW_CHANGES_REQUIRED: <TASK_ID> / PR #N / exact head <SHA>`.
 
-The record must include `Role: independent_codex_reviewer`, `Canonical Issue: #N`, fresh-context and executor-session-not-reused attestations, source read-only/no-implementation-write, complete-diff and PRECHECK-evidence-reviewed attestations, exact base/head/tree, PRECHECK run completed/success/artifacts=0, blocking findings, and reproduction evidence. A head change invalidates it.
+The record must begin with the canonical `## Independent Codex PRE_REVIEW — <TASK_ID>` header and end with exactly one canonical outcome. It must include exactly one `Role: independent_codex_reviewer`, `Canonical Issue: #N`, fresh-context and executor-session-not-reused attestations, source read-only/no-implementation-write, complete-diff and PRECHECK-evidence-reviewed attestations, exact base/head/tree, PRECHECK run completed/success/artifacts=0, blocking findings, and reproduction evidence. Conflicting, duplicate, quoted, or fenced outcomes are invalid. A PR review record must bind GitHub's immutable `commit_id` to the exact reviewed head; any head change invalidates it.
 
 After clean review, FINAL CI is mechanical. A second complete source reread is unnecessary when the head/tree is unchanged. FINAL failure requiring source change returns to new PRECHECK plus complete fresh PRE_REVIEW. A failure caused only by transient infrastructure may be rerun only after exact authority is revalidated.
 

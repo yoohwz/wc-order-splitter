@@ -6,6 +6,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 ci_workflow="$repo_root/.github/workflows/ci.yml"
 main_workflow="$repo_root/.github/workflows/main-attestation.yml"
 package_workflow="$repo_root/.github/workflows/build-plugin.yml"
+distribution_script="$repo_root/.github/scripts/validate-distribution-contract.sh"
 agents_contract="$repo_root/AGENTS.md"
 short_contract="$repo_root/docs/codex-short-command-protocol.md"
 review_contract="$repo_root/docs/engineering-review-authority.md"
@@ -55,6 +56,7 @@ assert_contains "$ci_workflow" 'issues: read'
 assert_contains "$ci_workflow" 'pull-requests: read'
 
 assert_contains "$ci_workflow" 'name: Classify PR CI profile'
+assert_contains "$ci_workflow" 'classify-pr-scope:'
 assert_contains "$ci_workflow" 'name: Resolve exact PR authority'
 assert_contains "$ci_workflow" 'pr_json=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$INPUT_PR_NUMBER")'
 assert_contains "$ci_workflow" 'test "$(jq -r '\''.base.ref'\'' <<< "$pr_json")" = main'
@@ -62,7 +64,9 @@ assert_contains "$ci_workflow" 'test "$head_sha" = "$expected_head"'
 assert_contains "$ci_workflow" 'test "$GITHUB_SHA" = "$expected_head"'
 assert_contains "$ci_workflow" 'gh api "repos/$GITHUB_REPOSITORY/issues/$INPUT_TASK_ISSUE_NUMBER"'
 assert_contains "$ci_workflow" 'git cat-file -e "$PR_BASE_SHA:.github/scripts/classify-pr-scope.sh"'
+assert_contains "$ci_workflow" 'reason=classifier_not_present_in_base'
 assert_contains "$ci_workflow" 'git show "$PR_BASE_SHA:.github/scripts/classify-pr-scope.sh" > "$base_classifier"'
+assert_occurrences "$ci_workflow" 'PR_HEAD_REF: ${{ github.head_ref }}' 1
 assert_contains "$ci_workflow" '"$base_classifier" pull_request "$PR_BASE_SHA" "$PR_HEAD_SHA" "$PR_HEAD_REF" "$classifier_output" "$REQUESTED_PROFILE"'
 assert_contains "$ci_workflow" 'REQUESTED_PROFILE: ${{ inputs.requested_profile }}'
 assert_contains "$ci_workflow" 'stage=FINAL'
@@ -88,6 +92,8 @@ assert_contains "$ci_workflow" 'WCOS_PRE_REVIEW_VALIDATOR="$validator" "$verifie
 assert_contains "$ci_workflow" 'final-authority-artifacts=0'
 
 assert_contains "$ci_workflow" 'name: Focused deterministic profile contract'
+assert_contains "$ci_workflow" 'direct-css-fast:'
+assert_contains "$ci_workflow" 'name: CODEX_DIRECT focused CSS contract'
 assert_contains "$ci_workflow" 'tests/ci/direct-css-fast-contract.sh'
 assert_contains "$ci_workflow" 'tests/ci/required-ci-profile-contract.sh'
 assert_contains "$ci_workflow" 'tests/ci/integration-suite-contract.sh'
@@ -100,20 +106,46 @@ assert_contains "$ci_workflow" "php: ['7.4', '8.1', '8.3']"
 assert_contains "$ci_workflow" 'storage: [legacy, hpos, hpos-sync]'
 assert_contains "$ci_workflow" 'baseline_sha=e1d8aeb8eff38f4ce69dad1a08993e17521c6359'
 assert_contains "$ci_workflow" 'baseline_tree=75140a414cd637d134f860d8a70e7f92cbe4853c'
+assert_contains "$ci_workflow" 'compat-legacy-1-4-11-create.php'
+assert_contains "$ci_workflow" 'compat-legacy-1-4-11-seal.php'
+assert_contains "$ci_workflow" 'compat-legacy-return-upgrade-smoke.php'
 assert_before "$ci_workflow" 'Create a genuine Split fixture with exact public 1.4.11' 'Activate Order Splitter after the in-place fixture upgrade'
+assert_before "$ci_workflow" 'Remove exact public 1.4.11 before current runtime validation' 'Activate Order Splitter after the in-place fixture upgrade'
+assert_contains "$ci_workflow" 'wp plugin delete wcos-legacy-1-4-11'
 assert_contains "$ci_workflow" 'compat-merge-financial-history-smoke.php'
+assert_contains "$ci_workflow" 'bulk-return-hard-off-coordinator-smoke.php'
+assert_contains "$ci_workflow" 'bulk-return-fail-stop-smoke.php'
+assert_contains "$ci_workflow" 'bulk-return-near-limit-smoke.php'
+assert_contains "$ci_workflow" 'bulk-return-confirm-race-worker.php'
+assert_contains "$ci_workflow" 'bulk-return-enabled-controller-smoke.php'
 assert_contains "$ci_workflow" 'bulk-return-execute-race-worker.php'
+assert_contains "$ci_workflow" 'Verify real concurrent overlapping Bulk Return current-row authority'
+assert_contains "$ci_workflow" 'name: Resolve wp-env CLI container for concurrent workers'
+assert_contains "$ci_workflow" "--filter 'label=com.docker.compose.service=cli'"
+assert_contains "$ci_workflow" 'docker inspect --format '\''{{.State.Status}}'\'' "$cli_container"'
 assert_occurrences "$ci_workflow" 'docker exec --workdir /var/www/html "$WCOS_WP_ENV_CLI_CONTAINER" wp eval-file "$worker"' 11
+assert_occurrences "$ci_workflow" 'worker_a_status=$?' 5
+assert_occurrences "$ci_workflow" 'worker_b_status=$?' 5
+assert_occurrences "$ci_workflow" 'printf '\''worker-a-status=%s\nworker-b-status=%s\n'\'' "$worker_a_status" "$worker_b_status"' 5
+assert_absent "$ci_workflow" 'npx wp-env run cli wp eval-file "$worker"'
+assert_contains "$ci_workflow" 'bulk-return-ui-readiness-smoke.php'
 
 assert_contains "$ci_workflow" 'name: Required CI'
 assert_contains "$ci_workflow" "needs['classify-pr-scope'].outputs.stage == 'FINAL'"
 assert_contains "$ci_workflow" 'CI_STAGE: ${{ needs['"'"'classify-pr-scope'"'"'].outputs.stage }}'
+assert_contains "$ci_workflow" 'CLASSIFIER_RESULT: ${{ needs['"'"'classify-pr-scope'"'"'].result }}'
+assert_contains "$ci_workflow" 'CI_PROFILE: ${{ needs['"'"'classify-pr-scope'"'"'].outputs.profile }}'
+assert_contains "$ci_workflow" 'CI_PROFILE_REASON: ${{ needs['"'"'classify-pr-scope'"'"'].outputs.reason }}'
 assert_contains "$ci_workflow" 'REVIEW_REQUIRED: ${{ needs['"'"'classify-pr-scope'"'"'].outputs.review_required }}'
 assert_contains "$ci_workflow" 'PROFILE_INTEGRATION_RESULT:'
 assert_contains "$ci_workflow" 'FINAL_AUTHORITY_RESULT:'
 assert_contains "$ci_workflow" 'git show "$PR_BASE_SHA:.github/scripts/verify-required-ci.sh" > "$aggregator"'
+assert_contains "$ci_workflow" 'cp .github/scripts/verify-required-ci.sh "$aggregator"'
+assert_contains "$ci_workflow" '"$aggregator" \'
 assert_contains "$ci_workflow" "grep -Fq 'risk-tiered-v1' \"\$aggregator\""
 assert_contains "$ci_workflow" 'DIRECT_CSS_FAST_RESULT:'
+assert_contains "$ci_workflow" 'merge_candidate_tree_sha=$(git rev-parse HEAD^{tree})'
+assert_contains "$ci_workflow" '.github/scripts/validate-distribution-contract.sh'
 assert_absent "$ci_workflow" 'actions/upload-artifact'
 assert_absent "$ci_workflow" 'wc-order-splitter.zip'
 
@@ -123,19 +155,49 @@ assert_contains "$main_workflow" '      - main'
 assert_contains "$main_workflow" '  workflow_dispatch:'
 assert_contains "$main_workflow" 'expected_sha:'
 assert_contains "$main_workflow" 'authority:'
+assert_occurrences "$main_workflow" '        required: true' 2
+assert_occurrences "$main_workflow" '        type: string' 2
+assert_contains "$main_workflow" 'group: main-attestation-${{ github.event_name }}-${{ github.sha }}'
+assert_contains "$main_workflow" "if: github.event_name == 'workflow_dispatch'"
+assert_occurrences "$main_workflow" "test \"\$GITHUB_REF\" = 'refs/heads/main'" 2
+assert_occurrences "$main_workflow" '[[ "$EXPECTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]]' 2
+assert_occurrences "$main_workflow" 'expected_sha="$(printf '\''%s'\'' "$EXPECTED_SHA" | tr '\''[:upper:]'\'' '\''[:lower:]'\'')"' 2
+assert_occurrences "$main_workflow" 'test "$GITHUB_SHA" = "$expected_sha"' 2
 assert_contains "$main_workflow" 'test "$checked_out_sha" = "$expected_sha"'
+assert_occurrences "$main_workflow" 'test -n "${ATTESTATION_AUTHORITY//[[:space:]]/}"' 2
 assert_contains "$main_workflow" 'git rev-parse HEAD^{tree}'
 assert_contains "$main_workflow" 'main_parent_shas=$(git show -s --format=%P HEAD)'
+assert_contains "$main_workflow" 'attestation_event_name=$GITHUB_EVENT_NAME'
+assert_contains "$main_workflow" 'attestation_run_attempt=$GITHUB_RUN_ATTEMPT'
+assert_contains "$main_workflow" 'attestation_authority=$ATTESTATION_AUTHORITY'
 assert_contains "$main_workflow" '.github/scripts/validate-distribution-contract.sh'
+assert_contains "$main_workflow" "grep -Fq 'self::BULK_RETURN => true' inc/domain/class-wcos-feature-gates.php"
+assert_absent "$main_workflow" "grep -Fq 'self::BULK_RETURN => false' inc/domain/class-wcos-feature-gates.php"
+assert_contains "$main_workflow" "test ! -e inc/backend/actions/return-order-bulk-action.php"
+assert_absent "$main_workflow" 'wc-order-splitter.zip'
 assert_absent "$main_workflow" 'actions/upload-artifact'
 
 assert_contains "$package_workflow" 'name: Manual package artifact'
 assert_contains "$package_workflow" 'workflow_dispatch:'
 assert_absent "$package_workflow" 'workflow_run:'
 assert_absent "$package_workflow" '  push:'
+assert_contains "$package_workflow" '.github/scripts/validate-distribution-contract.sh'
 assert_contains "$package_workflow" 'actions/upload-artifact@v4'
+assert_contains "$package_workflow" 'sha256sum wc-order-splitter.zip'
+
+assert_contains "$repo_root/.distignore" '/.github'
+assert_contains "$distribution_script" 'set -euo pipefail'
 
 assert_contains "$agents_contract" 'LOW uses persisted Executor evidence without Independent Review by default'
+assert_contains "$agents_contract" 'docs/engineering-review-authority.md'
+assert_contains "$agents_contract" 'docs/compressed-engineering-workflow.md'
+assert_contains "$agents_contract" 'ChatGPT Create -> Codex Run -> ChatGPT Finalize'
+assert_contains "$agents_contract" 'docs/codex-direct-workflow.md'
+assert_contains "$agents_contract" '`DIRECT_HUMAN_AUTHORIZED`'
+assert_contains "$agents_contract" '`HUMAN_GATE_APPROVED_DIRECT`'
+assert_contains "$agents_contract" '`POST_MERGE_ACCEPTED_DIRECT`'
+assert_contains "$agents_contract" '`INDEPENDENT_REVIEW_DISPATCH_REQUIRED`'
+assert_contains "$agents_contract" '`TECHNICAL_ESCALATION_REQUIRED`'
 assert_contains "$agents_contract" '`PRECHECK -> fresh Independent PRE_REVIEW -> FINAL`'
 assert_contains "$agents_contract" '`DIRECT_FAST` Required CI'
 assert_contains "$agents_contract" 'it has no `TECHNICAL_ACCEPTED` checkpoint'
@@ -170,7 +232,31 @@ assert_contains "$ci_contract" 'WOS-REL-001` remains separately frozen'
 assert_contains "$short_contract" '`EXECUTOR_EVIDENCE_READY`'
 assert_contains "$short_contract" '`PRE_REVIEW_CLEAN`'
 assert_contains "$short_contract" 'DIRECT has no Independent Review or `TECHNICAL_ACCEPTED`'
+assert_contains "$short_contract" '| Independent Codex Reviewer (fresh context) | `Technical Review <TASK_ID>` |'
+assert_contains "$short_contract" '| ChatGPT | `Create <TASK_ID>` |'
+assert_contains "$short_contract" '| Codex | `Direct <request>` / `Quick <request>` |'
+assert_contains "$short_contract" '| ChatGPT | `Finalize <TASK_ID>` |'
+assert_contains "$short_contract" '| ChatGPT | `Acceptance Review <TASK_ID>` |'
+assert_contains "$short_contract" 'Command: Acceptance Review <TASK_ID>'
 assert_contains "$short_contract" 'Command: Finalize <TASK_ID>'
+assert_contains "$short_contract" '`Create <TASK_ID> -> Run <TASK_ID> -> Finalize <TASK_ID>`'
+assert_contains "$short_contract" '## Direct bootstrap resolution'
+assert_contains "$short_contract" '`CODEX_DIRECT_NOT_ELIGIBLE: <reason> / proposed profile LOW|MEDIUM|HIGH`'
+assert_contains "$short_contract" '`CODEX_DIRECT_SCOPE_ESCALATION_REQUIRED: <DIRECT_TASK_ID> / proposed profile LOW|MEDIUM|HIGH / <exact reason>`'
+assert_contains "$short_contract" 'INDEPENDENT_REVIEW_DISPATCH_REQUIRED: <TASK_ID>'
+assert_contains "$short_contract" '`TECHNICAL_ESCALATION_REQUIRED`'
+assert_contains "$short_contract" '## Create bootstrap resolution'
+assert_contains "$short_contract" 'If there are zero canonical matches, permit ChatGPT to create the named canonical Issue only after binding the accepted source and authority.'
+assert_contains "$short_contract" 'If there is exactly one canonical match, read its complete body and comments and permit only an authorized update consistent with current authority.'
+assert_contains "$short_contract" 'If multiple plausible matches exist, stop `TASK_RESOLUTION_REQUIRED`'
+assert_contains "$short_contract" 'This normal-workflow bootstrap exception applies only to `Create`.'
+assert_contains "$short_contract" 'Before doing substantive work for any command that requires an existing task'
+assert_contains "$short_contract" '`TECHNICAL_REVIEW_PERSISTENCE_REQUIRED: <TASK_ID> / exact head <SHA>`'
+assert_contains "$short_contract" 'persisted authority <Issue comment ID or PR review ID>'
+assert_absent "$short_contract" '| ChatGPT | `Technical Review <TASK_ID>` |'
+assert_absent "$short_contract" 'independent ChatGPT Technical Review'
+assert_absent "$short_contract" 'direct CI/review/merge/post-merge sequence'
+assert_absent "$short_contract" 'Executor/CI/Independent Review/direct Human Gate'
 assert_contains "$short_contract" 'NEXT_ACTION_HINT'
 
 echo workflow-contract-ok

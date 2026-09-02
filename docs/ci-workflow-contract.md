@@ -15,7 +15,7 @@ The machine profiles are `DIRECT_FAST`, `LOW_FOCUSED`, `MEDIUM_DOMAIN`, `HIGH_DE
 
 The classifier derives the minimum profile from the complete exact base-to-head diff. PR title/body, task ID, labels, actor claims, and ordinary branch names are not classifier inputs and cannot lower the floor. A manually requested profile may only raise it. Mixed scope selects the strongest applicable floor; unknown or malformed authority selects a reviewed HIGH/RELEASE path.
 
-`DIRECT_FAST` requires a non-empty exact diff containing only status-`M` changes to existing Git-tracked regular-text mode-`100644` `*.css` files beneath `css/`. Each resulting blob is scanned without comment stripping, escape decoding, or line-continuation normalization. Any backslash, comment delimiter, non-canonical control byte, `@`, `url(...)`, `expression(...)`, `://`, `//`, binary/LFS replacement, object ambiguity, addition/deletion/rename/copy, or non-CSS path leaves DIRECT. Canonical Direct branch and human authority are separate governance requirements; the classifier does not consume them, so a branch/task claim cannot lower the complete-diff floor.
+`DIRECT_FAST` requires a non-empty exact diff containing only status-`M` changes to existing Git-tracked regular-text mode-`100644` `*.css` files beneath `css/`. The changed lines may modify only an existing `border-radius` declaration, one declaration per line, with numeric zero or a non-negative numeric `px`, `rem`, `em`, or `%` value. Selector/rule changes, every other property, and reachability/state/accessibility semantics leave DIRECT. Each resulting blob is scanned without comment stripping, escape decoding, or line-continuation normalization. Any backslash, comment delimiter, non-canonical control byte, `@`, `url(...)`, `expression(...)`, `://`, `//`, binary/LFS replacement, object ambiguity, addition/deletion/rename/copy, or non-CSS path leaves DIRECT. Canonical Direct branch and human authority are separate governance requirements; the classifier does not consume them, so a branch/task claim cannot lower the complete-diff floor.
 
 Typical floors are:
 
@@ -23,10 +23,10 @@ Typical floors are:
 - deterministic translation or non-semantic presentation outside the strict Direct envelope: `LOW_FOCUSED`;
 - bounded client runtime: `MEDIUM_DOMAIN`;
 - mutation/persistence/governance/workflow/unknown authority: `HIGH_DEEP`;
-- money/tax/payment/refund/price/stock authority: `HIGH_FINANCIAL`;
+- money/tax/payment/refund/price/stock authority, detected by explicit sensitive paths or conservative changed-content guards: `HIGH_FINANCIAL`;
 - release/version/package/distribution/Main-attestation authority: `RELEASE_CERT`.
 
-MEDIUM semantic trigger scanning can only add Independent Review. AJAX/REST/fetch, nonce/capability/permission, persistence/meta/status, webhook/email, replay/recovery/state-machine, or expected/assertion semantics make the candidate review-required. Ambiguity selects review.
+MEDIUM semantic trigger scanning can only add Independent Review. The repository currently has no mechanically proven JavaScript no-trigger sub-envelope, so every JavaScript candidate is treated as ambiguous and review-required, including `fetch`, `XMLHttpRequest`, jQuery transport, `sendBeacon`, and project mutation helpers. A future no-trigger route must first gain a fail-closed proof contract; ambiguity selects review.
 
 ## Stages and review-first certification
 
@@ -42,7 +42,7 @@ After a fresh source-read-only Independent Reviewer persists exact-head `PRE_REV
 2. requires the dispatch ref/GitHub SHA and current PR head to equal `expected_head_sha`;
 3. reruns the base-owned classifier, allowing the requested profile only to raise the machine floor;
 4. loads the PRE_REVIEW validators from the exact PR base;
-5. authenticates owner-structured independent-review provenance, exact base/head/tree, source-read-only attestations, and the terminal `PRE_REVIEW_CLEAN` record;
+5. authenticates owner-structured independent-review provenance, exact base/head/tree, PR-review `commit_id` where applicable, source-read-only attestations, and one unfenced/unquoted canonical record whose unique terminal outcome is `PRE_REVIEW_CLEAN`;
 6. authenticates the bound PRECHECK run as pull-request CI on the same head with successful PRECHECK jobs, skipped `Required CI`, and artifacts=0;
 7. runs FINAL certification and only then permits successful `Required CI`.
 

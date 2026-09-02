@@ -11,7 +11,7 @@ git -C "$fixture_root" init --quiet
 git -C "$fixture_root" config user.name 'WOS CI Fixture'
 git -C "$fixture_root" config user.email 'wos-ci@example.invalid'
 mkdir -p "$fixture_root/css" "$fixture_root/js" "$fixture_root/inc/domain" "$fixture_root/tests/ci" "$fixture_root/tests/integration" "$fixture_root/.github/workflows" "$fixture_root/.github/scripts" "$fixture_root/docs" "$fixture_root/languages"
-printf '.fixture { color: black; }\n' > "$fixture_root/css/admin.css"
+printf '.fixture {\n  border-radius: 4px;\n}\n' > "$fixture_root/css/admin.css"
 printf 'window.WCOSView = { color: "black" };\n' > "$fixture_root/js/admin.js"
 printf '<?php return true;\n' > "$fixture_root/inc/domain/class-runtime.php"
 printf '<?php return true;\n' > "$fixture_root/inc/domain/class-financial-authority.php"
@@ -69,7 +69,7 @@ assert_facts() {
   fi
 }
 
-printf '.fixture { color: navy; }\n' > "$fixture_root/css/admin.css"
+printf '.fixture {\n  border-radius: 6px;\n}\n' > "$fixture_root/css/admin.css"
 commit_case direct-css >/dev/null
 assert_facts DIRECT_FAST DIRECT false FINAL strict-direct pull_request "$base_sha" "$(git -C "$fixture_root" rev-parse HEAD)" codex/direct/wos-direct-20260902-120000
 assert_facts DIRECT_FAST DIRECT false FINAL branch-cannot-raise-or-lower pull_request "$base_sha" "$(git -C "$fixture_root" rev-parse HEAD)" codex/wos-low-css
@@ -90,6 +90,9 @@ unsafe_css_cases=(
   '.fixture { background: url(https://example.invalid/a.png); }'
   '.fixture { width: expression(alert(1)); }'
   '.fixture { color: n\61vy; }'
+  '.wcos-confirm { display: none; }'
+  '.wcos-action { pointer-events: none; }'
+  '.wcos-warning[aria-hidden="true"] { opacity: 0; }'
 )
 for unsafe_css in "${unsafe_css_cases[@]}"; do
   reset_fixture
@@ -97,6 +100,13 @@ for unsafe_css in "${unsafe_css_cases[@]}"; do
   commit_case unsafe-direct-css >/dev/null
   assert_facts HIGH_DEEP HIGH true PRECHECK unsafe-direct-escalates-high pull_request "$base_sha" "$(git -C "$fixture_root" rev-parse HEAD)" codex/direct/wos-direct-20260902-120000
 done
+
+reset_fixture
+sed -i.bak '/border-radius/a\
+  border-radius: 8px;' "$fixture_root/css/admin.css"
+rm "$fixture_root/css/admin.css.bak"
+commit_case added-declaration-css >/dev/null
+assert_facts LOW_FOCUSED LOW false FINAL added-declaration-not-direct pull_request "$base_sha" "$(git -C "$fixture_root" rev-parse HEAD)" codex/direct/wos-direct-20260902-120000
 
 reset_fixture
 printf '.added { color: red; }\n' > "$fixture_root/css/added.css"
@@ -127,18 +137,34 @@ assert_facts HIGH_DEEP HIGH true PRECHECK docs-fail-closed-without-name-heuristi
 reset_fixture
 printf '\nwindow.WCOSView.color = "navy";\n' >> "$fixture_root/js/admin.js"
 commit_case medium-no-trigger >/dev/null
-assert_facts MEDIUM_DOMAIN MEDIUM false FINAL medium-no-trigger
+assert_facts MEDIUM_DOMAIN MEDIUM true PRECHECK medium-ambiguity-reviews
 
 reset_fixture
 printf '\nwindow.fetch(window.ajaxurl);\n' >> "$fixture_root/js/admin.js"
 commit_case medium-trigger >/dev/null
 assert_facts MEDIUM_DOMAIN MEDIUM true PRECHECK medium-trigger
 
+for client_mutation in \
+  'const request = new XMLHttpRequest(); request.open("POST", endpoint); request.send(payload);' \
+  'jQuery.post(endpoint, payload);' \
+  'navigator.sendBeacon(endpoint, payload);' \
+  'window.WCOSMutation.submit(payload);'; do
+  reset_fixture
+  printf '\n%s\n' "$client_mutation" >> "$fixture_root/js/admin.js"
+  commit_case medium-client-mutation >/dev/null
+  assert_facts MEDIUM_DOMAIN MEDIUM true PRECHECK medium-client-mutation-reviews
+done
+
 reset_fixture
 printf '\nchanged\n' >> "$fixture_root/inc/domain/class-runtime.php"
 commit_case high-runtime >/dev/null
 assert_facts HIGH_DEEP HIGH true PRECHECK high-runtime pull_request "$base_sha" "$(git -C "$fixture_root" rev-parse HEAD)" codex/direct/wos-direct-20260902-120000
 assert_facts HIGH_DEEP HIGH true PRECHECK low-hint-cannot-lower-runtime pull_request "$base_sha" "$(git -C "$fixture_root" rev-parse HEAD)" codex/direct/wos-direct-20260902-120000 LOW_FOCUSED
+
+reset_fixture
+printf '\n$order->set_total("10.00");\n' >> "$fixture_root/inc/domain/class-runtime.php"
+commit_case generic-path-financial >/dev/null
+assert_facts HIGH_FINANCIAL HIGH true PRECHECK generic-path-financial-content
 
 reset_fixture
 printf '\nchanged\n' >> "$fixture_root/inc/domain/class-financial-authority.php"

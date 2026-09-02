@@ -302,7 +302,7 @@ For new tasks this section uses deterministic no-review DIRECT only after canoni
 4. If ineligible, stop `CODEX_DIRECT_NOT_ELIGIBLE` without creating a branch or editing source.
 5. Generate a unique direct ID, create the compact canonical Issue, persist `DIRECT_HUMAN_AUTHORIZED` binding the authenticated owner/designated human, exact source, bounded request, allowed paths, and no-release boundary, then re-read and authenticate it.
 6. If persistence or authentication fails, stop fail-closed without source edits.
-7. Create the fresh direct branch only after the preceding authority exists, then execute the direct CI/review/merge/post-merge sequence.
+7. Create the fresh direct branch only after the preceding authority exists, then execute the deterministic direct CI/direct Human Gate/merge/post-merge sequence.
 
 Direct bootstrap permission cannot create a normal `LOW`, `MEDIUM`, or `HIGH` contract, waive any forbidden path, or survive scope/source/authority drift. The existing direct Issue is the transition record if escalation becomes necessary.
 
@@ -493,7 +493,7 @@ Operator in Codex after WOS-GOV-009 activation:
 
 `Direct Reduce the spacing between existing admin order cards`
 
-Codex first classifies the request against the CSS-first allowlist. If eligible, it persists the direct Issue and `DIRECT_HUMAN_AUTHORIZED` before edits, then completes Executor/CI/Independent Review/direct Human Gate/squash-merge/Main-attestation proof without ChatGPT. If ineligible, it edits nothing and returns `CODEX_DIRECT_NOT_ELIGIBLE` with the proposed normal profile.
+Codex first classifies the request against the CSS-first allowlist. If eligible, it persists the direct Issue and `DIRECT_HUMAN_AUTHORIZED` before edits, then completes Executor/deterministic CI/direct Human Gate/squash-merge/Main-attestation proof without ChatGPT. If ineligible, it edits nothing and returns `CODEX_DIRECT_NOT_ELIGIBLE` with the proposed normal profile.
 
 Operator in ChatGPT after exact-head Technical Acceptance:
 

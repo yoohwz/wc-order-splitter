@@ -41,6 +41,7 @@ if [[ "$kind" == issue-comment ]]; then
   }
 else
   gh api "repos/$repo/pulls/$pr_number/reviews/$record_id" > "$record_json"
+  require_value review-commit "$(jq -r '.commit_id // ""' "$record_json")" "$head_sha"
 fi
 
 association=$(jq -r '.author_association // ""' "$record_json")
