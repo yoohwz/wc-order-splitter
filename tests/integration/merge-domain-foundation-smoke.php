@@ -186,7 +186,7 @@ foreach (array($email, '37 Foundation Way', '+1 555 9999') as $pii) {
 $target->set_billing_phone('+1 555 0100');
 $target->set_transaction_id('txn_foundation_reject');
 $target->save();
-wcos_merge_foundation_expect_reason($source, $target, 'paid_order_unsupported', 'Transaction-bearing order passed preflight.');
+wcos_merge_foundation_expect_reason($source, $target, 'financial_target_nonzero_source_total', 'A financially historical target accepted non-zero source value.');
 $target->set_transaction_id('');
 $target->save();
 
@@ -249,7 +249,7 @@ $refund = wc_create_refund(array(
 	'restock_items' => false,
 ));
 wcos_merge_foundation_assert($refund instanceof WC_Order_Refund, 'Unable to establish refund policy fixture.');
-wcos_merge_foundation_expect_reason($refund_source, wc_get_order($refund_target->get_id()), 'refund_policy_missing', 'Refund ownership passed preflight.');
+wcos_merge_foundation_expect_reason($refund_source, wc_get_order($refund_target->get_id()), 'financial_target_nonzero_source_total', 'A refund-bearing target accepted non-zero source value.');
 $refund->delete(true);
 $refund_source->delete(true);
 $refund_target->delete(true);

@@ -10,7 +10,8 @@ defined('ABSPATH') || exit;
  */
 final class WCOS_Merge_Context_Signature {
 
-	const SCHEMA_VERSION = 2;
+	const SCHEMA_VERSION = 3;
+	const PREVIOUS_SCHEMA_VERSION = 2;
 	const LEGACY_SCHEMA_VERSION = 1;
 	const ALGORITHM = 'hmac-sha256';
 	const PURPOSE_REGISTERED_IDENTITY = 'merge_registered_identity_v1';
@@ -28,6 +29,15 @@ final class WCOS_Merge_Context_Signature {
 	const PURPOSE_SOURCE_PAYMENT_CONTEXT = 'merge_source_payment_context_v2';
 	const PURPOSE_TARGET_PAYMENT_CONTEXT = 'merge_target_payment_context_v2';
 	const PURPOSE_DISPOSITION_AUTHORITY = 'merge_context_disposition_authority_v2';
+	const PURPOSE_CURRENT_SOURCE_IDENTITY = 'merge_source_identity_v3';
+	const PURPOSE_CURRENT_TARGET_IDENTITY = 'merge_target_identity_v3';
+	const PURPOSE_CURRENT_SOURCE_BILLING_CONTEXT = 'merge_source_billing_context_v3';
+	const PURPOSE_CURRENT_TARGET_BILLING_CONTEXT = 'merge_target_billing_context_v3';
+	const PURPOSE_CURRENT_SOURCE_SHIPPING_CONTEXT = 'merge_source_shipping_context_v3';
+	const PURPOSE_CURRENT_TARGET_SHIPPING_CONTEXT = 'merge_target_shipping_context_v3';
+	const PURPOSE_CURRENT_SOURCE_PAYMENT_CONTEXT = 'merge_source_payment_context_v3';
+	const PURPOSE_CURRENT_TARGET_PAYMENT_CONTEXT = 'merge_target_payment_context_v3';
+	const PURPOSE_CURRENT_DISPOSITION_AUTHORITY = 'merge_context_disposition_authority_v3';
 
 	public static function compatibility(WC_Order $source, WC_Order $target) {
 		$source_customer_id = absint($source->get_customer_id());
@@ -90,33 +100,42 @@ final class WCOS_Merge_Context_Signature {
 
 	/** PII-free independent source/target signatures for keep-target-context. */
 	public static function disposition(WC_Order $source, WC_Order $target) {
-		$source_identity = self::identity_digest($source, 'source');
-		$target_identity = self::identity_digest($target, 'target');
+		return self::disposition_for_schema($source, $target, self::SCHEMA_VERSION);
+	}
+
+	/** Exact WOS-COMPAT-005 schema-v2 fixture/parser support; never a fresh authority path. */
+	public static function previous_disposition(WC_Order $source, WC_Order $target) {
+		return self::disposition_for_schema($source, $target, self::PREVIOUS_SCHEMA_VERSION);
+	}
+
+	private static function disposition_for_schema(WC_Order $source, WC_Order $target, $schema_version) {
+		$source_identity = self::identity_digest($source, 'source', $schema_version);
+		$target_identity = self::identity_digest($target, 'target', $schema_version);
 		return array(
-			'schema_version' => self::SCHEMA_VERSION,
+			'schema_version' => (int) $schema_version,
 			'algorithm' => self::ALGORITHM,
 			'disposition' => 'keep_target_context',
 			'source_identity_type' => $source_identity['type'],
 			'source_identity_digest' => $source_identity['digest'],
-			'source_billing_context_digest' => self::address_digest($source, 'billing', self::SCHEMA_VERSION, 'source'),
-			'source_shipping_context_digest' => self::address_digest($source, 'shipping', self::SCHEMA_VERSION, 'source'),
-			'source_payment_context_digest' => self::payment_digest($source, self::SCHEMA_VERSION, 'source'),
+			'source_billing_context_digest' => self::address_digest($source, 'billing', $schema_version, 'source'),
+			'source_shipping_context_digest' => self::address_digest($source, 'shipping', $schema_version, 'source'),
+			'source_payment_context_digest' => self::payment_digest($source, $schema_version, 'source'),
 			'target_identity_type' => $target_identity['type'],
 			'target_identity_digest' => $target_identity['digest'],
-			'target_billing_context_digest' => self::address_digest($target, 'billing', self::SCHEMA_VERSION, 'target'),
-			'target_shipping_context_digest' => self::address_digest($target, 'shipping', self::SCHEMA_VERSION, 'target'),
-			'target_payment_context_digest' => self::payment_digest($target, self::SCHEMA_VERSION, 'target'),
+			'target_billing_context_digest' => self::address_digest($target, 'billing', $schema_version, 'target'),
+			'target_shipping_context_digest' => self::address_digest($target, 'shipping', $schema_version, 'target'),
+			'target_payment_context_digest' => self::payment_digest($target, $schema_version, 'target'),
 		);
 	}
 
 	public static function assert_current(WC_Order $order, array $record, $role = '') {
 		$schema = (int) (isset($record['schema_version']) ? $record['schema_version'] : 0);
-		if (!in_array($schema, array(self::LEGACY_SCHEMA_VERSION, self::SCHEMA_VERSION), true)
+		if (!in_array($schema, array(self::LEGACY_SCHEMA_VERSION, self::PREVIOUS_SCHEMA_VERSION, self::SCHEMA_VERSION), true)
 			|| self::ALGORITHM !== (isset($record['algorithm']) ? (string) $record['algorithm'] : '')) {
 			throw new RuntimeException(__('The Merge keyed-signature scheme no longer matches durable authority.', 'wc-order-splitter'));
 		}
-		if (self::SCHEMA_VERSION === $schema) {
-			self::assert_disposition_current($order, $record, $role);
+		if (in_array($schema, array(self::PREVIOUS_SCHEMA_VERSION, self::SCHEMA_VERSION), true)) {
+			self::assert_disposition_current($order, $record, $role, $schema);
 			return;
 		}
 
@@ -148,13 +167,18 @@ final class WCOS_Merge_Context_Signature {
 			return self::digest(self::PURPOSE_CONTEXT_AUTHORITY, $authority, self::LEGACY_SCHEMA_VERSION);
 		}
 		if (self::SCHEMA_VERSION === $schema) {
-			return self::digest(self::PURPOSE_DISPOSITION_AUTHORITY, $authority, self::SCHEMA_VERSION);
+			return self::digest(self::PURPOSE_CURRENT_DISPOSITION_AUTHORITY, $authority, self::SCHEMA_VERSION);
+		}
+		if (self::PREVIOUS_SCHEMA_VERSION === $schema) {
+			return self::digest(self::PURPOSE_DISPOSITION_AUTHORITY, $authority, self::PREVIOUS_SCHEMA_VERSION);
 		}
 		throw new RuntimeException(__('The Merge context authority schema is unsupported.', 'wc-order-splitter'));
 	}
 
-	private static function normalized_guest_email(WC_Order $order) {
-		$email = strtolower(trim((string) $order->get_billing_email()));
+	private static function normalized_guest_email(WC_Order $order, $schema_version = self::LEGACY_SCHEMA_VERSION) {
+		$email = self::SCHEMA_VERSION === (int) $schema_version
+			? $order->get_billing_email('edit') : $order->get_billing_email();
+		$email = strtolower(trim((string) $email));
 		$email = sanitize_email($email);
 		if ('' === $email || !is_email($email)) {
 			throw new RuntimeException(__('Guest Merge requires a valid nonblank billing email on both orders.', 'wc-order-splitter'));
@@ -166,12 +190,17 @@ final class WCOS_Merge_Context_Signature {
 		$type = 'shipping' === $type ? 'shipping' : 'billing';
 		if (self::SCHEMA_VERSION === (int) $schema_version) {
 			$purpose = 'source' === $role
+				? ('shipping' === $type ? self::PURPOSE_CURRENT_SOURCE_SHIPPING_CONTEXT : self::PURPOSE_CURRENT_SOURCE_BILLING_CONTEXT)
+				: ('shipping' === $type ? self::PURPOSE_CURRENT_TARGET_SHIPPING_CONTEXT : self::PURPOSE_CURRENT_TARGET_BILLING_CONTEXT);
+		} elseif (self::PREVIOUS_SCHEMA_VERSION === (int) $schema_version) {
+			$purpose = 'source' === $role
 				? ('shipping' === $type ? self::PURPOSE_SOURCE_SHIPPING_CONTEXT : self::PURPOSE_SOURCE_BILLING_CONTEXT)
 				: ('shipping' === $type ? self::PURPOSE_TARGET_SHIPPING_CONTEXT : self::PURPOSE_TARGET_BILLING_CONTEXT);
 		} else {
 			$purpose = 'shipping' === $type ? self::PURPOSE_SHIPPING_CONTEXT : self::PURPOSE_BILLING_CONTEXT;
 		}
-		$address = $order->get_address($type);
+		$address = self::SCHEMA_VERSION === (int) $schema_version
+			? WCOS_Merge_Canonical_Reader::address($order, $type) : $order->get_address($type);
 		$normalized = array();
 		foreach ((array) $address as $field => $value) {
 			$field = sanitize_key((string) $field);
@@ -190,35 +219,39 @@ final class WCOS_Merge_Context_Signature {
 
 	private static function payment_digest(WC_Order $order, $schema_version, $role = '') {
 		$purpose = self::SCHEMA_VERSION === (int) $schema_version
-			? ('source' === $role ? self::PURPOSE_SOURCE_PAYMENT_CONTEXT : self::PURPOSE_TARGET_PAYMENT_CONTEXT)
-			: self::PURPOSE_PAYMENT_CONTEXT;
+			? ('source' === $role ? self::PURPOSE_CURRENT_SOURCE_PAYMENT_CONTEXT : self::PURPOSE_CURRENT_TARGET_PAYMENT_CONTEXT)
+			: (self::PREVIOUS_SCHEMA_VERSION === (int) $schema_version
+				? ('source' === $role ? self::PURPOSE_SOURCE_PAYMENT_CONTEXT : self::PURPOSE_TARGET_PAYMENT_CONTEXT)
+				: self::PURPOSE_PAYMENT_CONTEXT);
 		return self::digest(
 			$purpose,
 			array(
-				'payment_method' => sanitize_key((string) $order->get_payment_method()),
-				'payment_method_title' => trim((string) $order->get_payment_method_title()),
+				'payment_method' => sanitize_key((string) (self::SCHEMA_VERSION === (int) $schema_version ? $order->get_payment_method('edit') : $order->get_payment_method())),
+				'payment_method_title' => trim((string) (self::SCHEMA_VERSION === (int) $schema_version ? $order->get_payment_method_title('edit') : $order->get_payment_method_title())),
 			),
 			$schema_version
 		);
 	}
 
-	private static function identity_digest(WC_Order $order, $role) {
-		$customer_id = absint($order->get_customer_id());
+	private static function identity_digest(WC_Order $order, $role, $schema_version) {
+		$customer_id = absint(self::SCHEMA_VERSION === (int) $schema_version ? $order->get_customer_id('edit') : $order->get_customer_id());
 		$type = $customer_id ? 'registered' : 'guest';
 		$payload = $customer_id
 			? array('customer_id' => $customer_id)
-			: array('billing_email' => self::normalized_guest_email($order));
-		$purpose = 'source' === $role ? self::PURPOSE_SOURCE_IDENTITY : self::PURPOSE_TARGET_IDENTITY;
-		return array('type' => $type, 'digest' => self::digest($purpose, $payload, self::SCHEMA_VERSION));
+			: array('billing_email' => self::normalized_guest_email($order, $schema_version));
+		$purpose = self::SCHEMA_VERSION === (int) $schema_version
+			? ('source' === $role ? self::PURPOSE_CURRENT_SOURCE_IDENTITY : self::PURPOSE_CURRENT_TARGET_IDENTITY)
+			: ('source' === $role ? self::PURPOSE_SOURCE_IDENTITY : self::PURPOSE_TARGET_IDENTITY);
+		return array('type' => $type, 'digest' => self::digest($purpose, $payload, $schema_version));
 	}
 
-	private static function assert_disposition_current(WC_Order $order, array $record, $role) {
+	private static function assert_disposition_current(WC_Order $order, array $record, $role, $schema_version) {
 		$role = sanitize_key((string) $role);
 		if (!in_array($role, array('source', 'target'), true)
 			|| 'keep_target_context' !== sanitize_key(isset($record['disposition']) ? (string) $record['disposition'] : '')) {
 			throw new RuntimeException(__('The Merge context disposition is invalid.', 'wc-order-splitter'));
 		}
-		$identity = self::identity_digest($order, $role);
+		$identity = self::identity_digest($order, $role, $schema_version);
 		$prefix = $role . '_';
 		$expected_type = sanitize_key(isset($record[$prefix . 'identity_type']) ? (string) $record[$prefix . 'identity_type'] : '');
 		$expected_identity = isset($record[$prefix . 'identity_digest']) ? (string) $record[$prefix . 'identity_digest'] : '';
@@ -226,9 +259,9 @@ final class WCOS_Merge_Context_Signature {
 		$shipping = isset($record[$prefix . 'shipping_context_digest']) ? (string) $record[$prefix . 'shipping_context_digest'] : '';
 		$payment = isset($record[$prefix . 'payment_context_digest']) ? (string) $record[$prefix . 'payment_context_digest'] : '';
 		if ($expected_type !== $identity['type'] || '' === $expected_identity || !hash_equals($expected_identity, $identity['digest'])
-			|| '' === $billing || !hash_equals($billing, self::address_digest($order, 'billing', self::SCHEMA_VERSION, $role))
-			|| '' === $shipping || !hash_equals($shipping, self::address_digest($order, 'shipping', self::SCHEMA_VERSION, $role))
-			|| '' === $payment || !hash_equals($payment, self::payment_digest($order, self::SCHEMA_VERSION, $role))) {
+			|| '' === $billing || !hash_equals($billing, self::address_digest($order, 'billing', $schema_version, $role))
+			|| '' === $shipping || !hash_equals($shipping, self::address_digest($order, 'shipping', $schema_version, $role))
+			|| '' === $payment || !hash_equals($payment, self::payment_digest($order, $schema_version, $role))) {
 			throw new RuntimeException(__('The Merge participant context signature changed.', 'wc-order-splitter'));
 		}
 	}

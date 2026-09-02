@@ -17,7 +17,7 @@ final class WCOS_Merge_Review_Exception extends RuntimeException {
 
 /** Short-lived, server-owned authority for one Merge Review. */
 final class WCOS_Merge_Review_Store {
-	const SCHEMA_VERSION = 1;
+	const SCHEMA_VERSION = 3;
 	const TTL = 900;
 
 	public static function create(WC_Order $source, WC_Order $target, array $report, $user_id) {
@@ -27,6 +27,11 @@ final class WCOS_Merge_Review_Store {
 		if (!$source_id || !$target_id || $source_id === $target_id || !$user_id) {
 			throw new WCOS_Merge_Review_Exception('invalid_identity', __('Merge Review requires two distinct persisted orders and a signed-in operator.', 'wc-order-splitter'));
 		}
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source_id, $target_id);
+		if (!is_array($participants)) {
+			throw new WCOS_Merge_Review_Exception('participant_missing', __('A Merge participant is no longer available.', 'wc-order-splitter'));
+		}
+		list($source, $target) = $participants;
 
 		$authority = self::authority_from_report($report, $source_id, $target_id);
 		self::assert_current($source, $target, $authority);
@@ -60,6 +65,11 @@ final class WCOS_Merge_Review_Store {
 		if (!self::is_uuid($review_id) || !$user_id) {
 			throw new WCOS_Merge_Review_Exception('invalid_identity', __('The Merge Review identity is invalid.', 'wc-order-splitter'));
 		}
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source->get_id(), $target->get_id());
+		if (!is_array($participants)) {
+			throw new WCOS_Merge_Review_Exception('participant_missing', __('A Merge participant is no longer available.', 'wc-order-splitter'));
+		}
+		list($source, $target) = $participants;
 		$record = get_transient(self::key($review_id));
 		if (!is_array($record)) {
 			throw new WCOS_Merge_Review_Exception('expired', __('The Merge Review expired. Review the pair again.', 'wc-order-splitter'));
@@ -103,9 +113,13 @@ final class WCOS_Merge_Review_Store {
 		}
 		$precision = WCOS_Price_Precision_Scope::validate(isset($report['price_precision']) ? $report['price_precision'] : null);
 		$plan = WCOS_Merge_Plan::canonicalize_current($report['plan']);
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source_id, $target_id);
+		if (!is_array($participants)) {
+			throw new WCOS_Merge_Review_Exception('participant_missing', __('A Merge participant is no longer available.', 'wc-order-splitter'));
+		}
 		$context = WCOS_Merge_Journal_Context::create_executable(
-			wc_get_order($source_id),
-			wc_get_order($target_id),
+			$participants[0],
+			$participants[1],
 			$plan,
 			$report['context_authority'],
 			$precision
@@ -121,6 +135,7 @@ final class WCOS_Merge_Review_Store {
 			'pair_fingerprint' => $context['merge_pair']['pair_fingerprint'],
 			'context_authority' => $pair['context_authority'],
 			'context_authority_fingerprint' => $pair['context_authority_fingerprint'],
+			'financial_authority_fingerprint' => $pair['financial_authority_fingerprint'],
 			'price_precision' => $precision,
 			'merge_service_policy_version' => (int) WCOS_Merge_Order_Service::POLICY_VERSION,
 			'preflight_policy_version' => (int) $pair['preflight_policy_version'],
@@ -134,17 +149,17 @@ final class WCOS_Merge_Review_Store {
 	private static function assert_current(WC_Order $source, WC_Order $target, array $authority) {
 		self::assert_authority_complete($authority);
 		$precision = WCOS_Price_Precision_Scope::validate(isset($authority['price_precision']) ? $authority['price_precision'] : null);
-		$source = wc_get_order($source->get_id());
-		$target = wc_get_order($target->get_id());
-		if (!$source instanceof WC_Order || !$target instanceof WC_Order) {
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source->get_id(), $target->get_id());
+		if (!is_array($participants)) {
 			throw new WCOS_Merge_Review_Exception('participant_missing', __('A Merge participant is no longer available.', 'wc-order-splitter'));
 		}
+		list($source, $target) = $participants;
 		$report = WCOS_Merge_Preflight::report($source, $target, $precision);
 		if (empty($report['supported'])) {
 			throw new WCOS_Merge_Review_Exception('pair_changed', __('The Merge pair is no longer supported. Review it again.', 'wc-order-splitter'));
 		}
 		$current = self::authority_from_report($report, $source->get_id(), $target->get_id());
-		foreach (array('source_signature', 'target_signature', 'plan_fingerprint', 'pair_fingerprint', 'context_authority_fingerprint', 'price_precision', 'merge_service_policy_version', 'preflight_policy_version', 'plan_schema_version', 'context_signature_version', 'retirement_policy_schema_version', 'retirement_policy') as $field) {
+		foreach (array('source_signature', 'target_signature', 'plan_fingerprint', 'pair_fingerprint', 'context_authority_fingerprint', 'financial_authority_fingerprint', 'price_precision', 'merge_service_policy_version', 'preflight_policy_version', 'plan_schema_version', 'context_signature_version', 'retirement_policy_schema_version', 'retirement_policy') as $field) {
 			if (!array_key_exists($field, $authority) || (string) $authority[$field] !== (string) $current[$field]) {
 				$reason = 'source_signature' === $field ? 'source_changed' : ('target_signature' === $field ? 'target_changed' : 'authority_changed');
 				throw new WCOS_Merge_Review_Exception($reason, __('The Merge pair authority changed after Review. Review the pair again.', 'wc-order-splitter'));
@@ -158,7 +173,7 @@ final class WCOS_Merge_Review_Store {
 	private static function assert_authority_complete(array $authority) {
 		$required = array(
 			'source_order_id', 'target_order_id', 'source_signature', 'target_signature', 'plan', 'plan_fingerprint',
-			'pair_fingerprint', 'context_authority', 'context_authority_fingerprint', 'price_precision',
+			'pair_fingerprint', 'context_authority', 'context_authority_fingerprint', 'financial_authority_fingerprint', 'price_precision',
 			'merge_service_policy_version', 'preflight_policy_version', 'plan_schema_version', 'context_signature_version',
 			'retirement_policy_schema_version', 'retirement_policy',
 		);
@@ -172,7 +187,8 @@ final class WCOS_Merge_Review_Store {
 			|| !is_array($authority['plan']) || !is_array($authority['context_authority'])
 			|| !self::is_fingerprint($authority['source_signature']) || !self::is_fingerprint($authority['target_signature'])
 			|| !self::is_fingerprint($authority['plan_fingerprint']) || !self::is_fingerprint($authority['pair_fingerprint'])
-			|| !self::is_fingerprint($authority['context_authority_fingerprint'])) {
+			|| !self::is_fingerprint($authority['context_authority_fingerprint'])
+			|| !self::is_fingerprint($authority['financial_authority_fingerprint'])) {
 			throw new WCOS_Merge_Review_Exception('review_invalid', __('The stored Merge Review authority is malformed.', 'wc-order-splitter'));
 		}
 		try {

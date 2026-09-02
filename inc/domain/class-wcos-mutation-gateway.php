@@ -100,11 +100,21 @@ final class WCOS_Mutation_Gateway {
 
 	public function merge(WC_Order $source, WC_Order $target, $operation_id, $confirmed_precision = null, array $confirmation_authority = array()) {
 		WCOS_Feature_Gates::assert_enabled(WCOS_Feature_Gates::MERGE);
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source->get_id(), $target->get_id());
+		if (!is_array($participants)) {
+			throw new InvalidArgumentException(__('Merge requires two persisted WooCommerce shop orders.', 'wc-order-splitter'));
+		}
+		list($source, $target) = $participants;
 		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::MERGE, $source, $target);
 		return (new WCOS_Merge_WooCommerce_Adapter())->merge($source, $target, $operation_id, $confirmed_precision, $confirmation_authority);
 	}
 
 	public function merge_preflight(WC_Order $source, WC_Order $target, $operation_id = '', $confirmed_precision = null) {
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source->get_id(), $target->get_id());
+		if (!is_array($participants)) {
+			throw new InvalidArgumentException(__('Merge requires two persisted WooCommerce shop orders.', 'wc-order-splitter'));
+		}
+		list($source, $target) = $participants;
 		WCOS_Order_Mutation_Authorizer::assert_workflow(WCOS_Feature_Gates::MERGE, $source, $target);
 		return (new WCOS_Merge_WooCommerce_Adapter())->preflight($source, $target, $operation_id, $confirmed_precision);
 	}

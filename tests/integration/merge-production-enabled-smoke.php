@@ -370,9 +370,9 @@ final class WCOS_Merge_Production_Enabled_Matrix {
 		list($source, $target) = self::pair('currency', array(), array('currency' => 'EUR'));
 		self::expect_review_failure('different_currency', $source, $target, 'preflight_incompatible_currency');
 		list($source, $target) = self::pair('paid', array(), array('transaction_id' => 'sandbox-transaction'));
-		self::expect_review_failure('paid_transaction', $source, $target, 'preflight_paid_order_unsupported');
+		self::expect_review_failure('paid_transaction', $source, $target, 'preflight_financial_target_nonzero_source_total');
 		list($source, $target) = self::pair('refund', array(), array('refund' => true));
-		self::expect_review_failure('refunded', $source, $target, 'preflight_refund_policy_missing');
+		self::expect_review_failure('refunded', $source, $target, 'preflight_financial_target_nonzero_source_total');
 		list($source, $target) = self::pair('no-source-lines', array('no_lines' => true), array());
 		self::expect_review_failure('no_source_lines', $source, $target, 'preflight_no_source_lines');
 	}

@@ -47,6 +47,8 @@ class WC_Order_Splitter_Script {
 		include_once $root . 'domain/class-wcos-order-copy-context.php';
 		include_once $root . 'domain/class-wcos-order-mutation-snapshot.php';
 		include_once $root . 'domain/class-wcos-merge-retirement-policy.php';
+		include_once $root . 'domain/class-wcos-merge-canonical-reader.php';
+		include_once $root . 'domain/class-wcos-merge-financial-authority.php';
 		include_once $root . 'domain/class-wcos-merge-commercial-policy.php';
 		include_once $root . 'domain/class-wcos-merge-plan.php';
 		include_once $root . 'domain/class-wcos-merge-context-signature.php';

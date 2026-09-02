@@ -24,6 +24,13 @@ final class WCOS_Merge_Compensator {
 			throw new RuntimeException(__('Merge recovery authority is incomplete.', 'wc-order-splitter'));
 		}
 		WCOS_Merge_Recovery_Snapshot::assert_valid($snapshot, $record);
+		$snapshot_schema = (int) $snapshot['schema_version'];
+		$source = self::participant_order($snapshot['source_order_id'], $snapshot_schema);
+		$target = self::participant_order($snapshot['target_order_id'], $snapshot_schema);
+		if (!$source instanceof WC_Order || !$target instanceof WC_Order
+			|| 'shop_order' !== $source->get_type() || 'shop_order' !== $target->get_type()) {
+			throw new RuntimeException(__('Merge recovery participants could not be reloaded from persisted authority.', 'wc-order-splitter'));
+		}
 		$recovery_state = WCOS_Merge_Recovery_State_Graph::assert_record($record);
 		if (!empty($context['merge_physical_stock_after_write'])) {
 			return self::manual_reconciliation($source, $target, $record, 'physical_stock_after_write');
@@ -43,8 +50,8 @@ final class WCOS_Merge_Compensator {
 		}
 
 		try {
-			$current_source = WCOS_Merge_Recovery_Snapshot::participant_signature($source);
-			$current_target = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
+			$current_source = WCOS_Merge_Recovery_Snapshot::participant_signature($source, $snapshot_schema);
+			$current_target = WCOS_Merge_Recovery_Snapshot::participant_signature($target, $snapshot_schema);
 			WCOS_Merge_Recovery_Snapshot::assert_immutable_pair(
 				$snapshot,
 				$record,
@@ -65,8 +72,8 @@ final class WCOS_Merge_Compensator {
 			if ($forward_state) {
 				$forward_valid = false;
 				try {
-					WCOS_Merge_Recovery_Snapshot::assert_forward_checkpoint($source_after_state, $source);
-					WCOS_Merge_Recovery_Snapshot::assert_forward_checkpoint($target_after_state, $target);
+					WCOS_Merge_Recovery_Snapshot::assert_forward_checkpoint($source_after_state, $source, $snapshot_schema);
+					WCOS_Merge_Recovery_Snapshot::assert_forward_checkpoint($target_after_state, $target, $snapshot_schema);
 					$forward_valid = true;
 				} catch (Throwable $throwable) {
 					/* Fall through to compensation/manual validation. */
@@ -80,8 +87,8 @@ final class WCOS_Merge_Compensator {
 				throw new RuntimeException(__('Merge recovery is missing durable component checkpoints.', 'wc-order-splitter'));
 			}
 			try {
-				WCOS_Merge_Recovery_Snapshot::assert_resumable_participant($snapshot['source'], $source_after_state, $source, array(), array());
-				WCOS_Merge_Recovery_Snapshot::assert_resumable_participant($snapshot['target'], $target_after_state, $target, $target_item_ids, $target_tax_item_ids);
+				WCOS_Merge_Recovery_Snapshot::assert_resumable_participant($snapshot['source'], $source_after_state, $source, array(), array(), $snapshot_schema);
+				WCOS_Merge_Recovery_Snapshot::assert_resumable_participant($snapshot['target'], $target_after_state, $target, $target_item_ids, $target_tax_item_ids, $snapshot_schema);
 			} catch (Throwable $throwable) {
 				throw new RuntimeException(__('A Merge participant diverged from every approved recovery checkpoint.', 'wc-order-splitter'));
 			}
@@ -111,10 +118,10 @@ final class WCOS_Merge_Compensator {
 				throw new RuntimeException(__('Restored Merge source ownership could not be checkpointed.', 'wc-order-splitter'));
 			}
 
-			$source = wc_get_order($source->get_id());
-			$target = wc_get_order($target->get_id());
-			$current_source = WCOS_Merge_Recovery_Snapshot::participant_signature($source);
-			$current_target = WCOS_Merge_Recovery_Snapshot::participant_signature($target);
+			$source = self::participant_order($source->get_id(), $snapshot_schema);
+			$target = self::participant_order($target->get_id(), $snapshot_schema);
+			$current_source = WCOS_Merge_Recovery_Snapshot::participant_signature($source, $snapshot_schema);
+			$current_target = WCOS_Merge_Recovery_Snapshot::participant_signature($target, $snapshot_schema);
 			if (!hash_equals($target_before, $current_target)) {
 				self::boundary($lease, $source, $target, $record, $source_before, $current_target, 'any', 'before_target_cleanup');
 				list($write_boundary, $sub_checkpoint) = self::resumable_callbacks($lease, $source, $target, $record, $snapshot, $source_after_state, $target_after_state, $target_item_ids, $target_tax_item_ids);
@@ -137,8 +144,8 @@ final class WCOS_Merge_Compensator {
 				throw new RuntimeException(__('Restored Merge target could not be checkpointed.', 'wc-order-splitter'));
 			}
 
-			$source = wc_get_order($source->get_id());
-			$target = wc_get_order($target->get_id());
+			$source = self::participant_order($source->get_id(), $snapshot_schema);
+			$target = self::participant_order($target->get_id(), $snapshot_schema);
 			self::boundary($lease, $source, $target, $record, $source_before, $target_before, 'any', 'before_relation_cleanup');
 			if (!WCOS_Merge_Participation::cleanup($source, $target, $operation_id)) {
 				throw new RuntimeException(__('Operation-owned Merge participation could not be cleaned up.', 'wc-order-splitter'));
@@ -219,10 +226,14 @@ final class WCOS_Merge_Compensator {
 		$operation_id = sanitize_key((string) $record['operation_id']);
 		$pair = WCOS_Merge_Journal_Context::pair_from_record($record);
 		$recovery_state = WCOS_Merge_Recovery_State_Graph::assert_record($record);
+		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
+		$snapshot = isset($context['merge_recovery_snapshot']) && is_array($context['merge_recovery_snapshot']) ? $context['merge_recovery_snapshot'] : array();
+		WCOS_Merge_Recovery_Snapshot::assert_valid($snapshot, $record);
+		$snapshot_schema = (int) $snapshot['schema_version'];
 		self::boundary($lease, $source, $target, $record, $source_after, $target_after, 'any', 'before_forward_relations');
 		WCOS_Merge_Participation::persist($source, $target, $operation_id, $pair['pair_fingerprint']);
-		$source = wc_get_order($source->get_id());
-		$target = wc_get_order($target->get_id());
+		$source = self::participant_order($source->get_id(), $snapshot_schema);
+		$target = self::participant_order($target->get_id(), $snapshot_schema);
 		self::lease_guard($lease);
 		if (!in_array($recovery_state, array(WCOS_Merge_Recovery_State_Graph::VERIFIED, WCOS_Merge_Recovery_State_Graph::COMMITTED), true)
 			&& !WCOS_Operation_Journal::checkpoint($source, $operation_id, 'merge_relations_completed', array(
@@ -235,13 +246,11 @@ final class WCOS_Merge_Compensator {
 			$source,
 			$target,
 			$record,
-			WCOS_Merge_Recovery_Snapshot::participant_signature($source),
-			WCOS_Merge_Recovery_Snapshot::participant_signature($target),
+			WCOS_Merge_Recovery_Snapshot::participant_signature($source, $snapshot_schema),
+			WCOS_Merge_Recovery_Snapshot::participant_signature($target, $snapshot_schema),
 			'complete',
 			'after_forward_relations'
 		);
-		$context = isset($record['context']) && is_array($record['context']) ? $record['context'] : array();
-		$snapshot = isset($context['merge_recovery_snapshot']) && is_array($context['merge_recovery_snapshot']) ? $context['merge_recovery_snapshot'] : array();
 		WCOS_Merge_Recovery_Snapshot::assert_archive_preserved($snapshot, $source);
 		WCOS_Merge_Recovery_Snapshot::assert_active_economic_conserved($snapshot, $target);
 		if (!in_array($recovery_state, array(WCOS_Merge_Recovery_State_Graph::VERIFIED, WCOS_Merge_Recovery_State_Graph::COMMITTED), true)
@@ -256,8 +265,8 @@ final class WCOS_Merge_Compensator {
 					$source,
 					$target,
 					$record,
-					WCOS_Merge_Recovery_Snapshot::participant_signature($source),
-					WCOS_Merge_Recovery_Snapshot::participant_signature($target),
+					WCOS_Merge_Recovery_Snapshot::participant_signature($source, $snapshot_schema),
+					WCOS_Merge_Recovery_Snapshot::participant_signature($target, $snapshot_schema),
 					'complete',
 					'after_verification_before_commit'
 			);
@@ -267,10 +276,10 @@ final class WCOS_Merge_Compensator {
 		if ($commit_checkpoint_required && !WCOS_Operation_Journal::mark_committed($source, $operation_id, array(
 					'merge_forward_repaired' => true,
 					'merge_recovery_state' => WCOS_Merge_Recovery_State_Graph::COMMITTED,
-					'merge_source_signature_after' => WCOS_Merge_Recovery_Snapshot::participant_signature($source),
-					'merge_target_signature_after' => WCOS_Merge_Recovery_Snapshot::participant_signature($target),
-					'merge_source_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($source),
-					'merge_target_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($target),
+					'merge_source_signature_after' => WCOS_Merge_Recovery_Snapshot::participant_signature($source, $snapshot_schema),
+					'merge_target_signature_after' => WCOS_Merge_Recovery_Snapshot::participant_signature($target, $snapshot_schema),
+					'merge_source_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($source, $snapshot_schema),
+					'merge_target_state_after' => WCOS_Merge_Recovery_Snapshot::participant_checkpoint($target, $snapshot_schema),
 			))) {
 			throw new RuntimeException(__('Forward-repaired Merge state could not be committed.', 'wc-order-splitter'));
 		}
@@ -279,12 +288,12 @@ final class WCOS_Merge_Compensator {
 				$source,
 				$target,
 				$record,
-				WCOS_Merge_Recovery_Snapshot::participant_signature($source),
-				WCOS_Merge_Recovery_Snapshot::participant_signature($target),
+				WCOS_Merge_Recovery_Snapshot::participant_signature($source, $snapshot_schema),
+				WCOS_Merge_Recovery_Snapshot::participant_signature($target, $snapshot_schema),
 				'complete',
 				'after_commit_before_complete'
 		);
-		$terminal_record = WCOS_Operation_Journal::get(wc_get_order($source->get_id()), $operation_id);
+		$terminal_record = WCOS_Operation_Journal::get(WCOS_Merge_Canonical_Reader::order($source->get_id()), $operation_id);
 		if (!is_array($terminal_record)) {
 			throw new RuntimeException(__('Forward-repaired Merge terminal authority could not be reloaded.', 'wc-order-splitter'));
 		}
@@ -312,20 +321,21 @@ final class WCOS_Merge_Compensator {
 
 	private static function resumable_callbacks(WCOS_Multi_Order_Lease $lease, WC_Order $source, WC_Order $target, array $record, array $snapshot, array $source_after, array $target_after, array $target_item_ids, array $target_tax_item_ids) {
 		$operation_id = sanitize_key((string) $record['operation_id']);
-		$guard = static function($stage, $component_id = 0) use ($lease, $source, $target, $operation_id, $record, $snapshot, $source_after, $target_after, $target_item_ids, $target_tax_item_ids) {
+		$snapshot_schema = (int) $snapshot['schema_version'];
+		$guard = static function($stage, $component_id = 0) use ($lease, $source, $target, $operation_id, $record, $snapshot, $snapshot_schema, $source_after, $target_after, $target_item_ids, $target_tax_item_ids) {
 			WCOS_Merge_Compensator::event($stage, $source, $target, $operation_id);
 			if (!$lease->refresh()) {
 				throw new RuntimeException(__('A participant lease expired during resumable Merge recovery.', 'wc-order-splitter'));
 			}
 			WCOS_Stock_Side_Effect_Guard::assert_current_clean();
-			$fresh_source = wc_get_order($snapshot['source_order_id']);
-			$fresh_target = wc_get_order($snapshot['target_order_id']);
+			$fresh_source = WCOS_Merge_Compensator::participant_order($snapshot['source_order_id'], $snapshot_schema);
+			$fresh_target = WCOS_Merge_Compensator::participant_order($snapshot['target_order_id'], $snapshot_schema);
 			if (!$fresh_source instanceof WC_Order || !$fresh_target instanceof WC_Order) {
 				throw new RuntimeException(__('A Merge recovery participant disappeared during a durable write.', 'wc-order-splitter'));
 			}
 			WCOS_Merge_Recovery_Snapshot::assert_immutable_pair($snapshot, $record, $fresh_source, $fresh_target, $target_item_ids, $target_tax_item_ids);
-			WCOS_Merge_Recovery_Snapshot::assert_resumable_participant($snapshot['source'], $source_after, $fresh_source, array(), array());
-			WCOS_Merge_Recovery_Snapshot::assert_resumable_participant($snapshot['target'], $target_after, $fresh_target, $target_item_ids, $target_tax_item_ids);
+			WCOS_Merge_Recovery_Snapshot::assert_resumable_participant($snapshot['source'], $source_after, $fresh_source, array(), array(), $snapshot_schema);
+			WCOS_Merge_Recovery_Snapshot::assert_resumable_participant($snapshot['target'], $target_after, $fresh_target, $target_item_ids, $target_tax_item_ids, $snapshot_schema);
 		};
 		$checkpoint = static function($stage, $component_id = 0) use ($guard, $source, $operation_id) {
 			$guard('before_' . $stage . '_checkpoint', $component_id);
@@ -336,6 +346,12 @@ final class WCOS_Merge_Compensator {
 			}
 		};
 		return array($guard, $checkpoint);
+	}
+
+	public static function participant_order($order_id, $snapshot_schema) {
+		return WCOS_Merge_Recovery_Snapshot::SCHEMA_VERSION === (int) $snapshot_schema
+			? WCOS_Merge_Canonical_Reader::order($order_id)
+			: wc_get_order($order_id);
 	}
 
 	public static function event($stage, WC_Order $source, WC_Order $target, $operation_id) {

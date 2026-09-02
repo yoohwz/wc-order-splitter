@@ -35,8 +35,8 @@ final class WCOS_Merge_Participation {
 			throw new RuntimeException(__('Merge participation does not match the authoritative source journal.', 'wc-order-splitter'));
 		}
 
-		$fresh_source = wc_get_order($source_id);
-		$fresh_target = wc_get_order($target_id);
+		$fresh_source = WCOS_Merge_Canonical_Reader::order($source_id);
+		$fresh_target = WCOS_Merge_Canonical_Reader::order($target_id);
 		if (!$fresh_source instanceof WC_Order || !$fresh_target instanceof WC_Order) {
 			throw new RuntimeException(__('A Merge participant disappeared before participation could be persisted.', 'wc-order-splitter'));
 		}
@@ -53,8 +53,8 @@ final class WCOS_Merge_Participation {
 		$fresh_target->save_meta_data();
 		do_action('wcos_merge_recovery_checkpoint', 'after_both_relations_before_verification', $fresh_source, $fresh_target, $operation_id);
 
-		$source_after = wc_get_order($source_id);
-		$target_after = wc_get_order($target_id);
+		$source_after = WCOS_Merge_Canonical_Reader::order($source_id);
+		$target_after = WCOS_Merge_Canonical_Reader::order($target_id);
 		if (!$source_after instanceof WC_Order || !$target_after instanceof WC_Order
 			|| !self::source_values_match($source_after, $target_id, $operation_id, $pair_fingerprint)
 			|| !self::target_values_contain($target_after, $source_id, $operation_id, $pair_fingerprint)) {
@@ -82,8 +82,8 @@ final class WCOS_Merge_Participation {
 		}
 		$pair_fingerprint = $pair['pair_fingerprint'];
 
-		$fresh_source = wc_get_order($source_id);
-		$fresh_target = wc_get_order($target_id);
+		$fresh_source = WCOS_Merge_Canonical_Reader::order($source_id);
+		$fresh_target = WCOS_Merge_Canonical_Reader::order($target_id);
 		if (!$fresh_source instanceof WC_Order || !$fresh_target instanceof WC_Order) {
 			return false;
 		}
@@ -116,8 +116,8 @@ final class WCOS_Merge_Participation {
 		}
 		$fresh_target->save_meta_data();
 
-		$source_after = wc_get_order($source_id);
-		$target_after = wc_get_order($target_id);
+		$source_after = WCOS_Merge_Canonical_Reader::order($source_id);
+		$target_after = WCOS_Merge_Canonical_Reader::order($target_id);
 		if (!$source_after instanceof WC_Order || !$target_after instanceof WC_Order) {
 			return false;
 		}
@@ -228,7 +228,7 @@ final class WCOS_Merge_Participation {
 				$active[] = $authority['operation_id'];
 				continue;
 			}
-			$source = wc_get_order($authority['journal_source_order_id']);
+			$source = WCOS_Merge_Canonical_Reader::order($authority['journal_source_order_id']);
 			if (!$source instanceof WC_Order) {
 				$active[] = $authority['operation_id'];
 				continue;
@@ -267,7 +267,7 @@ final class WCOS_Merge_Participation {
 			),
 			-1
 		);
-		$source = wc_get_order($source_order_id);
+		$source = WCOS_Merge_Canonical_Reader::order($source_order_id);
 		$record = $source instanceof WC_Order ? WCOS_Operation_Journal::get($source, $operation_id) : null;
 		if (!is_array($record)) {
 			return array();
@@ -346,9 +346,12 @@ final class WCOS_Merge_Participation {
 	}
 
 	private static function source_values_match(WC_Order $source, $target_id, $operation_id, $pair_fingerprint) {
-		return (int) $source->get_meta(self::SOURCE_TARGET_META, true) === (int) $target_id
-			&& (string) $source->get_meta(self::SOURCE_OPERATION_META, true) === (string) $operation_id
-			&& (string) $source->get_meta(self::SOURCE_PAIR_FINGERPRINT_META, true) === (string) $pair_fingerprint;
+		$targets = self::meta_values($source, self::SOURCE_TARGET_META);
+		$operations = self::meta_values($source, self::SOURCE_OPERATION_META);
+		$fingerprints = self::meta_values($source, self::SOURCE_PAIR_FINGERPRINT_META);
+		return 1 === count($targets) && (int) reset($targets) === (int) $target_id
+			&& 1 === count($operations) && (string) reset($operations) === (string) $operation_id
+			&& 1 === count($fingerprints) && (string) reset($fingerprints) === (string) $pair_fingerprint;
 	}
 
 	private static function target_values_contain(WC_Order $target, $source_id, $operation_id, $pair_fingerprint) {

@@ -8,7 +8,8 @@ defined('ABSPATH') || exit;
 final class WCOS_Merge_Order_Service {
 
 	const TYPE = 'merge';
-	const POLICY_VERSION = 2;
+	const POLICY_VERSION = 4;
+	const PREVIOUS_POLICY_VERSION = 2;
 	const LEGACY_POLICY_VERSION = 1;
 
 	public function merge(WC_Order $source, WC_Order $target, $operation_id, $precision, array $confirmation_authority = array()) {
@@ -19,10 +20,24 @@ final class WCOS_Merge_Order_Service {
 		if ('' === $operation_id || !$source_id || !$target_id || $source_id === $target_id) {
 			throw new InvalidArgumentException(__('Merge requires two distinct persisted orders and an operation ID.', 'wc-order-splitter'));
 		}
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source_id, $target_id);
+		if (!is_array($participants)) {
+			throw new RuntimeException(__('A Merge participant is no longer available.', 'wc-order-splitter'));
+		}
+		list($source, $target) = $participants;
 
 		$existing = WCOS_Operation_Journal::get($source, $operation_id);
 		if (is_array($existing)) {
 			return $this->replay_existing($source_id, $target_id, $operation_id, $existing);
+		}
+		if (!empty($confirmation_authority)) {
+			$this->assert_confirmation_current_before_lease(
+				$confirmation_authority,
+				$operation_id,
+				$source_id,
+				$target_id,
+				$precision
+			);
 		}
 
 		$lease = WCOS_Multi_Order_Lease::acquire(array($source_id, $target_id), $operation_id);
@@ -91,27 +106,29 @@ final class WCOS_Merge_Order_Service {
 			);
 			WCOS_Merge_Journal_Context::assert_executable_policy($record);
 			$snapshot = $record['context']['merge_recovery_snapshot'];
-			$stock_before = WCOS_Order_Contract_Snapshot::product_stock($source);
+			$stock_before = WCOS_Merge_Canonical_Reader::product_stock($source);
 
 			$this->event('before_target_write', $source, $target, $operation_id);
 			$target_item_ids = array();
 			$processed_line_count = 0;
 			foreach ($plan['lines'] as $source_item_id => $line_authority) {
 				list($source, $target, $record) = $this->boundary($lease, $source_id, $target_id, $operation_id, 'before_target_line_write');
-				$source_item = $source->get_item((int) $source_item_id);
+				$source_item = WCOS_Merge_Canonical_Reader::item($source, $source_item_id, 'line_item');
 				$this->assert_plan_line($source_item, $line_authority, true, $precision);
 				if ('coalesce' === sanitize_key((string) $line_authority['action'])) {
-					$target_item = $target->get_item(absint($line_authority['target_item_id']));
+					$target_item = WCOS_Merge_Canonical_Reader::item($target, $line_authority['target_item_id'], 'line_item');
 					$this->assert_target_plan_line($target_item, $line_authority['target_before'], $precision);
 					$this->apply_target_line_state($target_item, $line_authority['target_after']);
 					$target_item->save();
-					$this->assert_target_plan_line($target->get_item(absint($line_authority['target_item_id'])), $line_authority['target_after'], $precision);
+					$target = $this->load_order($target_id, 'target');
+					$this->assert_target_plan_line(WCOS_Merge_Canonical_Reader::item($target, $line_authority['target_item_id'], 'line_item'), $line_authority['target_after'], $precision);
 				} else {
 					$clone = WCOS_Order_Item_Cloner::product(
 						$source_item,
 						array(),
 						true,
-						WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE
+						WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE,
+						true
 					);
 					$target->add_item($clone);
 					$target->save();
@@ -139,19 +156,26 @@ final class WCOS_Merge_Order_Service {
 			$target = $this->load_order($target_id, 'target');
 			$this->event('after_all_target_lines_before_target_money', $source, $target, $operation_id);
 			list($source, $target, $record) = $this->boundary($lease, $source_id, $target_id, $operation_id, 'before_target_money_tax_write');
-			$tax_ids_before = array_map('intval', array_keys($target->get_items('tax')));
-			WCOS_Tax_Item_Synchronizer::synchronize(
-				$target,
-				WCOS_Tax_Item_Synchronizer::templates_for_rates($source, $plan['tax_template_rate_ids']),
-				$precision,
-				true,
-				WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE,
-				true
-			);
-			WCOS_Order_Totals_Rebuilder::rebuild($target, $precision);
+			$tax_ids_before = array_map('intval', array_keys(WCOS_Merge_Canonical_Reader::items($target, 'tax')));
+			$tax_template_policy = sanitize_key(isset($plan['tax_template_policy']) ? (string) $plan['tax_template_policy'] : '');
+			if ('import_source_product_rates' === $tax_template_policy) {
+				WCOS_Tax_Item_Synchronizer::synchronize(
+					$target,
+					WCOS_Tax_Item_Synchronizer::templates_for_rates($source, $plan['tax_template_rate_ids'], true),
+					$precision,
+					true,
+					WCOS_Order_Item_Meta_Policy::CONTEXT_MERGE,
+					true,
+					true
+				);
+			} elseif ('preserve_target_rows_only' !== $tax_template_policy) {
+				throw new RuntimeException(__('The Merge tax-template policy is not executable.', 'wc-order-splitter'));
+			}
+			WCOS_Order_Totals_Rebuilder::rebuild($target, $precision, true);
 			$target->save();
 			$target = $this->load_order($target_id, 'target');
-			$target_tax_item_ids = array_values(array_diff(array_map('intval', array_keys($target->get_items('tax'))), $tax_ids_before));
+			WCOS_Merge_Financial_Authority::assert_current($source, $target, $plan['financial_authority']);
+			$target_tax_item_ids = array_values(array_diff(array_map('intval', array_keys(WCOS_Merge_Canonical_Reader::items($target, 'tax'))), $tax_ids_before));
 			sort($target_tax_item_ids, SORT_NUMERIC);
 			$this->event('after_target_money_tax_persistence', $source, $target, $operation_id);
 			$record = $this->checkpoint_state(
@@ -172,9 +196,9 @@ final class WCOS_Merge_Order_Service {
 			}
 			foreach ($plan['lines'] as $source_item_id => $line_authority) {
 				list($source, $target, $record) = $this->boundary($lease, $source_id, $target_id, $operation_id, 'before_source_line_ownership_write');
-				$source_item = $source->get_item((int) $source_item_id);
+				$source_item = WCOS_Merge_Canonical_Reader::item($source, $source_item_id, 'line_item');
 				$this->assert_plan_line($source_item, $line_authority, false, $precision);
-				if ('' !== (string) $source_item->get_meta('_reduced_stock', true)) {
+				if ('' !== (string) $source_item->get_meta('_reduced_stock', true, 'edit')) {
 					$source_item->delete_meta_data('_reduced_stock');
 					$source_item->save();
 				}
@@ -200,14 +224,14 @@ final class WCOS_Merge_Order_Service {
 			$source = $this->load_order($source_id, 'source');
 			$target = $this->load_order($target_id, 'target');
 			$this->event('after_ownership_migration_before_retirement', $source, $target, $operation_id);
-			WCOS_Order_Contract_Snapshot::assert_product_stock_equal($stock_before, WCOS_Order_Contract_Snapshot::product_stock($source));
+			WCOS_Order_Contract_Snapshot::assert_product_stock_equal($stock_before, WCOS_Merge_Canonical_Reader::product_stock($source));
 
 			list($source, $target, $record) = $this->boundary($lease, $source_id, $target_id, $operation_id, 'before_source_retirement');
 			WCOS_Merge_Recovery_Snapshot::assert_archive_preserved($snapshot, $source);
 			$this->event('before_non_force_source_retirement', $source, $target, $operation_id);
 			$source->delete(false);
 			$source = $this->load_order($source_id, 'source');
-			if ('trash' !== $source->get_status()) {
+			if ('trash' !== WCOS_Merge_Canonical_Reader::status($source)) {
 				throw new RuntimeException(__('The approved non-force Merge retirement did not archive the source.', 'wc-order-splitter'));
 			}
 			WCOS_Merge_Recovery_Snapshot::assert_archive_preserved($snapshot, $source);
@@ -231,7 +255,7 @@ final class WCOS_Merge_Order_Service {
 			$this->event('after_complete', $source, $target, $operation_id);
 			return $this->completed_result($source_id, $target_id, $operation_id);
 		} catch (Throwable $throwable) {
-			$fresh_source = wc_get_order($source_id);
+			$fresh_source = WCOS_Merge_Canonical_Reader::order($source_id);
 			$record = $fresh_source instanceof WC_Order ? WCOS_Operation_Journal::get($fresh_source, $operation_id) : null;
 			if ($record_started && $fresh_source instanceof WC_Order && is_array($record)) {
 				$status = sanitize_key(isset($record['status']) ? (string) $record['status'] : '');
@@ -350,21 +374,21 @@ final class WCOS_Merge_Order_Service {
 		$precision = WCOS_Price_Precision_Scope::validate($precision);
 		if (!$item instanceof WC_Order_Item_Product
 			|| (int) $item->get_id() !== (int) $authority['source_item_id']
-			|| !hash_equals((string) $authority['line_identity'], WCOS_Line_Identity::from_item($item))
-			|| (int) $authority['product_id'] !== (int) $item->get_product_id()
-			|| (int) $authority['variation_id'] !== (int) $item->get_variation_id()
-			|| (string) $authority['tax_class'] !== (string) $item->get_tax_class()
+			|| !hash_equals((string) $authority['line_identity'], WCOS_Merge_Canonical_Reader::line_identity($item))
+			|| (int) $authority['product_id'] !== (int) $item->get_product_id('edit')
+			|| (int) $authority['variation_id'] !== (int) $item->get_variation_id('edit')
+			|| (string) $authority['tax_class'] !== (string) $item->get_tax_class('edit')
 			|| !hash_equals((string) $authority['commercial_identity'], WCOS_Merge_Commercial_Policy::line_identity($item))
-			|| (string) $authority['quantity'] !== WCOS_Decimal::normalize($item->get_quantity(), 6)
-			|| WCOS_Decimal::to_units($authority['subtotal'], $precision) !== WCOS_Decimal::to_units($item->get_subtotal(), $precision)
-			|| WCOS_Decimal::to_units($authority['subtotal_tax'], $precision) !== WCOS_Decimal::to_units($item->get_subtotal_tax(), $precision)
-			|| WCOS_Decimal::to_units($authority['total'], $precision) !== WCOS_Decimal::to_units($item->get_total(), $precision)
-			|| WCOS_Decimal::to_units($authority['total_tax'], $precision) !== WCOS_Decimal::to_units($item->get_total_tax(), $precision)
-			|| self::tax_units($authority['taxes'], $precision) !== self::tax_units($item->get_taxes(), $precision)) {
+			|| (string) $authority['quantity'] !== WCOS_Decimal::normalize($item->get_quantity('edit'), 6)
+			|| WCOS_Decimal::to_units($authority['subtotal'], $precision) !== WCOS_Decimal::to_units($item->get_subtotal('edit'), $precision)
+			|| WCOS_Decimal::to_units($authority['subtotal_tax'], $precision) !== WCOS_Decimal::to_units($item->get_subtotal_tax('edit'), $precision)
+			|| WCOS_Decimal::to_units($authority['total'], $precision) !== WCOS_Decimal::to_units($item->get_total('edit'), $precision)
+			|| WCOS_Decimal::to_units($authority['total_tax'], $precision) !== WCOS_Decimal::to_units($item->get_total_tax('edit'), $precision)
+			|| self::tax_units($authority['taxes'], $precision) !== self::tax_units((array) $item->get_taxes('edit'), $precision)) {
 			throw new RuntimeException(__('A Merge source line changed after its server-owned plan was bound.', 'wc-order-splitter'));
 		}
 		if ($check_reduced_stock) {
-			$current = $item->get_meta('_reduced_stock', true);
+			$current = $item->get_meta('_reduced_stock', true, 'edit');
 			$current = '' === $current || null === $current ? null : WCOS_Decimal::normalize($current, 6);
 			if ($authority['reduced_stock'] !== $current) {
 				throw new RuntimeException(__('A Merge source reduced-stock marker changed after planning.', 'wc-order-splitter'));
@@ -375,20 +399,20 @@ final class WCOS_Merge_Order_Service {
 	private function assert_target_plan_line($item, array $authority, $precision) {
 		$precision = WCOS_Price_Precision_Scope::validate($precision);
 		if (!$item instanceof WC_Order_Item_Product
-			|| !hash_equals((string) $authority['line_identity'], WCOS_Line_Identity::from_item($item))
+			|| !hash_equals((string) $authority['line_identity'], WCOS_Merge_Canonical_Reader::line_identity($item))
 			|| !hash_equals((string) $authority['commercial_identity'], WCOS_Merge_Commercial_Policy::line_identity($item))
-			|| (int) $authority['product_id'] !== (int) $item->get_product_id()
-			|| (int) $authority['variation_id'] !== (int) $item->get_variation_id()
-			|| (string) $authority['tax_class'] !== (string) $item->get_tax_class()
-			|| (string) $authority['quantity'] !== WCOS_Decimal::normalize($item->get_quantity(), 6)
-			|| WCOS_Decimal::to_units($authority['subtotal'], $precision) !== WCOS_Decimal::to_units($item->get_subtotal(), $precision)
-			|| WCOS_Decimal::to_units($authority['subtotal_tax'], $precision) !== WCOS_Decimal::to_units($item->get_subtotal_tax(), $precision)
-			|| WCOS_Decimal::to_units($authority['total'], $precision) !== WCOS_Decimal::to_units($item->get_total(), $precision)
-			|| WCOS_Decimal::to_units($authority['total_tax'], $precision) !== WCOS_Decimal::to_units($item->get_total_tax(), $precision)
-			|| self::tax_units($authority['taxes'], $precision) !== self::tax_units($item->get_taxes(), $precision)) {
+			|| (int) $authority['product_id'] !== (int) $item->get_product_id('edit')
+			|| (int) $authority['variation_id'] !== (int) $item->get_variation_id('edit')
+			|| (string) $authority['tax_class'] !== (string) $item->get_tax_class('edit')
+			|| (string) $authority['quantity'] !== WCOS_Decimal::normalize($item->get_quantity('edit'), 6)
+			|| WCOS_Decimal::to_units($authority['subtotal'], $precision) !== WCOS_Decimal::to_units($item->get_subtotal('edit'), $precision)
+			|| WCOS_Decimal::to_units($authority['subtotal_tax'], $precision) !== WCOS_Decimal::to_units($item->get_subtotal_tax('edit'), $precision)
+			|| WCOS_Decimal::to_units($authority['total'], $precision) !== WCOS_Decimal::to_units($item->get_total('edit'), $precision)
+			|| WCOS_Decimal::to_units($authority['total_tax'], $precision) !== WCOS_Decimal::to_units($item->get_total_tax('edit'), $precision)
+			|| self::tax_units($authority['taxes'], $precision) !== self::tax_units((array) $item->get_taxes('edit'), $precision)) {
 			throw new RuntimeException(__('A Merge target line changed after its coalescing authority was bound.', 'wc-order-splitter'));
 		}
-		$current = $item->get_meta('_reduced_stock', true);
+		$current = $item->get_meta('_reduced_stock', true, 'edit');
 		$current = '' === $current || null === $current ? null : WCOS_Decimal::normalize($current, 6);
 		if ($authority['reduced_stock'] !== $current) {
 			throw new RuntimeException(__('A Merge target reduced-stock marker changed after planning.', 'wc-order-splitter'));
@@ -396,14 +420,16 @@ final class WCOS_Merge_Order_Service {
 	}
 
 	private function apply_target_line_state(WC_Order_Item_Product $item, array $authority) {
-		$result = $item->set_props(array(
-			'quantity' => $authority['quantity'],
-			'subtotal' => $authority['subtotal'],
-			'subtotal_tax' => $authority['subtotal_tax'],
-			'total' => $authority['total'],
-			'total_tax' => $authority['total_tax'],
-			'taxes' => $authority['taxes'],
-		));
+		$result = WCOS_Merge_Canonical_Reader::without_presentation_filters(static function() use ($item, $authority) {
+			return $item->set_props(array(
+				'quantity' => $authority['quantity'],
+				'subtotal' => $authority['subtotal'],
+				'subtotal_tax' => $authority['subtotal_tax'],
+				'total' => $authority['total'],
+				'total_tax' => $authority['total_tax'],
+				'taxes' => $authority['taxes'],
+			));
+		});
 		if (is_wp_error($result)) {
 			throw new RuntimeException($result->get_error_message());
 		}
@@ -423,6 +449,32 @@ final class WCOS_Merge_Order_Service {
 			ksort($result[$bucket], SORT_NUMERIC);
 		}
 		return $result;
+	}
+
+	private function assert_confirmation_current_before_lease(array $authority, $operation_id, $source_id, $target_id, $precision) {
+		$source = $this->load_order($source_id, 'source');
+		$target = $this->load_order($target_id, 'target');
+		$report = WCOS_Merge_Preflight::assert_supported($source, $target, $precision);
+		$plan = WCOS_Merge_Plan::build($source, $target, $precision);
+		if (!hash_equals(WCOS_Merge_Plan::fingerprint($report['plan']), WCOS_Merge_Plan::fingerprint($plan))) {
+			throw new RuntimeException(__('The server-owned Merge plan changed during confirmation revalidation.', 'wc-order-splitter'));
+		}
+		$context = WCOS_Merge_Journal_Context::create_executable(
+			$source,
+			$target,
+			$plan,
+			$report['context_authority'],
+			$precision
+		);
+		$this->assert_confirmation_authority(
+			$authority,
+			$operation_id,
+			$source_id,
+			$target_id,
+			$precision,
+			$plan,
+			$context['merge_pair']
+		);
 	}
 
 	private function assert_confirmation_authority(array $authority, $operation_id, $source_id, $target_id, $precision, array $plan, array $pair) {
@@ -487,8 +539,8 @@ final class WCOS_Merge_Order_Service {
 	}
 
 	private function load_order($order_id, $role) {
-		$order = wc_get_order(absint($order_id));
-		if (!$order instanceof WC_Order || 'shop_order' !== $order->get_type()) {
+		$order = WCOS_Merge_Canonical_Reader::shop_order(absint($order_id));
+		if (!$order instanceof WC_Order) {
 			throw new RuntimeException('target' === $role
 				? __('The Merge target is no longer available.', 'wc-order-splitter')
 				: __('The Merge source is no longer available.', 'wc-order-splitter'));

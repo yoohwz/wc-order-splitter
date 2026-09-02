@@ -89,7 +89,7 @@ final class WCOS_Merge_Admin_Controller {
 		$term = strtolower(trim((string) $term));
 		$page = max(1, min(self::SEARCH_MAX_PAGE, (int) $page));
 		if (preg_match('/^#?([1-9][0-9]*)$/D', $term, $matches)) {
-			$target = wc_get_order(absint($matches[1]));
+			$target = WCOS_Merge_Canonical_Reader::shop_order(absint($matches[1]));
 			return array(
 				'results' => $this->is_searchable_target($source, $target) ? array($this->search_result($target)) : array(),
 				'more' => false,
@@ -99,7 +99,8 @@ final class WCOS_Merge_Admin_Controller {
 			function ($status) { return 0 === strpos((string) $status, 'wc-') ? substr((string) $status, 3) : (string) $status; },
 			(array) get_option('order_splitter_status_allowed', array('wc-processing'))
 		);
-		$orders = wc_get_orders(
+		$order_ids = WCOS_Merge_Canonical_Reader::order_ids(
+			$source,
 			array(
 				'type' => 'shop_order',
 				'status' => array_values(array_filter(array_map('sanitize_key', $statuses))),
@@ -107,17 +108,16 @@ final class WCOS_Merge_Admin_Controller {
 				'limit' => self::SEARCH_SCAN_LIMIT,
 				'orderby' => 'date',
 				'order' => 'DESC',
-				'return' => 'objects',
 			)
 		);
 		$matches = array();
-		foreach ((array) $orders as $order) {
+		foreach ($order_ids as $order_id) {
+			$order = WCOS_Merge_Canonical_Reader::shop_order($order_id);
 			if (!$this->is_searchable_target($source, $order)) {
 				continue;
 			}
 			$id = (string) $order->get_id();
-			$number = (string) $order->get_order_number();
-			if ('' !== $term && false === strpos(strtolower($id), $term) && false === strpos(strtolower($number), ltrim($term, '#'))) {
+			if ('' !== $term && false === strpos(strtolower($id), ltrim($term, '#'))) {
 				continue;
 			}
 			$matches[] = $this->search_result($order);
@@ -218,7 +218,7 @@ final class WCOS_Merge_Admin_Controller {
 		}
 
 		$target_id = absint(isset($result['target_order_id']) ? $result['target_order_id'] : $target->get_id());
-		$persisted_target = wc_get_order($target_id);
+		$persisted_target = WCOS_Merge_Canonical_Reader::shop_order($target_id);
 		if (!$persisted_target instanceof WC_Order) {
 			$persisted_target = $target;
 		}
@@ -230,7 +230,7 @@ final class WCOS_Merge_Admin_Controller {
 			'target' => array(
 				'id' => $persisted_target->get_id(),
 				'number' => (string) $persisted_target->get_order_number(),
-				'status' => (string) $persisted_target->get_status(),
+				'status' => WCOS_Merge_Canonical_Reader::status($persisted_target),
 				'edit_url' => method_exists($persisted_target, 'get_edit_order_url') ? esc_url_raw((string) $persisted_target->get_edit_order_url()) : '',
 			),
 			'retirement_policy' => sanitize_key(isset($result['retirement_policy']) ? (string) $result['retirement_policy'] : WCOS_Merge_Retirement_Policy::approved_identifier()),
@@ -243,7 +243,12 @@ final class WCOS_Merge_Admin_Controller {
 	public function ajax_execute() { $this->send_ajax('execute_request'); }
 
 	public function render_launcher($order) {
+		$this->current_order = null;
 		if (!WCOS_Feature_Gates::enabled(WCOS_Feature_Gates::MERGE) || !$order instanceof WC_Order) {
+			return;
+		}
+		$order = WCOS_Merge_Canonical_Reader::shop_order($order->get_id());
+		if (!$order instanceof WC_Order) {
 			return;
 		}
 		try {
@@ -361,7 +366,7 @@ final class WCOS_Merge_Admin_Controller {
 		if (!wp_verify_nonce($nonce, 'wcos_merge_order_' . $source_id)) {
 			throw new WCOS_Merge_Transport_Exception('invalid_nonce', __('The Merge request failed nonce verification.', 'wc-order-splitter'), 403, false);
 		}
-		$source = wc_get_order($source_id);
+		$source = WCOS_Merge_Canonical_Reader::shop_order($source_id);
 		if (!$source instanceof WC_Order) {
 			throw new WCOS_Merge_Transport_Exception('participant_not_found', __('The Merge source order could not be found.', 'wc-order-splitter'), 404, false);
 		}
@@ -382,7 +387,7 @@ final class WCOS_Merge_Admin_Controller {
 		if (!$target_id || $source->get_id() === $target_id) {
 			throw new WCOS_Merge_Transport_Exception('invalid_pair', __('Merge requires two distinct order IDs.', 'wc-order-splitter'), 400, false);
 		}
-		$target = wc_get_order($target_id);
+		$target = WCOS_Merge_Canonical_Reader::shop_order($target_id);
 		if (!$target instanceof WC_Order) {
 			throw new WCOS_Merge_Transport_Exception('participant_not_found', __('A Merge participant could not be found.', 'wc-order-splitter'), 404, false);
 		}
@@ -417,14 +422,14 @@ final class WCOS_Merge_Admin_Controller {
 		return array(
 			'id' => $order->get_id(),
 			'number' => (string) $order->get_order_number(),
-			'status' => (string) $order->get_status(),
-			'currency' => (string) $order->get_currency(),
+			'status' => WCOS_Merge_Canonical_Reader::status($order),
+			'currency' => WCOS_Merge_Canonical_Reader::currency($order),
 		);
 	}
 
 	private function status_enabled(WC_Order $order) {
 		$allowed = (array) get_option('order_splitter_status_allowed', array('wc-processing'));
-		return in_array('wc-' . $order->get_status(), $allowed, true);
+		return in_array('wc-' . WCOS_Merge_Canonical_Reader::status($order), $allowed, true);
 	}
 
 	private function assert_status_enabled(WC_Order $order) {
@@ -443,6 +448,7 @@ final class WCOS_Merge_Admin_Controller {
 
 	private function review_summary(WC_Order $source, WC_Order $target, array $report) {
 		$precision = (int) $report['price_precision'];
+		$financial_target = !empty($report['target_has_financial_history']);
 		$projected = WCOS_Merge_Commercial_Policy::expected_target_contract($source, $target, $precision);
 		$coalesced = 0;
 		$fresh = 0;
@@ -454,19 +460,26 @@ final class WCOS_Merge_Admin_Controller {
 			}
 		}
 		return array(
-			'source' => array('id' => $source->get_id(), 'number' => (string) $source->get_order_number(), 'status' => (string) $source->get_status(), 'line_count' => count($source->get_items('line_item')), 'total' => (string) $source->get_total()),
-			'target' => array('id' => $target->get_id(), 'number' => (string) $target->get_order_number(), 'status' => (string) $target->get_status(), 'line_count' => count($target->get_items('line_item')), 'total' => (string) $target->get_total()),
+			'source' => array('id' => $source->get_id(), 'number' => (string) $source->get_order_number(), 'status' => WCOS_Merge_Canonical_Reader::status($source), 'line_count' => count(WCOS_Merge_Canonical_Reader::items($source, 'line_item')), 'total' => (string) $source->get_total('edit')),
+			'target' => array('id' => $target->get_id(), 'number' => (string) $target->get_order_number(), 'status' => WCOS_Merge_Canonical_Reader::status($target), 'line_count' => count(WCOS_Merge_Canonical_Reader::items($target, 'line_item')), 'total' => (string) $target->get_total('edit')),
 			'transferable_line_count' => count($report['plan']['lines']),
 			'coalesced_line_count' => $coalesced,
 			'fresh_line_count' => $fresh,
 			'projected_active_target_total' => (string) $projected['grand_total'],
-			'source_shipping_retained' => !empty($source->get_items('shipping')),
-			'source_fees_retained' => !empty($source->get_items('fee')),
-			'source_coupons_retained' => !empty($source->get_items('coupon')),
+			'source_shipping_retained' => !empty(WCOS_Merge_Canonical_Reader::items($source, 'shipping')),
+			'source_fees_retained' => !empty(WCOS_Merge_Canonical_Reader::items($source, 'fee')),
+			'source_coupons_retained' => !empty(WCOS_Merge_Canonical_Reader::items($source, 'coupon')),
 			'target_charges_shipping_disposition' => 'preserve_target',
 			'target_context_disposition' => 'keep_target_context',
 			'target_status_disposition' => 'keep_target',
-			'currency' => (string) $source->get_currency(),
+			'target_financial_history_retained' => $financial_target,
+			'source_financial_history' => 'none',
+			'settlement_neutral_line_count' => $financial_target ? count($report['plan']['lines']) : 0,
+			'financial_line_disposition' => $financial_target ? 'fresh_target_line_only' : 'ordinary_commercial_policy',
+			'target_financial_authority_disposition' => $financial_target ? 'preserve_exact' : 'absent',
+			'target_payable_tax_disposition' => $financial_target ? 'unchanged' : 'historical_product_values_added',
+			'payment_refund_api_disposition' => 'never',
+			'currency' => WCOS_Merge_Canonical_Reader::currency($source),
 			'price_precision' => $precision,
 			'compatibility' => array('supported' => true, 'reason' => 'supported'),
 			'retirement_policy' => WCOS_Merge_Retirement_Policy::approved_identifier(),

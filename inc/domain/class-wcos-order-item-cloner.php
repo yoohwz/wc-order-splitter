@@ -7,25 +7,30 @@ defined('ABSPATH') || exit;
  */
 final class WCOS_Order_Item_Cloner {
 
-	public static function product(WC_Order_Item_Product $source, array $overrides = array(), $copy_reduced_stock = false, $context = WCOS_Order_Item_Meta_Policy::CONTEXT_DUPLICATE) {
+	public static function product(WC_Order_Item_Product $source, array $overrides = array(), $copy_reduced_stock = false, $context = WCOS_Order_Item_Meta_Policy::CONTEXT_DUPLICATE, $canonical_merge = false) {
 		$item = new WC_Order_Item_Product();
+		$read_context = $canonical_merge ? 'edit' : 'view';
 		$props = array(
-			'name' => $source->get_name(),
-			'product_id' => $source->get_product_id(),
-			'variation_id' => $source->get_variation_id(),
-			'quantity' => $source->get_quantity(),
-			'tax_class' => $source->get_tax_class(),
-			'subtotal' => $source->get_subtotal(),
-			'total' => $source->get_total(),
-			'taxes' => $source->get_taxes(),
-			'subtotal_tax' => $source->get_subtotal_tax(),
-			'total_tax' => $source->get_total_tax(),
+			'name' => $source->get_name($read_context),
+			'product_id' => $source->get_product_id($read_context),
+			'variation_id' => $source->get_variation_id($read_context),
+			'quantity' => $source->get_quantity($read_context),
+			'tax_class' => $source->get_tax_class($read_context),
+			'subtotal' => $source->get_subtotal($read_context),
+			'total' => $source->get_total($read_context),
+			'taxes' => $source->get_taxes($read_context),
+			'subtotal_tax' => $source->get_subtotal_tax($read_context),
+			'total_tax' => $source->get_total_tax($read_context),
 		);
-		self::assert_props($item->set_props(array_merge($props, $overrides)), 'product');
+		$write = static function() use ($item, $props, $overrides) {
+			return $item->set_props(array_merge($props, $overrides));
+		};
+		$result = $canonical_merge ? WCOS_Merge_Canonical_Reader::without_presentation_filters($write) : $write();
+		self::assert_props($result, 'product');
 		WCOS_Order_Item_Meta_Policy::copy($source, $item, $context, array('_reduced_stock'));
 
 		if ($copy_reduced_stock) {
-			$reduced_stock = $source->get_meta('_reduced_stock', true);
+			$reduced_stock = $source->get_meta('_reduced_stock', true, $read_context);
 			if ('' !== $reduced_stock && is_numeric($reduced_stock)) {
 				$item->add_meta_data('_reduced_stock', WCOS_Decimal::normalize($reduced_stock, 6), true);
 			}
@@ -69,19 +74,21 @@ final class WCOS_Order_Item_Cloner {
 		return $item;
 	}
 
-	public static function tax(WC_Order_Item_Tax $source, $context = WCOS_Order_Item_Meta_Policy::CONTEXT_DUPLICATE) {
+	public static function tax(WC_Order_Item_Tax $source, $context = WCOS_Order_Item_Meta_Policy::CONTEXT_DUPLICATE, $canonical_merge = false) {
 		$item = new WC_Order_Item_Tax();
-		self::assert_props(
-			$item->set_props(array(
-				'rate_id' => $source->get_rate_id(),
-				'label' => $source->get_label(),
-				'compound' => $source->get_compound(),
-				'tax_total' => $source->get_tax_total(),
-				'shipping_tax_total' => $source->get_shipping_tax_total(),
-				'rate_percent' => $source->get_rate_percent(),
-			)),
-			'tax'
-		);
+		$read_context = $canonical_merge ? 'edit' : 'view';
+		$write = static function() use ($item, $source, $read_context) {
+			return $item->set_props(array(
+					'rate_id' => $source->get_rate_id($read_context),
+					'label' => $source->get_label($read_context),
+					'compound' => $source->get_compound($read_context),
+					'tax_total' => $source->get_tax_total($read_context),
+					'shipping_tax_total' => $source->get_shipping_tax_total($read_context),
+					'rate_percent' => $source->get_rate_percent($read_context),
+			));
+		};
+		$result = $canonical_merge ? WCOS_Merge_Canonical_Reader::without_presentation_filters($write) : $write();
+		self::assert_props($result, 'tax');
 		WCOS_Order_Item_Meta_Policy::copy($source, $item, $context);
 		return $item;
 	}

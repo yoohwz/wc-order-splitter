@@ -775,7 +775,7 @@ final class WCOS_Compat_Merge_Commercial_Matrix {
 			$changed = 'source' === $participant ? $source : $target;
 			$changed->set_transaction_id('compat-005-' . $participant . '-transaction');
 			$changed->save();
-			self::expect_reason(wc_get_order($source->get_id()), wc_get_order($target->get_id()), 'paid_order_unsupported');
+			self::expect_reason(wc_get_order($source->get_id()), wc_get_order($target->get_id()), 'source' === $participant ? 'source_financial_history_not_movable' : 'financial_target_nonzero_source_total');
 
 			$source = self::order('paid-date-' . $participant . '-source');
 			$target = self::order('paid-date-' . $participant . '-target');
@@ -786,7 +786,7 @@ final class WCOS_Compat_Merge_Commercial_Matrix {
 			$changed = 'source' === $participant ? $source : $target;
 			$changed->set_date_paid(time());
 			$changed->save();
-			self::expect_reason(wc_get_order($source->get_id()), wc_get_order($target->get_id()), 'paid_order_unsupported');
+			self::expect_reason(wc_get_order($source->get_id()), wc_get_order($target->get_id()), 'source' === $participant ? 'source_financial_history_not_movable' : 'financial_target_nonzero_source_total');
 
 			$source = self::order('paid-status-' . $participant . '-source');
 			$target = self::order('paid-status-' . $participant . '-target');
@@ -797,7 +797,7 @@ final class WCOS_Compat_Merge_Commercial_Matrix {
 			$changed = 'source' === $participant ? $source : $target;
 			$changed->set_status('processing');
 			$changed->save();
-			self::expect_reason(wc_get_order($source->get_id()), wc_get_order($target->get_id()), 'paid_order_unsupported');
+			self::expect_reason(wc_get_order($source->get_id()), wc_get_order($target->get_id()), 'source' === $participant ? 'source_financial_history_not_movable' : 'financial_target_nonzero_source_total');
 
 			$source = self::order('refund-' . $participant . '-source');
 			$target = self::order('refund-' . $participant . '-target');
@@ -814,7 +814,7 @@ final class WCOS_Compat_Merge_Commercial_Matrix {
 				'restock_items' => false,
 			));
 			self::assert($refund instanceof WC_Order_Refund, 'Refund boundary fixture could not be created.');
-			self::expect_reason(wc_get_order($source->get_id()), wc_get_order($target->get_id()), 'refund_policy_missing');
+			self::expect_reason(wc_get_order($source->get_id()), wc_get_order($target->get_id()), 'source' === $participant ? 'source_financial_history_not_movable' : 'financial_target_nonzero_source_total');
 		}
 
 		self::$results['paid_refund_boundary'] = array(

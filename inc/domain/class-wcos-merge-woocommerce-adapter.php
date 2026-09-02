@@ -34,16 +34,16 @@ final class WCOS_Merge_WooCommerce_Adapter {
 		if (!$source_id || !$target_id || $source_id === $target_id) {
 			throw new WCOS_Merge_Adapter_Exception('invalid_participant_pair', __('Merge requires two distinct persisted shop orders.', 'wc-order-splitter'));
 		}
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source_id, $target_id);
+		if (!is_array($participants)) {
+			throw new WCOS_Merge_Adapter_Exception('participant_unavailable', __('A Merge participant is no longer available.', 'wc-order-splitter'));
+		}
+		list($source, $target) = $participants;
 
 		$precision = WCOS_Price_Precision_Scope::for_operation($source, $operation_id, $confirmed_precision);
 		$precision_token = WCOS_Price_Precision_Scope::begin($precision);
 		$stock_token = false;
 		try {
-			$source = wc_get_order($source_id);
-			$target = wc_get_order($target_id);
-			if (!$source instanceof WC_Order || !$target instanceof WC_Order) {
-				throw new WCOS_Merge_Adapter_Exception('participant_unavailable', __('A Merge participant is no longer available.', 'wc-order-splitter'));
-			}
 			$existing = WCOS_Operation_Journal::get($source, $operation_id);
 			if (!is_array($existing)) {
 				WCOS_Merge_Preflight::assert_supported($source, $target, $precision);
@@ -113,12 +113,13 @@ final class WCOS_Merge_WooCommerce_Adapter {
 	public function preflight(WC_Order $source, WC_Order $target, $operation_id = '', $confirmed_precision = null) {
 		$source_id = absint($source->get_id());
 		$target_id = absint($target->get_id());
-		$precision = WCOS_Price_Precision_Scope::for_operation($source, $operation_id, $confirmed_precision);
+		$participants = WCOS_Merge_Canonical_Reader::shop_order_pair($source_id, $target_id);
+		$precision = is_array($participants)
+			? WCOS_Price_Precision_Scope::for_operation($participants[0], $operation_id, $confirmed_precision)
+			: (null === $confirmed_precision ? WCOS_Price_Precision_Scope::store_precision() : WCOS_Price_Precision_Scope::validate($confirmed_precision));
 		$token = WCOS_Price_Precision_Scope::begin($precision);
 		try {
-			$source = $source_id ? wc_get_order($source_id) : $source;
-			$target = $target_id ? wc_get_order($target_id) : $target;
-			if (!$source instanceof WC_Order || !$target instanceof WC_Order) {
+			if (!is_array($participants)) {
 				return array(
 					'supported' => false,
 					'reason' => 'participant_unavailable',
@@ -128,6 +129,7 @@ final class WCOS_Merge_WooCommerce_Adapter {
 					'price_precision' => $precision,
 				);
 			}
+			list($source, $target) = $participants;
 			return WCOS_Merge_Preflight::report($source, $target, $precision);
 		} finally {
 			WCOS_Price_Precision_Scope::end($token);
@@ -135,8 +137,8 @@ final class WCOS_Merge_WooCommerce_Adapter {
 	}
 
 	private function mark_manual_stock_reconciliation($source_id, $target_id, $operation_id) {
-		$source = wc_get_order(absint($source_id));
-		$target = wc_get_order(absint($target_id));
+		$source = WCOS_Merge_Canonical_Reader::order(absint($source_id));
+		$target = WCOS_Merge_Canonical_Reader::order(absint($target_id));
 		$record = $source instanceof WC_Order ? WCOS_Operation_Journal::get($source, $operation_id) : null;
 		if ($source instanceof WC_Order && $target instanceof WC_Order && is_array($record)) {
 			WCOS_Merge_Compensator::manual_reconciliation($source, $target, $record, 'physical_stock_after_write');
@@ -144,7 +146,7 @@ final class WCOS_Merge_WooCommerce_Adapter {
 	}
 
 	private function current_error_code($source_id, $operation_id) {
-		$source = wc_get_order(absint($source_id));
+		$source = WCOS_Merge_Canonical_Reader::order(absint($source_id));
 		$record = $source instanceof WC_Order ? WCOS_Operation_Journal::get($source, $operation_id) : null;
 		$status = is_array($record) && isset($record['status']) ? sanitize_key((string) $record['status']) : '';
 		if ('manual_reconciliation' === $status) {
