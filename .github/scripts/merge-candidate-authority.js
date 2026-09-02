@@ -1,8 +1,9 @@
 'use strict';
 
-// This program only materializes an already approved decision; it never creates
-// review, Acceptance, Human Gate, merge, or publication authority.
+// Read-only verification inside a native pull_request merge-ref job. GitHub
+// supplies the check; this program never creates/patches checks or approvals.
 const { execFileSync } = require('node:child_process');
+const { readFileSync } = require('node:fs');
 const { createHash } = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 
@@ -10,6 +11,7 @@ const REPO = 'yoohwz/wc-order-splitter';
 const OWNER = { login: 'yoohwz', id: 152001663 };
 const APP = 15368;
 const RULESET = 21367637;
+const WORKFLOW = '.github/workflows/merge-authority.yml';
 // Owner-authenticated source ruleset revision, history version 47541914.
 // GitHub redacts bypass_actors without Administration:write; never grant that
 // capability to Actions merely to read it. Any ruleset edit invalidates this pin.
@@ -63,6 +65,64 @@ function issueField(body, label) {
   const match = /^- \*\*[^*]+:\*\* `([^`]+)`$/.exec(exact[0]);
   need(match, `malformed Task Capsule ${label}`);
   return match[1];
+}
+
+function resolveTask(pr, issue) {
+  const one = (pattern, label) => {
+    const matches = [...(pr.body || '').matchAll(pattern)];
+    need(matches.length === 1, `unique PR ${label}`);
+    return matches[0][1];
+  };
+  const task = one(/^- Task: `(WOS-[A-Z0-9-]+)`$/gm, 'task');
+  const issueNumber = one(/^- Canonical Issue: #([1-9][0-9]*)$/gm, 'Issue');
+  if (issue) {
+    owner(issue);
+    equal(String(issue.number), issueNumber, 'resolved Issue number');
+    need(!issue.pull_request && issue.state === 'open' && issue.title.includes(task), 'canonical open Issue');
+    equal(issueField(issue.body, 'Task'), task, 'resolved Task Capsule');
+  }
+  return { task, issue: issueNumber };
+}
+
+function nativeContext(event, env) {
+  equal(env.GITHUB_REPOSITORY, REPO, 'native repository');
+  equal(env.GITHUB_EVENT_NAME, 'pull_request', 'native event');
+  equal(event.action, 'ready_for_review', 'native action');
+  equal(event.repository?.full_name, REPO, 'event repository');
+  equal(event.sender?.login, OWNER.login, 'ready actor login');
+  equal(event.sender?.id, OWNER.id, 'ready actor ID');
+  const pr = event.pull_request;
+  need(pr && ID.test(String(event.number)) && pr.number === event.number, 'event PR');
+  equal(pr.state, 'open', 'event open PR');
+  equal(pr.draft, false, 'event ready PR');
+  equal(pr.base.ref, 'main', 'event base branch');
+  equal(pr.base.repo.full_name, REPO, 'event base repository');
+  equal(pr.head.repo.full_name, REPO, 'event head repository');
+  const ref = `refs/pull/${event.number}/merge`;
+  equal(env.GITHUB_REF, ref, 'native merge ref');
+  need(SHA.test(env.GITHUB_SHA) && SHA.test(pr.head.sha) && SHA.test(pr.base.sha), 'native Git objects');
+  equal(env.GITHUB_SHA, pr.merge_commit_sha, 'event merge candidate');
+  equal(env.GITHUB_WORKFLOW_REF, `${REPO}/${WORKFLOW}@${ref}`, 'native workflow ref');
+  equal(env.GITHUB_WORKFLOW_SHA, env.GITHUB_SHA, 'native workflow source');
+  need(ID.test(env.GITHUB_RUN_ID), 'native run ID');
+  equal(env.GITHUB_RUN_ATTEMPT, '1', 'fresh ready event, not rerun');
+  need(Number.isFinite(Date.parse(pr.updated_at)), 'ready event timestamp');
+  return { pr: String(event.number), head: pr.head.sha, base: pr.base.sha, candidate: env.GITHUB_SHA,
+    ref, readyAt: pr.updated_at, run: Number(env.GITHUB_RUN_ID) };
+}
+
+function selectGate(comments, input) {
+  const header = `## Merge Human Gate — ${input.task}`;
+  const terminal = `HUMAN_GATE_APPROVED: ${input.task} / PR #${input.pr} / exact head ${input.head}`;
+  // Select the latest direct positive record, then authenticate it completely.
+  // Do not fall back to an older approval when that record is malformed/edited.
+  const candidates = comments.filter(record => record.body?.split('\n')[0] === header &&
+    record.body.trimEnd().endsWith(terminal) && record.user?.id === OWNER.id);
+  candidates.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id);
+  need(candidates.length > 0, 'missing current-head Human Gate');
+  const selected = candidates[0];
+  recordFields(selected, input.issue, header, 'repository_owner', terminal);
+  return selected;
 }
 
 function checkResult(check, sha, suite) {
@@ -163,6 +223,11 @@ function verifySnapshot(s, input) {
   equal(s.pr.base.repo.full_name, REPO, 'PR base repository');
   equal(s.pr.head.repo.full_name, REPO, 'same-repository head');
   equal(s.pr.head.sha, input.head, 'unchanged PR head');
+  equal(input.context.pr, input.pr, 'event PR binding');
+  equal(input.context.head, input.head, 'event head binding');
+  equal(input.context.base, s.pr.base.sha, 'event base drift');
+  equal(input.context.candidate, s.pr.merge_commit_sha, 'event candidate regeneration');
+  equal(input.context.ref, `refs/pull/${input.pr}/merge`, 'native ref binding');
   equal(s.main.object.sha, s.pr.base.sha, 'current main/base');
   equal(s.pr.mergeable, true, 'mergeable PR');
   equal(s.candidate.sha, s.pr.merge_commit_sha, 'current merge candidate');
@@ -196,9 +261,9 @@ function verifySnapshot(s, input) {
     Role: 'repository_owner', 'Evidence authority': `issue-comment:${s.evidence.id}`,
     'Acceptance authority': `issue-comment:${s.acceptance.id}`, 'Human command': `Finalize ${input.task}`,
     'Merge candidate': s.candidate.sha, 'Merge candidate tree': s.candidate.tree.sha,
-    'Unresolved review threads': '0',
+    'Unresolved review threads': '0', 'PR state': 'draft',
   });
-  equal(`issue-comment:${s.gate.id}`, input.gate, 'dispatch Human Gate ID');
+  equal(`issue-comment:${s.gate.id}`, input.gate, 'selected Human Gate ID');
   equal(s.final.event, 'workflow_dispatch', 'FINAL event');
   equal(s.final.path, '.github/workflows/ci.yml', 'FINAL workflow path');
   equal(s.final.head_sha, input.head, 'FINAL head');
@@ -221,12 +286,35 @@ function verifySnapshot(s, input) {
     const reviewedAt = s.review.submitted_at || s.review.created_at;
     need(Date.parse(reviewedAt) <= Date.parse(s.final.created_at), 'FINAL must follow review');
   }
-  const times = [s.final.updated_at, s.evidence.created_at, s.acceptance.created_at, s.gate.created_at, s.bridge.created_at].map(Date.parse);
+  const times = [s.final.updated_at, s.evidence.created_at, s.acceptance.created_at, s.gate.created_at, input.context.readyAt, s.bridge.created_at].map(Date.parse);
   need(times.every(Number.isFinite) && times.every((time, i) => i === 0 || times[i - 1] <= time), 'authority chronology');
-  equal(s.bridge.event, 'workflow_dispatch', 'bridge event');
-  equal(s.bridge.path, '.github/workflows/ci.yml', 'bridge path');
-  equal(s.bridge.head_sha, input.head, 'bridge dispatch head');
-  equal(s.bridge.run_attempt, 1, 'bridge requires fresh dispatch, not rerun');
+  const ready = s.readyEvents.filter(event => Date.parse(event.created_at) >= Date.parse(s.gate.created_at));
+  need(ready.length === 1, 'Human Gate requires exactly one ready transition');
+  equal(ready[0].created_at, input.context.readyAt, 'ready timeline/event binding');
+  equal(ready[0].actor?.id, OWNER.id, 'ready timeline actor');
+  equal(s.bridge.id, input.context.run, 'native run identity');
+  equal(s.bridge.event, 'pull_request', 'bridge event');
+  equal(s.bridge.path, WORKFLOW, 'bridge path');
+  equal(s.bridge.repository?.full_name, REPO, 'native run repository');
+  // Actions REST identifies a PR-native run/suite/check by the branch head.
+  // The immutable event/runner context above separately binds its merge SHA.
+  equal(s.bridge.head_sha, input.head, 'native run head');
+  equal(s.bridge.head_branch, s.pr.head.ref, 'native run branch');
+  equal(s.bridge.run_attempt, 1, 'bridge requires fresh ready event, not rerun');
+  equal(s.bridge.status, 'in_progress', 'native job must be running');
+  const associated = records => need(records?.some(pr => String(pr.number) === input.pr &&
+    pr.head.sha === input.head && pr.base.sha === s.pr.base.sha), 'native PR association');
+  associated(s.bridge.pull_requests);
+  equal(s.bridgeSuite.id, s.bridge.check_suite_id, 'native suite identity');
+  equal(s.bridgeSuite.app?.id, APP, 'native suite app');
+  equal(s.bridgeSuite.head_sha, input.head, 'native suite head');
+  associated(s.bridgeSuite.pull_requests);
+  equal(s.bridgeCheck.name, 'Required CI', 'native protected job');
+  equal(s.bridgeCheck.head_sha, input.head, 'native check PR head');
+  equal(s.bridgeCheck.app?.id, APP, 'native check app');
+  equal(s.bridgeCheck.check_suite?.id, s.bridgeSuite.id, 'native check suite');
+  equal(s.bridgeCheck.status, 'in_progress', 'native check must run, not skip');
+  equal(s.bridgeCheck.conclusion, null, 'native check not pre-completed');
   equal(s.bridgeArtifacts.total_count, 0, 'bridge artifacts');
   for (const record of [...s.comments, ...s.reviews]) {
     const adverse = adverseCheckpoint(record, input, s.pr.base.sha, s.head.tree.sha);
@@ -241,49 +329,20 @@ function verifySnapshot(s, input) {
     profile, assurance, review: reviewRef, final: s.final.id, finalAttempt: s.final.run_attempt,
     evidence: s.evidence.id, acceptance: s.acceptance.id, humanGate: s.gate.id,
     recordDigest: digest([s.evidence, s.acceptance, s.gate, s.review || null]), artifacts: 0, unresolvedThreads: 0,
-    bridge: s.bridge.id, ruleset: RULESET, rulesetRevision: RULESET_UPDATED_AT, app: APP };
+    bridge: s.bridge.id, nativeRef: input.context.ref, nativeCheck: s.bridgeCheck.id, nativeSuite: s.bridgeSuite.id,
+    ruleset: RULESET, rulesetRevision: RULESET_UPDATED_AT, app: APP };
 }
 
-async function materialize(input, collect, api, wait = ms => new Promise(resolve => setTimeout(resolve, ms))) {
-  let created;
+async function verifyNative(input, collect) {
   const attestation = verifySnapshot(await collect(), input);
-  const external = `wcos-merge-authority-v1:${input.pr}:${attestation.bridge}:1`;
-  const output = { title: 'Exact merge-candidate authority', summary: JSON.stringify(attestation) };
-  try {
-    created = await api(`repos/${REPO}/check-runs`, 'POST', { name: 'Required CI', head_sha: attestation.candidate,
-      status: 'in_progress', external_id: external, details_url: `https://github.com/${REPO}/actions/runs/${attestation.bridge}`, output });
-    need(ID.test(String(created.id)), 'created check identity');
-    equal(created.app?.id, APP, 'writer must be GitHub Actions');
-    equal(created.head_sha, attestation.candidate, 'created candidate SHA');
-    equal(verifySnapshot(await collect(), input), attestation, 'authority drift before success');
-    await api(`repos/${REPO}/check-runs/${created.id}`, 'PATCH', { status: 'completed', conclusion: 'success', output });
-    const check = await api(`repos/${REPO}/check-runs/${created.id}`);
-    checkResult(check, attestation.candidate);
-    equal(check.external_id, external, 'bridge external ID');
-    equal(check.output.summary, output.summary, 'bridge attestation');
-    equal(verifySnapshot(await collect(), input), attestation, 'authority drift after success');
-    let recognized = false;
-    for (let attempt = 0; attempt < 10; attempt++) {
-      const live = await api(`repos/${REPO}/pulls/${input.pr}`);
-      equal(live.head.sha, attestation.head, 'live head drift');
-      equal(live.base.sha, attestation.base, 'live base drift');
-      equal(live.merge_commit_sha, attestation.candidate, 'live candidate regeneration');
-      if (live.mergeable === true && live.mergeable_state === 'clean') { recognized = true; break; }
-      await wait(1000);
-    }
-    need(recognized, 'GitHub has not recognized merge-candidate authority; do not merge');
-    return { ...attestation, check: created.id, githubMergeState: 'clean' };
-  } catch (error) {
-    if (created?.id) {
-      // Failure/cancellation never deliberately leaves a successful check.
-      await api(`repos/${REPO}/check-runs/${created.id}`, 'PATCH', { status: 'completed', conclusion: 'failure',
-        output: { title: 'Merge authority invalidated', summary: error.message } });
-    }
-    throw error;
-  }
+  equal(verifySnapshot(await collect(), input), attestation, 'authority drift before native completion');
+  // The current job cannot already be successful/clean while it is running.
+  // Finalize must authenticate its completed result and live clean state.
+  return attestation;
 }
 
 function liveApi(endpoint, method = 'GET', payload) {
+  need(method === 'GET' || (endpoint === 'graphql' && method === 'POST' && /^query\b/.test(payload?.query || '')), 'read-only API');
   const args = ['api', endpoint, '--method', method];
   if (payload) args.push('--input', '-');
   return JSON.parse(execFileSync('gh', args, { input: payload ? JSON.stringify(payload) : undefined, encoding: 'utf8', timeout: 30000, maxBuffer: 16 * 1024 * 1024 }));
@@ -305,13 +364,52 @@ function rawField(record, key) {
   return matches[0].slice(key.length + 2);
 }
 
+function classify(pr, input, raised = true) {
+  const args = [process.env.WCOS_BASE_CLASSIFIER, 'pull_request', pr.base.sha, input.head, pr.head.ref, '',
+    raised ? input.profile : '', raised ? input.assurance : '', raised ? input.reviewFloor : ''];
+  const text = execFileSync('bash', args, { encoding: 'utf8' });
+  const values = Object.fromEntries(text.trim().split('\n').map(line => {
+    const at = line.indexOf('='); return [line.slice(0, at), line.slice(at + 1)];
+  }));
+  return { profile: values.ci_profile, assurance: values.assurance_profile, review_required: values.independent_review_required };
+}
+
+function directScope(task, pr, issue, classification) {
+  // Exclusion is not Direct approval and emits no protected check. A branch or
+  // label alone cannot exclude semantic/governed work from the native bridge.
+  const optionalDirectField = (label, value) => !issue.body.includes(`**${label}:**`) || issueField(issue.body, label) === value;
+  return /^WOS-DIRECT-[0-9]{8}-[0-9]{6}$/.test(task) &&
+    pr.head.ref === `codex/direct/${task.toLowerCase()}` &&
+    optionalDirectField('CI profile floor', 'DIRECT_FAST') && optionalDirectField('Assurance floor', 'DIRECT') &&
+    optionalDirectField('Independent review floor', 'OPTIONAL') &&
+    classification.profile === 'DIRECT_FAST' && classification.assurance === 'DIRECT' && classification.review_required === 'false';
+}
+
+function resolveLive(context) {
+  const pr = liveApi(`repos/${REPO}/pulls/${context.pr}`);
+  equal(pr.head.sha, context.head, 'resolution head drift');
+  equal(pr.base.sha, context.base, 'resolution base drift');
+  equal(pr.merge_commit_sha, context.candidate, 'resolution candidate drift');
+  const task = resolveTask(pr);
+  const issue = liveApi(`repos/${REPO}/issues/${task.issue}`);
+  resolveTask(pr, issue);
+  const input = { repo: REPO, ...task, pr: context.pr, head: context.head, context };
+  if (directScope(task.task, pr, issue, classify(pr, input, false))) return { route: 'direct', input };
+  Object.assign(input, { profile: issueField(issue.body, 'CI profile floor'), assurance: issueField(issue.body, 'Assurance floor'),
+    reviewFloor: issueField(issue.body, 'Independent review floor') });
+  need(PROFILE.test(input.profile) && /^(LOW|MEDIUM|HIGH)$/.test(input.assurance) && /^(OPTIONAL|REQUIRED)$/.test(input.reviewFloor), 'normal task floors');
+  return { route: 'governed', input };
+}
+
 function collectLive(input) {
   const repository = liveApi(`repos/${REPO}`);
   const pr = liveApi(`repos/${REPO}/pulls/${input.pr}`);
   const rules = liveApi(`repos/${REPO}/rulesets/${RULESET}`);
   verifyRules(rules);
   console.log(`merge-authority-rules-read-ok revision=${rules.updated_at} bypass-field=${Object.hasOwn(rules, 'bypass_actors') ? 'visible' : 'redacted'}`);
-  const gate = comment(input.gate);
+  const comments = paginate(`repos/${REPO}/issues/${input.issue}/comments?per_page=100`);
+  const gate = selectGate(comments, input);
+  equal(`issue-comment:${gate.id}`, input.gate, 'latest Human Gate unchanged');
   const evidence = comment(rawField(gate, 'Evidence authority'));
   const acceptance = comment(rawField(gate, 'Acceptance authority'));
   const finalId = rawField(gate, 'FINAL run');
@@ -320,10 +418,7 @@ function collectLive(input) {
   const jobs = paginate(`repos/${REPO}/actions/runs/${finalId}/attempts/${final.run_attempt}/jobs?per_page=100`, 'jobs');
   const required = jobs.filter(job => job.name === 'Required CI');
   need(required.length === 1, 'FINAL protected job count');
-  const classificationText = execFileSync('bash', [process.env.WCOS_BASE_CLASSIFIER, 'pull_request', pr.base.sha, input.head, pr.head.ref, '', input.profile, input.assurance, input.reviewFloor], { encoding: 'utf8' });
-  const classification = Object.fromEntries(classificationText.trim().split('\n').filter(line => line.startsWith('ci_') || line.startsWith('assurance_') || line.startsWith('independent_review_')).map(line => {
-    const at = line.indexOf('='); return [line.slice(0, at), line.slice(at + 1)];
-  }));
+  const classification = classify(pr, input);
   const head = liveApi(`repos/${REPO}/git/commits/${input.head}`);
   execFileSync('git', ['merge-base', '--is-ancestor', pr.base.sha, input.head]);
   let review;
@@ -331,7 +426,7 @@ function collectLive(input) {
   if (input.preReview) {
     need(/^(issue-comment|pr-review):[1-9][0-9]*$/.test(input.preReview), 'review reference');
     review = input.preReview.startsWith('issue-comment:') ? comment(input.preReview) : liveApi(`repos/${REPO}/pulls/${input.pr}/reviews/${input.preReview.split(':')[1]}`);
-    execFileSync('bash', [process.env.WCOS_PRE_REVIEW_VERIFIER, REPO, input.pr, input.task, input.issue, pr.base.sha, input.head, head.tree.sha, classification.ci_profile, input.preReview], { stdio: ['ignore', 'pipe', 'inherit'] });
+    execFileSync('bash', [process.env.WCOS_PRE_REVIEW_VERIFIER, REPO, input.pr, input.task, input.issue, pr.base.sha, input.head, head.tree.sha, classification.profile, input.preReview], { stdio: ['ignore', 'pipe', 'inherit'] });
     reviewVerified = true;
   }
   let cursor = null;
@@ -344,22 +439,36 @@ function collectLive(input) {
     threads += page.nodes.filter(thread => !thread.isResolved).length;
     cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
   } while (cursor);
-  return { repository, pr, gate, evidence, acceptance, final, jobs, head, review, reviewVerified, threads,
-    classification: { profile: classification.ci_profile, assurance: classification.assurance_profile, review_required: classification.independent_review_required },
+  const bridge = liveApi(`repos/${REPO}/actions/runs/${input.context.run}`);
+  const bridgeJobs = paginate(`repos/${REPO}/actions/runs/${bridge.id}/attempts/1/jobs?per_page=100`, 'jobs');
+  const native = bridgeJobs.filter(job => job.name === 'Required CI');
+  need(native.length === 1 && native[0].run_id === bridge.id && native[0].status === 'in_progress', 'one executing native protected job');
+  return { repository, pr, gate, evidence, acceptance, final, jobs, head, review, reviewVerified, threads, classification,
     issue: liveApi(`repos/${REPO}/issues/${input.issue}`), main: liveApi(`repos/${REPO}/git/ref/heads/main`),
     candidate: liveApi(`repos/${REPO}/git/commits/${pr.merge_commit_sha}`), rules,
     finalArtifacts: liveApi(`repos/${REPO}/actions/runs/${finalId}/artifacts`), finalCheck: liveApi(`repos/${REPO}/check-runs/${required[0].id}`),
-    bridge: liveApi(`repos/${REPO}/actions/runs/${process.env.GITHUB_RUN_ID}`), bridgeArtifacts: liveApi(`repos/${REPO}/actions/runs/${process.env.GITHUB_RUN_ID}/artifacts`),
-    comments: paginate(`repos/${REPO}/issues/${input.issue}/comments?per_page=100`), reviews: paginate(`repos/${REPO}/pulls/${input.pr}/reviews?per_page=100`) };
+    bridge, bridgeArtifacts: liveApi(`repos/${REPO}/actions/runs/${bridge.id}/artifacts`),
+    bridgeSuite: liveApi(`repos/${REPO}/check-suites/${bridge.check_suite_id}`),
+    bridgeCheck: liveApi(`repos/${REPO}/check-runs/${native[0].id}`),
+    readyEvents: paginate(`repos/${REPO}/issues/${input.pr}/timeline?per_page=100`).filter(event => event.event === 'ready_for_review'),
+    comments, reviews: paginate(`repos/${REPO}/pulls/${input.pr}/reviews?per_page=100`) };
 }
 
 if (require.main === module) {
-  const input = { repo: process.env.GITHUB_REPOSITORY, pr: process.env.INPUT_PR_NUMBER, issue: process.env.INPUT_TASK_ISSUE_NUMBER,
-    task: process.env.INPUT_TASK_ID, head: process.env.EXPECTED_HEAD_SHA, profile: process.env.INPUT_REQUESTED_PROFILE,
-    assurance: process.env.INPUT_REQUESTED_ASSURANCE, reviewFloor: process.env.INPUT_REVIEW_FLOOR,
-    preReview: process.env.PRE_REVIEW_AUTHORITY || '', gate: process.env.MERGE_AUTHORITY };
-  need(process.env.GITHUB_EVENT_NAME === 'workflow_dispatch' && process.env.GITHUB_SHA === input.head && process.env.GITHUB_RUN_ATTEMPT === '1', 'exact first-attempt dispatch');
-  materialize(input, () => collectLive(input), liveApi).then(result => console.log(`merge-authority-ok ${JSON.stringify(result)}`)).catch(error => { console.error(error.message); process.exitCode = 1; });
+  (async () => {
+    const context = nativeContext(JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')), process.env);
+    const { route, input } = resolveLive(context);
+    if (process.argv[2] === '--scope') { console.log(`route=${route}`); return; }
+    equal(process.argv[2], '--verify', 'native verifier mode');
+    equal(route, 'governed', 'DIRECT must not enter normal bridge');
+    const gate = selectGate(paginate(`repos/${REPO}/issues/${input.issue}/comments?per_page=100`), input);
+    input.gate = `issue-comment:${gate.id}`;
+    const review = rawField(gate, 'PRE_REVIEW authority');
+    input.preReview = review === 'none' ? '' : review;
+    const result = await verifyNative(input, () => collectLive(input));
+    console.log(`native-merge-authority-verified ${JSON.stringify(result)}`);
+    console.log('artifacts=0; Finalize must verify completed native check and GitHub clean before merge');
+  })().catch(error => { console.error(error.message); process.exitCode = 1; });
 }
 
-module.exports = { verifySnapshot, materialize, checkResult, recordFields, issueField, verifyRules };
+module.exports = { verifySnapshot, verifyNative, nativeContext, resolveTask, directScope, selectGate, checkResult, recordFields, issueField, verifyRules };

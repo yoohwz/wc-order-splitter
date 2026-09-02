@@ -48,19 +48,14 @@ on:
           - OPTIONAL
           - REQUIRED
       certification_stage:
-        description: PRECHECK, FINAL certification, or post-Finalize MERGE_AUTHORITY
+        description: PRECHECK or FINAL certification
         required: true
         type: choice
         options:
           - PRECHECK
           - FINAL
-          - MERGE_AUTHORITY
       pre_review_authority:
-        description: FINAL or MERGE_AUTHORITY immutable issue-comment:ID or pr-review:ID containing required PRE_REVIEW_CLEAN
-        required: false
-        type: string
-      merge_authority:
-        description: MERGE_AUTHORITY-only immutable issue-comment:ID for the exact candidate Human Gate
+        description: FINAL immutable issue-comment:ID or pr-review:ID containing required PRE_REVIEW_CLEAN
         required: false
         type: string
 
@@ -77,7 +72,6 @@ permissions:
 jobs:
   classify-pr-scope:
     name: Classify PR CI profile
-    if: inputs.certification_stage != 'MERGE_AUTHORITY'
     runs-on: ubuntu-latest
     outputs:
       pr_number: ${{ steps.resolve.outputs.pr_number }}
@@ -1505,7 +1499,7 @@ jobs:
 
   required:
     name: ${{ (needs['classify-pr-scope'].outputs.profile == 'FULL' || needs['classify-pr-scope'].outputs.profile == 'DIRECT_CSS_FAST' || needs['classify-pr-scope'].outputs.stage == 'FINAL') && 'Required CI' || format('PRECHECK authority only / {0} / {1}', needs['classify-pr-scope'].outputs.task_id || 'UNBOUND', needs['classify-pr-scope'].outputs.profile || 'UNRESOLVED') }}
-    if: always() && inputs.certification_stage != 'MERGE_AUTHORITY'
+    if: always()
     needs:
       - classify-pr-scope
       - php-syntax
@@ -1647,68 +1641,3 @@ jobs:
     steps:
       - name: Bind successful FINAL without creating a merge-ready claim
         run: echo 'FINAL head certification is not merge-candidate authority; artifacts=0'
-
-  merge-authority:
-    name: Authenticate and attest merge candidate
-    if: github.event_name == 'workflow_dispatch' && inputs.certification_stage == 'MERGE_AUTHORITY'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      actions: read
-      contents: read
-      issues: read
-      pull-requests: read
-      checks: write
-    steps:
-      - name: Checkout exact dispatch graph without persisted credentials
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Load base-owned authority and materialize the approved candidate
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
-          INPUT_TASK_ID: ${{ inputs.task_id }}
-          INPUT_TASK_ISSUE_NUMBER: ${{ inputs.task_issue_number }}
-          EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
-          INPUT_REQUESTED_PROFILE: ${{ inputs.requested_profile }}
-          INPUT_REQUESTED_ASSURANCE: ${{ inputs.requested_assurance }}
-          INPUT_REVIEW_FLOOR: ${{ inputs.independent_review_floor }}
-          PRE_REVIEW_AUTHORITY: ${{ inputs.pre_review_authority }}
-          MERGE_AUTHORITY: ${{ inputs.merge_authority }}
-        run: |
-          set -euo pipefail
-          test "$GITHUB_REPOSITORY" = yoohwz/wc-order-splitter
-          test "$GITHUB_SHA" = "$EXPECTED_HEAD_SHA"
-          test "$GITHUB_RUN_ATTEMPT" = 1
-          [[ "$INPUT_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
-          [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
-          pr_json=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$INPUT_PR_NUMBER")
-          test "$(jq -r '.head.sha' <<< "$pr_json")" = "$GITHUB_SHA"
-          base_sha=$(jq -r '.base.sha' <<< "$pr_json")
-          [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
-          git merge-base --is-ancestor "$base_sha" "$GITHUB_SHA"
-          authority_dir=$(mktemp -d "$RUNNER_TEMP/wcos-merge-authority.XXXXXX")
-          for script in classify-pr-scope.sh verify-pre-review-authority.sh validate-pre-review-record.sh; do
-            git show "$base_sha:.github/scripts/$script" > "$authority_dir/$script"
-            chmod +x "$authority_dir/$script"
-          done
-          authority_source=$base_sha
-          if ! git cat-file -e "$base_sha:.github/scripts/merge-candidate-authority.js" 2>/dev/null; then
-            # Single, source-bound bootstrap. It still requires fresh review,
-            # green FINAL, ChatGPT Acceptance and Human Gate before any write.
-            test "$INPUT_TASK_ID" = WOS-GOV-010
-            test "$INPUT_TASK_ISSUE_NUMBER" = 132
-            test "$base_sha" = 545b82b452adfc4d43fd4744f3f83d7a8f5e68fb
-            test "$INPUT_REQUESTED_ASSURANCE" = HIGH
-            test "$INPUT_REVIEW_FLOOR" = REQUIRED
-            authority_source=$GITHUB_SHA
-          fi
-          git show "$authority_source:.github/scripts/merge-candidate-authority.js" > "$authority_dir/merge-candidate-authority.js"
-          export WCOS_BASE_CLASSIFIER="$authority_dir/classify-pr-scope.sh"
-          export WCOS_PRE_REVIEW_VERIFIER="$authority_dir/verify-pre-review-authority.sh"
-          export WCOS_PRE_REVIEW_VALIDATOR="$authority_dir/validate-pre-review-record.sh"
-          node "$authority_dir/merge-candidate-authority.js"

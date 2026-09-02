@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { verifySnapshot, materialize, checkResult } = require('../../.github/scripts/merge-candidate-authority.js');
+const { execFileSync } = require('node:child_process');
+const { verifySnapshot, verifyNative, nativeContext, resolveTask, directScope, selectGate } = require('../../.github/scripts/merge-candidate-authority.js');
 
 const repo = 'yoohwz/wc-order-splitter';
 const base = 'a'.repeat(40), head = 'b'.repeat(40), tree = 'c'.repeat(40), candidate = 'd'.repeat(40);
@@ -12,6 +13,7 @@ const input = { repo, pr: '133', issue: '132', task: 'WOS-GOV-010', head, profil
 const actor = { user: { login: 'yoohwz', id: 152001663 }, author_association: 'OWNER' };
 const time = second => `2026-09-02T08:00:${String(second).padStart(2, '0')}Z`;
 const clone = value => JSON.parse(JSON.stringify(value));
+input.context = { pr: input.pr, head, base, candidate, ref: 'refs/pull/133/merge', readyAt: time(24), run: 101 };
 
 function fixture(selected = input) {
   const reviewed = selected.preReview ? 'true' : 'false';
@@ -25,7 +27,7 @@ function fixture(selected = input) {
   const binding = `FINAL binding / WOS-GOV-010 / ${selected.profile} / ${base} / ${selected.preReview || 'none'}`;
   return {
     repository: { full_name: repo, owner: actor.user, default_branch: 'main' },
-    issue: { ...actor, state: 'open', title: 'WOS-GOV-010 — Strict Merge-Candidate Required CI Authority',
+    issue: { ...actor, number: 132, state: 'open', title: 'WOS-GOV-010 — Strict Merge-Candidate Required CI Authority',
       body: `- **Task:** \`WOS-GOV-010\`\n- **CI profile floor:** \`${selected.profile}\`\n- **Assurance floor:** \`${selected.assurance}\`\n- **Independent review floor:** \`${selected.reviewFloor}\`` },
     pr: { state: 'open', draft: false, body: '- Canonical Issue: #132\n- Task: `WOS-GOV-010`',
       base: { sha: base, ref: 'main', repo: { full_name: repo } }, head: { sha: head, ref: 'codex/task', repo: { full_name: repo } },
@@ -46,7 +48,7 @@ function fixture(selected = input) {
     evidence: record(1, 'CI evidence', 'codex_executor', { 'Evidence kind': kind }, kind),
     acceptance: record(2, 'Acceptance', 'chatgpt_acceptance_reviewer', { 'Evidence authority': 'issue-comment:1' }, 'ACCEPTANCE_ACCEPTED'),
     gate: record(3, 'Human Gate', 'repository_owner', { 'Evidence authority': 'issue-comment:1', 'Acceptance authority': 'issue-comment:2',
-      'Human command': 'Finalize WOS-GOV-010', 'Merge candidate': candidate, 'Merge candidate tree': tree, 'Unresolved review threads': '0' }, 'HUMAN_GATE_APPROVED'),
+      'Human command': 'Finalize WOS-GOV-010', 'Merge candidate': candidate, 'Merge candidate tree': tree, 'Unresolved review threads': '0', 'PR state': 'draft' }, 'HUMAN_GATE_APPROVED'),
     final: { id: 100, event: 'workflow_dispatch', path: '.github/workflows/ci.yml', repository: { full_name: repo }, head_sha: head,
       head_branch: 'codex/task', status: 'completed', conclusion: 'success', run_attempt: 1, check_suite_id: 88, created_at: time(11), updated_at: time(20) },
     jobs: [{ id: 11, run_id: 100, name: 'Required CI', status: 'completed', conclusion: 'success' },
@@ -54,7 +56,12 @@ function fixture(selected = input) {
     finalArtifacts: { total_count: 0 },
     finalCheck: { id: 11, name: 'Required CI', head_sha: head, app: { id: 15368 }, status: 'completed', conclusion: 'success', check_suite: { id: 88 } },
     review: selected.preReview ? { ...actor, commit_id: head, submitted_at: time(10) } : undefined, reviewVerified: Boolean(selected.preReview),
-    bridge: { id: 101, event: 'workflow_dispatch', path: '.github/workflows/ci.yml', head_sha: head, run_attempt: 1, created_at: time(24) },
+    bridge: { id: 101, event: 'pull_request', path: '.github/workflows/merge-authority.yml', head_sha: head,
+      repository: { full_name: repo }, head_branch: 'codex/task', status: 'in_progress', run_attempt: 1, created_at: time(24), check_suite_id: 89,
+      pull_requests: [{ number: 133, head: { sha: head }, base: { sha: base } }] },
+    bridgeSuite: { id: 89, head_sha: head, app: { id: 15368 }, pull_requests: [{ number: 133, head: { sha: head }, base: { sha: base } }] },
+    bridgeCheck: { id: 13, name: 'Required CI', head_sha: head, app: { id: 15368 }, check_suite: { id: 89 }, status: 'in_progress', conclusion: null },
+    readyEvents: [{ event: 'ready_for_review', created_at: time(24), actor: actor.user }],
     bridgeArtifacts: { total_count: 0 }, comments: [], reviews: [],
   };
 }
@@ -80,6 +87,49 @@ for (const profile of ['LOW_FOCUSED', 'MEDIUM_DOMAIN']) {
 }
 const release = { ...input, profile: 'RELEASE_CERT' };
 assert.equal(verifySnapshot(fixture(release), release).profile, 'RELEASE_CERT');
+const financial = { ...input, profile: 'HIGH_FINANCIAL' };
+assert.equal(verifySnapshot(fixture(financial), financial).profile, 'HIGH_FINANCIAL');
+
+const env = { GITHUB_REPOSITORY: repo, GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/133/merge',
+  GITHUB_SHA: candidate, GITHUB_RUN_ID: '101', GITHUB_RUN_ATTEMPT: '1',
+  GITHUB_WORKFLOW_REF: `${repo}/.github/workflows/merge-authority.yml@refs/pull/133/merge`, GITHUB_WORKFLOW_SHA: candidate };
+const event = { repository: { full_name: repo }, action: 'ready_for_review', number: 133, sender: actor.user,
+  pull_request: { ...fixture().pr, number: 133, updated_at: time(24) } };
+assert.deepEqual(nativeContext(event, env), input.context);
+for (const [label, change] of [
+  ['dispatch', (e, v) => { v.GITHUB_EVENT_NAME = 'workflow_dispatch'; }],
+  ['target event', (e, v) => { v.GITHUB_EVENT_NAME = 'pull_request_target'; }],
+  ['discovery', e => { e.action = 'synchronize'; }],
+  ['wrong actor', e => { e.sender = { login: 'stranger', id: 1 }; }],
+  ['wrong PR', e => { e.number = 131; }],
+  ['draft event', e => { e.pull_request.draft = true; }],
+  ['closed event', e => { e.pull_request.state = 'closed'; }],
+  ['fork', e => { e.pull_request.head.repo.full_name = 'someone/fork'; }],
+  ['head ref', (e, v) => { v.GITHUB_REF = 'refs/heads/codex/task'; }],
+  ['head instead of candidate', (e, v) => { v.GITHUB_SHA = head; }],
+  ['wrong workflow source', (e, v) => { v.GITHUB_WORKFLOW_SHA = head; }],
+  ['wrong workflow ref', (e, v) => { v.GITHUB_WORKFLOW_REF = `${repo}/.github/workflows/ci.yml@refs/pull/133/merge`; }],
+  ['rerun', (e, v) => { v.GITHUB_RUN_ATTEMPT = '2'; }],
+  ['missing event time', e => { delete e.pull_request.updated_at; }],
+]) {
+  const e = clone(event), v = clone(env); change(e, v);
+  assert.throws(() => nativeContext(e, v), /merge-authority-error/, label); assertions++;
+}
+assert.deepEqual(resolveTask(fixture().pr, fixture().issue), { task: input.task, issue: input.issue });
+const directTask = 'WOS-DIRECT-20260902-120000';
+const directPr = { head: { ref: `codex/direct/${directTask.toLowerCase()}` } };
+const directClass = { profile: 'DIRECT_FAST', assurance: 'DIRECT', review_required: 'false' };
+assert(directScope(directTask, directPr, { body: '' }, directClass));
+assert(directScope(directTask, directPr, { body: '- **CI profile floor:** `DIRECT_FAST`\n- **Assurance floor:** `DIRECT`\n- **Independent review floor:** `OPTIONAL`' }, directClass));
+assert(!directScope(directTask, directPr, { body: '- **Assurance floor:** `HIGH`' }, directClass));
+assert(!directScope(input.task, directPr, { body: '' }, directClass), 'normal task does not opt into DIRECT');
+assert(!directScope(directTask, directPr, { body: '- **CI profile floor:** `LOW_FOCUSED`' }, directClass), 'transitioned normal task not excluded');
+assert(!directScope(directTask, directPr, { body: '' }, { ...directClass, profile: 'HIGH_DEEP' }), 'branch claim cannot bypass semantic scope');
+assert(!directScope(directTask, { head: { ref: 'codex/normal' } }, { body: '' }, directClass));
+const gate = fixture().gate;
+assert.equal(selectGate([gate], input).id, gate.id);
+assert.throws(() => selectGate([], input), /missing current-head Human Gate/);
+assert.throws(() => selectGate([gate, { ...gate, id: 4, created_at: time(24), updated_at: time(25) }], input), /edited/, 'no fallback to old approval');
 
 function adverseRecord(token, at = 25) {
   const formats = {
@@ -137,6 +187,28 @@ rejected('wrong workflow', s => { s.final.path = '.github/workflows/build-plugin
 rejected('artifacts', s => { s.finalArtifacts.total_count = 1; });
 rejected('bridge artifacts', s => { s.bridgeArtifacts.total_count = 1; });
 rejected('rerun bridge', s => { s.bridge.run_attempt = 2; });
+rejected('old custom bridge event', s => { s.bridge.event = 'workflow_dispatch'; });
+rejected('old custom bridge workflow', s => { s.bridge.path = '.github/workflows/ci.yml'; });
+rejected('wrong native run', s => { s.bridge.id++; });
+rejected('native run candidate mistaken for REST head', s => { s.bridge.head_sha = candidate; });
+rejected('no native run PR association', s => { s.bridge.pull_requests = []; });
+rejected('no native suite PR association', s => { s.bridgeSuite.pull_requests = []; });
+rejected('wrong native suite app', s => { s.bridgeSuite.app.id = 1; });
+rejected('wrong native check app', s => { s.bridgeCheck.app.id = 1; });
+rejected('wrong native check suite', s => { s.bridgeCheck.check_suite.id++; });
+rejected('skipped native job', s => { s.bridgeCheck.status = 'completed'; s.bridgeCheck.conclusion = 'skipped'; });
+rejected('precompleted native job', s => { s.bridgeCheck.conclusion = 'success'; });
+rejected('Gate must attest draft', s => { s.gate.body = s.gate.body.replace('PR state: draft', 'PR state: ready'); });
+rejected('missing draft Gate binding', s => { s.gate.body = s.gate.body.replace('PR state: draft\n', ''); });
+rejected('Gate cannot follow ready event', s => { s.gate.created_at = s.gate.updated_at = time(25); });
+rejected('missing native ready transition', s => { s.readyEvents = []; });
+rejected('same Gate cannot authorize another ready transition', s => { s.readyEvents.push({ ...s.readyEvents[0], created_at: time(25) }); });
+rejected('wrong ready timeline event', s => { s.readyEvents[0].created_at = time(25); });
+rejected('wrong ready timeline actor', s => { s.readyEvents[0].actor = { id: 1 }; });
+for (const key of ['head', 'base', 'candidate', 'ref']) {
+  const changed = { ...input, context: { ...input.context, [key]: 'e'.repeat(40) } };
+  assert.throws(() => verifySnapshot(fixture(), changed), /merge-authority-error/, `native context ${key}`); assertions++;
+}
 rejected('quoted authority', s => { s.gate.body = s.gate.body.split('\n').map(line => `> ${line}`).join('\n'); });
 rejected('fenced authority', s => { s.gate.body = `\`\`\`\n${s.gate.body}\n\`\`\``; });
 rejected('edited authority', s => { s.gate.updated_at = time(25); });
@@ -209,16 +281,10 @@ for (const [label, change] of [
 }
 
 async function simulation(change = () => {}, selected = input) {
-  let snapshot = fixture(selected), calls = [], check, collected = 0;
+  let snapshot = fixture(selected), collected = 0;
   const collect = async () => { collected++; change(snapshot, collected); return clone(snapshot); };
-  const api = async (endpoint, method = 'GET', payload) => {
-    calls.push({ endpoint, method, payload });
-    if (method === 'POST') check = { ...payload, id: 200, app: { id: 15368 } };
-    if (method === 'PATCH') check = { ...check, ...payload };
-    return endpoint.includes('/pulls/') ? clone(snapshot.pr) : clone(check);
-  };
-  try { return { result: await materialize(selected, collect, api, async () => {}), calls, check }; }
-  catch (error) { return { error, calls, check }; }
+  try { return { result: await verifyNative(selected, collect), collected }; }
+  catch (error) { return { error, collected }; }
 }
 
 function verifyFinalBindingScheduling(workflow) {
@@ -274,38 +340,66 @@ function verifyFinalBindingScheduling(workflow) {
 (async () => {
   let result = await simulation();
   assert.equal(result.result.candidate, candidate);
-  checkResult(result.check, candidate);
-  assert.equal(result.calls.filter(call => call.method === 'POST').length, 1);
-  assert.equal(result.check.app.id, 15368);
-  assert.equal(result.check.head_sha, candidate);
-  assert(!result.calls.some(call => /dispatches|\/merge$|rulesets/.test(call.endpoint)), 'bridge cannot rerun certification, merge or mutate rules');
-  for (const stage of [2, 3]) {
-    result = await simulation((s, n) => { if (n === stage) s.pr.head.sha = 'e'.repeat(40); });
-    assert(result.error, `drift at stage ${stage} must fail`);
-    assert.equal(result.check.conclusion, 'failure');
+  assert.equal(result.collected, 2);
+  for (const change of [
+    s => { s.pr.head.sha = 'e'.repeat(40); },
+    s => { s.comments.push(adverseRecord('HUMAN_GATE_REVOKED')); },
+    s => { s.threads++; },
+    s => { s.candidate.sha = 'e'.repeat(40); },
+  ]) {
+    result = await simulation((s, n) => { if (n === 2) change(s); });
+    assert(result.error, 'drift during read-only verification must fail');
   }
   result = await simulation(s => { s.gate.body = ''; });
   assert(result.error);
-  assert.equal(result.calls.length, 0, 'FINAL alone cannot create even an in-progress candidate check');
   result = await simulation(s => { s.pr.mergeable_state = 'blocked'; });
-  assert(result.error);
-  assert.equal(result.check.conclusion, 'failure', 'unrecognized authority is invalidated');
+  assert(!result.error, 'running native job cannot yet make GitHub clean; Finalize must inspect after completion');
   const low = { ...input, profile: 'LOW_FOCUSED', assurance: 'LOW', reviewFloor: 'OPTIONAL', preReview: '' };
   result = await simulation(() => {}, low);
   assert.equal(result.result.review, 'none', 'LOW adds no independent-review lifecycle');
 
   const workflow = fs.readFileSync(path.join(__dirname, '../../.github/workflows/ci.yml'), 'utf8');
   const scheduling = verifyFinalBindingScheduling(workflow);
-  assert(workflow.includes("if: inputs.certification_stage != 'MERGE_AUTHORITY'"));
-  assert(workflow.includes("if: always() && inputs.certification_stage != 'MERGE_AUTHORITY'"));
-  assert.equal((workflow.match(/checks: write/g) || []).length, 1);
-  const bridge = workflow.slice(workflow.indexOf('  merge-authority:\n'));
-  assert(bridge.includes('persist-credentials: false'));
-  assert(bridge.includes('git show "$authority_source:.github/scripts/merge-candidate-authority.js"'));
-  assert(bridge.includes('test "$INPUT_TASK_ID" = WOS-GOV-010'));
-  assert(bridge.includes('test "$INPUT_TASK_ISSUE_NUMBER" = 132'));
-  assert(bridge.includes('test "$base_sha" = 545b82b452adfc4d43fd4744f3f83d7a8f5e68fb'));
-  assert(!bridge.includes('name: Required CI'), 'skipped bridge jobs cannot publish a protected check');
-  assert(!bridge.includes('npm ') && !bridge.includes('wp-env') && !bridge.includes('upload-artifact'), 'bridge is metadata-only');
-  console.log(`merge-candidate-authority-contract-ok negative-cases=${assertions} untrusted-adverse-cases=${ignoredAdverse} final-binding-scheduling=${JSON.stringify(scheduling)} live-writes=mocked`);
+  assert(!workflow.includes('MERGE_AUTHORITY') && !workflow.includes('merge_authority:'), 'retired dispatch path absent');
+  assert(!workflow.includes('checks: write'));
+  const bridgePath = path.join(__dirname, '../../.github/workflows/merge-authority.yml');
+  const bridge = fs.readFileSync(bridgePath, 'utf8');
+  const parsed = JSON.parse(execFileSync('ruby', ['-rjson', '-ryaml', '-e', 'puts YAML.load_file(ARGV[0]).to_json', bridgePath], { encoding: 'utf8' }));
+  assert.deepEqual(parsed.on || parsed.true, { pull_request: { branches: ['main'], types: ['ready_for_review'] } });
+  assert.deepEqual(parsed.permissions, { actions: 'read', contents: 'read', issues: 'read', 'pull-requests': 'read', checks: 'read' });
+  assert.equal(parsed.jobs.required.if, 'always()');
+  assert.equal(parsed.jobs.required.needs, 'scope');
+  const expression = parsed.jobs.required.name.slice(3, -2).trim();
+  for (const status of ['success', 'failure', 'skipped', 'cancelled', '']) {
+    for (const route of ['governed', 'direct', '', undefined, 'invalid']) {
+      const name = vm.runInNewContext(expression, { needs: { scope: { result: status, outputs: { route } } } });
+      assert.equal(name, status === 'success' && route === 'direct' ? 'Native bridge not applicable to DIRECT' : 'Required CI');
+    }
+  }
+  const guard = parsed.jobs.required.steps[0];
+  assert(!guard.if && !guard['continue-on-error']);
+  for (const status of ['success', 'failure', 'skipped', 'cancelled', '']) {
+    for (const route of ['governed', 'direct', '', 'invalid']) {
+      let passes = false;
+      try { execFileSync('bash', ['-e', '-c', guard.run], { env: { ...process.env, SCOPE_RESULT: status, SCOPE_ROUTE: route }, stdio: 'ignore' }); passes = true; } catch {}
+      assert.equal(passes, status === 'success' && ['governed', 'direct'].includes(route));
+    }
+  }
+  const normal = parsed.jobs.required.steps.at(-1);
+  assert.equal(normal.if, "needs.scope.outputs.route != 'direct'");
+  assert(!normal['continue-on-error'] && normal.run.endsWith('--verify\n'));
+  const scope = parsed.jobs.scope.steps.at(-1).run;
+  // Both jobs load exactly the same trusted source before their different mode.
+  assert.equal(scope.slice(0, scope.lastIndexOf('node ')), normal.run.slice(0, normal.run.lastIndexOf('node ')));
+  for (const snippet of ['persist-credentials: false', 'git show "$authority_source:.github/scripts/merge-candidate-authority.js"',
+    'test "$pr_number" = 133', 'test "$base_sha" = 545b82b452adfc4d43fd4744f3f83d7a8f5e68fb',
+    'authority_source=$head_sha', 'verify-pre-review-authority.sh', 'validate-pre-review-record.sh']) assert(bridge.includes(snippet));
+  assert(!bridge.includes('workflow_dispatch') && !bridge.includes('checks: write') && !bridge.includes('continue-on-error'));
+  assert(!bridge.includes('npm ') && !bridge.includes('wp-env') && !bridge.includes('upload-artifact'));
+  const verifier = fs.readFileSync(path.join(__dirname, '../../.github/scripts/merge-candidate-authority.js'), 'utf8');
+  assert(!/\bmaterialize\b|['"]PATCH['"]|['"]DELETE['"]/.test(verifier));
+  assert(verifier.includes("method === 'GET' || (endpoint === 'graphql' && method === 'POST'"));
+  assert(!/liveApi\([^;]*check-runs[^;]*['"]POST['"]/.test(verifier));
+  console.log('merge-candidate-authority-contract-ok negative-cases=' + assertions + ' untrusted-adverse-cases=' + ignoredAdverse +
+    ' final-binding-scheduling=' + JSON.stringify(scheduling) + ' native-scope-topology=20-cases live-writes=none');
 })().catch(error => { console.error(error); process.exitCode = 1; });

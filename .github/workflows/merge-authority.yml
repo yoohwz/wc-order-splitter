@@ -1,0 +1,160 @@
+name: Native merge authority
+
+on:
+  pull_request:
+    branches: [main]
+    types: [ready_for_review]
+
+# This workflow is metadata-only and cannot create/patch checks or merge.
+permissions:
+  actions: read
+  contents: read
+  issues: read
+  pull-requests: read
+  checks: read
+
+concurrency:
+  group: native-merge-authority-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scope:
+    name: Resolve native bridge scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      route: ${{ steps.scope.outputs.route }}
+    steps:
+      - name: Checkout exact native merge context without credentials
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Resolve scope from base-owned authority
+        id: scope
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = yoohwz/wc-order-splitter
+          test "$GITHUB_EVENT_NAME" = pull_request
+          test "$(jq -r '.action' "$GITHUB_EVENT_PATH")" = ready_for_review
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          pr_number=$(jq -r '.number' "$GITHUB_EVENT_PATH")
+          base_sha=$(jq -r '.pull_request.base.sha' "$GITHUB_EVENT_PATH")
+          head_sha=$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")
+          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]
+          [[ "$base_sha" =~ ^[0-9a-f]{40}$ && "$head_sha" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REF" = "refs/pull/$pr_number/merge"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$base_sha $head_sha"
+          test "$(git rev-parse HEAD^{tree})" = "$(git rev-parse "$head_sha^{tree}")"
+          git merge-base --is-ancestor "$base_sha" "$head_sha"
+          authority_dir=$(mktemp -d "$RUNNER_TEMP/wcos-native-authority.XXXXXX")
+          for script in classify-pr-scope.sh verify-pre-review-authority.sh validate-pre-review-record.sh; do
+            git show "$base_sha:.github/scripts/$script" > "$authority_dir/$script"
+            chmod +x "$authority_dir/$script"
+          done
+          authority_source=$base_sha
+          if ! git cat-file -e "$base_sha:.github/scripts/merge-candidate-authority.js" 2>/dev/null; then
+            # The only bootstrap is the reviewed GOV-010 source-bound head.
+            test "$base_sha" = 545b82b452adfc4d43fd4744f3f83d7a8f5e68fb
+            test "$pr_number" = 133
+            pr_body=$(jq -r '.pull_request.body' "$GITHUB_EVENT_PATH")
+            grep -Fxq -- '- Task: `WOS-GOV-010`' <<< "$pr_body"
+            grep -Fxq -- '- Canonical Issue: #132' <<< "$pr_body"
+            issue=$(gh api "repos/$GITHUB_REPOSITORY/issues/132")
+            jq -e '.user.login == "yoohwz" and .user.id == 152001663 and .author_association == "OWNER" and .state == "open" and (.pull_request == null)' <<< "$issue" >/dev/null
+            issue_body=$(jq -r '.body' <<< "$issue")
+            grep -Fxq -- '- **Task:** `WOS-GOV-010`' <<< "$issue_body"
+            grep -Fxq -- '- **CI profile floor:** `HIGH_DEEP`' <<< "$issue_body"
+            grep -Fxq -- '- **Assurance floor:** `HIGH`' <<< "$issue_body"
+            grep -Fxq -- '- **Independent review floor:** `REQUIRED`' <<< "$issue_body"
+            authority_source=$head_sha
+          fi
+          git show "$authority_source:.github/scripts/merge-candidate-authority.js" > "$authority_dir/merge-candidate-authority.js"
+          export WCOS_BASE_CLASSIFIER="$authority_dir/classify-pr-scope.sh"
+          export WCOS_PRE_REVIEW_VERIFIER="$authority_dir/verify-pre-review-authority.sh"
+          export WCOS_PRE_REVIEW_VALIDATOR="$authority_dir/validate-pre-review-record.sh"
+          node "$authority_dir/merge-candidate-authority.js" --scope >> "$GITHUB_OUTPUT"
+
+  required:
+    # A failed/missing scope output still names and RUNS a failing Required CI.
+    # DIRECT exclusion never emits a skipped/successful protected context.
+    name: ${{ needs.scope.result == 'success' && needs.scope.outputs.route == 'direct' && 'Native bridge not applicable to DIRECT' || 'Required CI' }}
+    needs: scope
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fail closed on unresolved scope
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          SCOPE_ROUTE: ${{ needs.scope.outputs.route }}
+        run: |
+          test "$SCOPE_RESULT" = success
+          test "$SCOPE_ROUTE" = governed || test "$SCOPE_ROUTE" = direct
+
+      - name: Preserve separate DIRECT lifecycle
+        if: needs.scope.outputs.route == 'direct'
+        run: echo 'No normal bridge authority; DIRECT retains its existing Required CI and Human Gate'
+
+      - name: Checkout exact native merge context without credentials
+        if: needs.scope.outputs.route != 'direct'
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Authenticate complete authority before native job completion
+        if: needs.scope.outputs.route != 'direct'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = yoohwz/wc-order-splitter
+          test "$GITHUB_EVENT_NAME" = pull_request
+          test "$(jq -r '.action' "$GITHUB_EVENT_PATH")" = ready_for_review
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          pr_number=$(jq -r '.number' "$GITHUB_EVENT_PATH")
+          base_sha=$(jq -r '.pull_request.base.sha' "$GITHUB_EVENT_PATH")
+          head_sha=$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")
+          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]
+          [[ "$base_sha" =~ ^[0-9a-f]{40}$ && "$head_sha" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REF" = "refs/pull/$pr_number/merge"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git show -s --format=%P HEAD)" = "$base_sha $head_sha"
+          test "$(git rev-parse HEAD^{tree})" = "$(git rev-parse "$head_sha^{tree}")"
+          git merge-base --is-ancestor "$base_sha" "$head_sha"
+          authority_dir=$(mktemp -d "$RUNNER_TEMP/wcos-native-authority.XXXXXX")
+          for script in classify-pr-scope.sh verify-pre-review-authority.sh validate-pre-review-record.sh; do
+            git show "$base_sha:.github/scripts/$script" > "$authority_dir/$script"
+            chmod +x "$authority_dir/$script"
+          done
+          authority_source=$base_sha
+          if ! git cat-file -e "$base_sha:.github/scripts/merge-candidate-authority.js" 2>/dev/null; then
+            # The only bootstrap is the reviewed GOV-010 source-bound head.
+            test "$base_sha" = 545b82b452adfc4d43fd4744f3f83d7a8f5e68fb
+            test "$pr_number" = 133
+            pr_body=$(jq -r '.pull_request.body' "$GITHUB_EVENT_PATH")
+            grep -Fxq -- '- Task: `WOS-GOV-010`' <<< "$pr_body"
+            grep -Fxq -- '- Canonical Issue: #132' <<< "$pr_body"
+            issue=$(gh api "repos/$GITHUB_REPOSITORY/issues/132")
+            jq -e '.user.login == "yoohwz" and .user.id == 152001663 and .author_association == "OWNER" and .state == "open" and (.pull_request == null)' <<< "$issue" >/dev/null
+            issue_body=$(jq -r '.body' <<< "$issue")
+            grep -Fxq -- '- **Task:** `WOS-GOV-010`' <<< "$issue_body"
+            grep -Fxq -- '- **CI profile floor:** `HIGH_DEEP`' <<< "$issue_body"
+            grep -Fxq -- '- **Assurance floor:** `HIGH`' <<< "$issue_body"
+            grep -Fxq -- '- **Independent review floor:** `REQUIRED`' <<< "$issue_body"
+            authority_source=$head_sha
+          fi
+          git show "$authority_source:.github/scripts/merge-candidate-authority.js" > "$authority_dir/merge-candidate-authority.js"
+          export WCOS_BASE_CLASSIFIER="$authority_dir/classify-pr-scope.sh"
+          export WCOS_PRE_REVIEW_VERIFIER="$authority_dir/verify-pre-review-authority.sh"
+          export WCOS_PRE_REVIEW_VALIDATOR="$authority_dir/validate-pre-review-record.sh"
+          node "$authority_dir/merge-candidate-authority.js" --verify
