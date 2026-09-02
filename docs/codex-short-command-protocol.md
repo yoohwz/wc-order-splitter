@@ -4,9 +4,11 @@
 
 Reduce operator prompts to short, stable commands without moving task scope, safety rules, acceptance criteria, or merge authority into chat text.
 
-A short existing-task command is a **task selector**, never the task contract. `Create <TASK_ID>` is the explicit ChatGPT bootstrap authorization to create that named normal-workflow contract when no canonical Issue exists. After canonical `POST_MERGE_ACCEPTED` for `WOS-GOV-007`, `Direct <request>` / `Quick <request>` is the sole Codex bootstrap exception and must create its bounded contract plus authenticated pre-edit authority under `docs/codex-direct-workflow.md`.
+A short existing-task command is a **task selector**, never the task contract. `Create <TASK_ID>` is the explicit ChatGPT bootstrap authorization to create that named normal-workflow contract when no canonical Issue exists. `Direct <request>` / `Quick <request>` is the sole Codex bootstrap exception and must create its bounded contract plus authenticated pre-edit authority under `docs/codex-direct-workflow.md`; new direct tasks use the risk-tiered contract only after WOS-GOV-009 terminal acceptance.
 
 For every existing-task command, the canonical task contract remains on GitHub and must be resolved before Codex plans, edits, reviews, verifies, or resumes work. `Create` follows the zero/one/multiple-match bootstrap branch below, then persists and re-reads the canonical Issue before downstream execution.
+
+After canonical `POST_MERGE_ACCEPTED` for `WOS-GOV-009`, this protocol uses the prospective risk-tiered authority in `docs/compressed-engineering-workflow.md`: LOW and no-trigger MEDIUM route through persisted `EXECUTOR_EVIDENCE_READY`; review-required MEDIUM/HIGH route through PRECHECK, fresh persisted `PRE_REVIEW_CLEAN`, stale-safe FINAL, and mechanically bound `TECHNICAL_ACCEPTED`; deterministic DIRECT has no Independent Review or Technical Acceptance checkpoint. WOS-GOV-009 itself and untransitioned active tasks retain their exact source-bound prior workflow.
 
 ## Supported operator commands
 
@@ -34,7 +36,7 @@ If the request is outside the direct envelope, Codex makes no source edit and st
 - `Thực hiện <TASK_ID>`
 - `Execute <TASK_ID>`
 
-Meaning: resolve the canonical task contract and execute the complete engineering loop from its current authorized starting state. When the Codex surface can establish fresh reviewer separation and provenance, this includes Executor work, focused Local evidence, PR/exact-head CI, complete-diff self-review, fresh Independent Codex Review, and at most three authenticated correction/re-CI/re-review cycles. Otherwise stop `INDEPENDENT_REVIEW_DISPATCH_REQUIRED: <TASK_ID>`. If another head-changing correction would exceed the bound, stop `TECHNICAL_ESCALATION_REQUIRED: <TASK_ID>`.
+Meaning: resolve the canonical task and execute its complete assurance/profile loop. LOW/no-trigger MEDIUM runs focused FINAL CI and persists Executor evidence. Review-required MEDIUM/HIGH runs PRECHECK, fresh Independent PRE_REVIEW, bounded correction, stale-safe FINAL, and review-bound Technical Acceptance. Source-bound legacy/bootstrap tasks retain their current FULL review sequence. If required reviewer separation is unavailable, stop `INDEPENDENT_REVIEW_DISPATCH_REQUIRED`; a fourth head-changing cycle stops `TECHNICAL_ESCALATION_REQUIRED`.
 
 ### Resume
 
@@ -49,7 +51,7 @@ Meaning: recover the task's current GitHub/local state and continue from the lat
 - `Review <TASK_ID>`
 - `Rà soát <TASK_ID>`
 
-Meaning: perform the executor-side complete-diff/evidence review required by the task contract and prepare the task for a fresh Independent Codex Technical Review. This command never substitutes for independent technical acceptance.
+Meaning: perform adversarial Executor complete-diff/evidence review. For LOW/no-trigger MEDIUM it prepares persisted `EXECUTOR_EVIDENCE_READY`; for review-required work it prepares fresh PRE_REVIEW. Executor review never substitutes for an Independent Review when the profile/trigger requires one.
 
 ### Independent technical review
 
@@ -62,13 +64,13 @@ Meaning: in a new/fresh Codex reviewer context, perform the complete-PR technica
 
 - `Acceptance Review <TASK_ID>`
 
-Meaning: after independently resolving persisted GitHub exact-head `TECHNICAL_ACCEPTED`, ChatGPT performs architecture, contract, product, evidence, and governance acceptance without substituting for technical/code-correctness review.
+Meaning: ChatGPT authenticates task-appropriate exact-head evidence (`EXECUTOR_EVIDENCE_READY` for no-review LOW/MEDIUM or `TECHNICAL_ACCEPTED` for reviewed work) and performs architecture, contract, product, evidence, profile/trigger, and governance acceptance.
 
 ### Finalize
 
 - `Finalize <TASK_ID>`
 
-Meaning: in ChatGPT, independently resolve and authenticate the persisted GitHub exact-head Technical Acceptance authority, perform Acceptance Review, and use the authenticated human's same command as an explicit conditional Human Gate only after Acceptance succeeds and head/base/CI authority remains unchanged. Conversation/session-only review text must be rejected. Record distinct `ACCEPTANCE_ACCEPTED`, `HUMAN_GATE_APPROVED`, and `POST_MERGE_ACCEPTED` checkpoints. Never publish, release, deploy, or create a public package.
+Meaning: in ChatGPT, independently authenticate task-appropriate persisted exact-head authority (`EXECUTOR_EVIDENCE_READY` or independently grounded `TECHNICAL_ACCEPTED`), perform Acceptance Review, and use the authenticated human's same command as a conditional Human Gate only after Acceptance succeeds and authority remains unchanged. Record distinct `ACCEPTANCE_ACCEPTED`, `HUMAN_GATE_APPROVED`, and `POST_MERGE_ACCEPTED`. Never publish, release, deploy, or create a public package.
 
 ### Verify
 
@@ -103,23 +105,23 @@ The execution surface is part of the command contract. A handoff must always say
 | Codex | `Direct <request>` / `Quick <request>` | Classify and, only when strictly eligible, bootstrap and complete `TRIVIAL / CODEX_DIRECT` under the pre-edit authority and CSS-first guards in `docs/codex-direct-workflow.md`. |
 | Codex | `Chạy <TASK_ID>` / `Run <TASK_ID>` | Execute the complete engineering loop, including separate Independent Codex Review and a bounded correction loop when reviewer provenance is available. |
 | Codex | `Tiếp tục <TASK_ID>` / `Continue <TASK_ID>` | Recover and resume Codex execution from the latest canonical checkpoint. |
-| Codex | `Review <TASK_ID>` | Perform executor self-review/readiness only; never independent Technical Review. |
+| Codex | `Review <TASK_ID>` | Perform executor self-review/readiness for persisted Executor evidence or fresh PRE_REVIEW; never impersonate required Independent Review. |
 | Codex | `Sửa <TASK_ID>` / `Fix <TASK_ID>` | Apply only the latest authenticated changes-required tranche. |
 | Codex | `Verify <TASK_ID>` | Perform the read-only verification authorized by the current task state. |
 | Codex | `Status <TASK_ID>` | Recover and report repository/task state without mutation. |
 | Independent Codex Reviewer (fresh context) | `Technical Review <TASK_ID>` | Resolve and review the exact PR head source read-only, then automatically persist and authenticate the structured GitHub outcome before it becomes authoritative. |
 | ChatGPT | `Plan Review <TASK_ID>` | Perform the architecture/plan gate when the canonical task requires it. |
-| ChatGPT | `Finalize <TASK_ID>` | Perform Acceptance, conditional explicit Human Gate, merge, and exact-tree post-merge proof sequentially for the unchanged technically accepted head. |
-| ChatGPT | `Acceptance Review <TASK_ID>` | After persisted GitHub Independent Codex Technical Acceptance, verify contract, architecture, scope, evidence, and governance for the same exact head. |
+| ChatGPT | `Finalize <TASK_ID>` | Authenticate task-appropriate exact-head evidence, perform Acceptance, conditional Human Gate, squash merge, and exact-tree post-merge proof. |
+| ChatGPT | `Acceptance Review <TASK_ID>` | Authenticate the assurance path's exact-head evidence and verify contract, profile/trigger, architecture, scope, evidence, and governance. |
 | ChatGPT | `Status <TASK_ID>` | Perform read-only governance/status recovery. |
 | ChatGPT | `Continue <TASK_ID>` | Resume the architect/governor workflow from the latest canonical checkpoint. |
 | ChatGPT | `Human Gate <TASK_ID>` | Request explicit human approval only for the exact unchanged head holding both authoritative Technical and Acceptance acceptance. ChatGPT must re-resolve authority and drift, record the exact GitHub Human Gate, and merge only when the task contract permits it. |
 
 If a user sends `Technical Review <TASK_ID>` to ChatGPT, ChatGPT must route the command to a new/fresh Independent Codex Reviewer context. It must not execute or represent the authoritative code-correctness review itself.
 
-`Finalize <TASK_ID>` is explicit conditional Human Gate authority, not inferred approval. It takes effect only after ChatGPT independently authenticates the persisted GitHub Technical Acceptance record, records successful exact-head Acceptance, and immediately revalidates unchanged head/base/CI authority. `Acceptance Review <TASK_ID>` and `Human Gate <TASK_ID>` remain supported compatibility commands for older or task-bound workflows. A bare `Merge <TASK_ID>` or `Release <TASK_ID>` remains insufficient Human Gate authority, and no implementation Human Gate implies tag, release, publication, or deployment authority.
+`Finalize <TASK_ID>` is explicit conditional Human Gate authority, not inferred approval. It takes effect only after ChatGPT authenticates the evidence required by the exact assurance path, records successful exact-head Acceptance, and revalidates unchanged head/base/CI/review authority. A bare `Merge` or `Release` is insufficient and no implementation Human Gate implies publication.
 
-The sole exception is an eligible direct task: the authenticated human's explicit request must already be persisted as `DIRECT_HUMAN_AUTHORIZED` before source edits. After protected-branch CI and a fresh persisted exact-head Independent Review explicitly confirm direct eligibility, Codex may revalidate unchanged authority, persist `HUMAN_GATE_APPROVED_DIRECT`, squash-merge, and prove `POST_MERGE_ACCEPTED_DIRECT`. This is not executor self-authorization and never applies to `LOW`, `MEDIUM`, or `HIGH` work.
+The sole exception is eligible deterministic DIRECT: the human request is persisted as `DIRECT_HUMAN_AUTHORIZED` before source edits; exact-head `DIRECT_FAST` Required CI mechanically proves the bounded non-semantic envelope; Codex revalidates unchanged authority, persists `HUMAN_GATE_APPROVED_DIRECT`, squash-merges, and proves `POST_MERGE_ACCEPTED_DIRECT`. DIRECT has no Independent Review or `TECHNICAL_ACCEPTED`; any ambiguity leaves DIRECT.
 
 The lifecycle and risk-profile authority is centralized in `docs/compressed-engineering-workflow.md`; direct-mode scope and merge authority are centralized in `docs/codex-direct-workflow.md`.
 
@@ -155,6 +157,18 @@ Expected: Task complete.
 
 ### Canonical handoffs
 
+Normal no-review LOW/no-trigger MEDIUM:
+
+```text
+READY_TO_FINALIZE: <TASK_ID> / PR #N / exact head <SHA> / EXECUTOR_EVIDENCE_READY / persisted authority <Issue comment ID>
+
+NEXT_ACTION_HINT
+Who: Human
+Where: ChatGPT
+Command: Finalize <TASK_ID>
+Expected: ChatGPT authenticates exact-head Executor evidence, profile/trigger classification and Required CI, performs Acceptance, conditionally records Human Gate, squash-merges, and proves POST_MERGE_ACCEPTED without publishing.
+```
+
 Normal compressed-flow Technical Acceptance:
 
 ```text
@@ -167,7 +181,7 @@ Command: Finalize <TASK_ID>
 Expected: ChatGPT resolves the persisted GitHub Technical Acceptance authority, performs Acceptance, conditionally records Human Gate for the unchanged head, merges, and proves POST_MERGE_ACCEPTED without publishing.
 ```
 
-Eligible direct Technical Acceptance is not a handoff. Codex must continue only through the unchanged-authority checks in `docs/codex-direct-workflow.md`, persist `HUMAN_GATE_APPROVED_DIRECT`, squash-merge, prove the exact merged tree and exact-SHA Main attestation, persist `POST_MERGE_ACCEPTED_DIRECT`, and then use the completed-task `None` footer. It must never emit `READY_TO_FINALIZE` for a direct task.
+Eligible DIRECT has no Technical Acceptance handoff. Codex continues only through unchanged `DIRECT_HUMAN_AUTHORIZED` + `DIRECT_FAST` Required CI revalidation, persists `HUMAN_GATE_APPROVED_DIRECT`, squash-merges, proves Main attestation, persists `POST_MERGE_ACCEPTED_DIRECT`, and uses the completed-task footer. It never emits `READY_TO_FINALIZE`.
 
 Codex implementation is ready but automatic independent-review dispatch is unavailable, or the task explicitly uses the compatibility/bootstrap workflow:
 
@@ -178,7 +192,7 @@ NEXT_ACTION_HINT
 Who: Human
 Where: Codex
 Command: Technical Review <TASK_ID>
-Expected: A new/fresh Independent Codex Reviewer reviews the complete exact PR head read-only and returns TECHNICAL_ACCEPTED or TECHNICAL_CHANGES_REQUIRED.
+Expected: A new/fresh Independent Codex Reviewer reviews the complete exact PR head read-only and persists PRE_REVIEW_CLEAN/PRE_REVIEW_CHANGES_REQUIRED for risk-tiered work, or source-bound TECHNICAL_ACCEPTED/TECHNICAL_CHANGES_REQUIRED for bootstrap tasks.
 ```
 
 An explicit bootstrap task may require its task-bound `TECHNICAL_REVIEW_REQUIRED: <TASK_ID> <task-specific readiness statement>.` signal instead; this does not make the lower-level handoff the default for later compressed-flow tasks.
@@ -280,7 +294,7 @@ If a numeric reference is ambiguous, require explicit `Issue #N` or `PR #N`.
 
 ## Direct bootstrap resolution
 
-This section is active only after canonical `POST_MERGE_ACCEPTED` for `WOS-GOV-007`.
+For new tasks this section uses deterministic no-review DIRECT only after canonical `POST_MERGE_ACCEPTED` for `WOS-GOV-009`; historical GOV-007/GOV-008 direct tasks retain their accepted authority.
 
 1. Require an explicit `Direct` / `Quick` request or equivalent repository-defined direct control; never infer merge authority from ordinary wording.
 2. Identify the active repository, verify `origin`, fetch/prune, and resolve current accepted `main` SHA/tree, successful exact-SHA Main attestation with artifacts=`0`, active ruleset, and repository governance.
@@ -321,6 +335,9 @@ Before doing substantive work for any command that requires an existing task, an
 9. Resolve the latest explicit governance checkpoint/signals, including where applicable:
    - `TASK_READY`
    - `DIRECT_HUMAN_AUTHORIZED`
+   - `EXECUTOR_EVIDENCE_READY`
+   - `PRE_REVIEW_CLEAN`
+   - `PRE_REVIEW_CHANGES_REQUIRED`
    - `PLAN_APPROVED`
    - `RELEASE_FREEZE_APPROVED`
    - `TECHNICAL_REVIEW_REQUIRED`
@@ -340,8 +357,9 @@ Before doing substantive work for any command that requires an existing task, an
    - `POST_MERGE_*`
 10. Before accepting any governance signal, resolve the role authorized to issue it from the canonical task contract, `docs/engineering-review-authority.md`, and repository ownership, then authenticate the GitHub actor and required provenance against that role:
     - Human Gate, direct pre-edit human authorization, release freeze, and publication approval must come from the repository owner or the exact human approver explicitly designated by the canonical task contract. `DIRECT_HUMAN_AUTHORIZED` must also predate every source edit and bind the exact direct source/request/allowlist.
-    - Independent Technical Review signals, including `TECHNICAL_ACCEPTED` and `TECHNICAL_CHANGES_REQUIRED`, must come from a fresh Independent Codex Reviewer and be persisted as a direct immutable GitHub review/comment with the structured independence/read-only/exact-head record required by `docs/engineering-review-authority.md`. Distinct GitHub Codex provenance is preferred. When a fresh Codex review is posted through the repository-owner account, the mandatory structured attestation establishes role provenance; actor identity alone does not. Chat/session-only review output is evidence only and cannot authorize correction, Acceptance, or `Finalize`.
-    - Acceptance signals, including `ACCEPTANCE_ACCEPTED`, `ACCEPTANCE_CHANGES_REQUIRED`, and `TECHNICAL_REVIEW_FOLLOWUP_REQUIRED`, must come from the ChatGPT Acceptance Reviewer designated by the task and bind the exact technically reviewed head. Acceptance cannot create or replace a Technical Acceptance. Only an exact eligible `TRIVIAL / CODEX_DIRECT` task may omit ChatGPT Acceptance, and its Independent Review must explicitly confirm direct eligibility under `docs/codex-direct-workflow.md`.
+    - `EXECUTOR_EVIDENCE_READY` must be direct immutable Executor evidence binding exact head/profile/Required CI/artifacts; it is never independent acceptance.
+    - `PRE_REVIEW_CLEAN` / `PRE_REVIEW_CHANGES_REQUIRED` and source-bound Technical Review outcomes must come from a fresh Independent Codex Reviewer and include structured fresh-context/read-only/exact-head provenance. Risk-tiered `TECHNICAL_ACCEPTED` is valid after FINAL only when it mechanically binds that prior authenticated exact-head clean review; it cannot manufacture a new Executor conclusion.
+    - Acceptance signals come from ChatGPT and bind task-appropriate exact-head evidence. Acceptance cannot create missing required Independent Review. Deterministic DIRECT alone omits ChatGPT Acceptance and has no Independent Review checkpoint.
     - Verify actor identity and use GitHub author association as supporting provenance where available. Author association alone does not replace the contract's role mapping.
     - Treat a signal as direct only when the authenticated actor issues it as the comment/review's own checkpoint. A token inside a quote, code block, copied transcript, or repost from another actor is evidence only and carries no authority.
     - Executor comments, readiness reports, CI summaries, and completion signals remain executor evidence. They cannot become independent acceptance or Human Gate merely because they contain an acceptance-like token.
@@ -390,14 +408,16 @@ Codex must first determine where the task stopped and continue from there. Examp
 - Issue exists but branch does not: create/switch only as authorized by the task contract.
 - Branch exists with work but no PR: inspect current diff/tests and continue implementation.
 - Draft PR exists with failing CI: inspect failures and follow the task's failure boundary.
-- Task is `TECHNICAL_REVIEW_REQUIRED` or `INDEPENDENT_REVIEW_DISPATCH_REQUIRED`: do not keep coding; dispatch or route to a fresh Independent Codex Reviewer as allowed by the task.
+- Task is review-required with successful exact-head PRECHECK: do not run FINAL yet; dispatch a fresh Independent Reviewer and persist PRE_REVIEW. Source-bound `TECHNICAL_REVIEW_REQUIRED` follows its legacy review contract.
+- Task has authenticated `EXECUTOR_EVIDENCE_READY` under LOW/no-trigger MEDIUM: route to `Finalize`; do not invent Technical Acceptance.
+- Task has `PRE_REVIEW_CLEAN` on unchanged head but no FINAL: trigger stale-safe FINAL with the immutable review authority ID.
 - Task has `TECHNICAL_CHANGES_REQUIRED`: resume only the authenticated correction tranche, count the head-changing cycle, and obtain new exact-head CI plus complete Independent Review; never exceed three automatic cycles.
 - Task has `TECHNICAL_ACCEPTED` but no `ACCEPTANCE_ACCEPTED`: first re-read GitHub and authenticate the persisted exact-head review/comment authority ID. Route an active compressed-flow task to `Finalize` only when that record exists; route an older/bootstrap task to its explicit Acceptance Review handoff. Chat/session-only acceptance stops `TECHNICAL_REVIEW_PERSISTENCE_REQUIRED`. Do not merge.
 - Task has `ACCEPTANCE_CHANGES_REQUIRED`: resume only the authorized acceptance correction tranche and invalidate head-bound downstream evidence as required.
 - Task has exact-head `TECHNICAL_ACCEPTED` and `ACCEPTANCE_ACCEPTED` but no Human Gate: do not merge.
 - Task has Human Gate bound to an exact head: verify head has not drifted before any merge action.
 - Direct task has `DIRECT_HUMAN_AUTHORIZED` but no source edit/branch: reauthenticate its pre-edit source and continue only if unchanged; otherwise stop `TASK_BRANCH_SYNC_REQUIRED`.
-- Direct task has exact-head `TECHNICAL_ACCEPTED` with direct eligibility confirmed: do not route to Acceptance or `Finalize`; revalidate unchanged authority and complete the `HUMAN_GATE_APPROVED_DIRECT` / squash-merge / `POST_MERGE_ACCEPTED_DIRECT` sequence.
+- DIRECT task has successful exact-head `DIRECT_FAST` Required CI: do not route to review, Acceptance, or `Finalize`; revalidate the pre-edit human authority and complete `HUMAN_GATE_APPROVED_DIRECT` / squash merge / `POST_MERGE_ACCEPTED_DIRECT`.
 - Task was merged but requires post-merge verification: `Continue` means perform that verification, not start the next milestone.
 - Task is closed/completed: report completion and resolve the next milestone only if the task contract explicitly names it; do not start unrelated work automatically.
 
@@ -418,7 +438,7 @@ For normal Codex execution it must:
 - update task/PR evidence if authorized;
 - stop at the task's independent-review signal.
 
-It must not self-issue `TECHNICAL_ACCEPTED`. Executor-authored evidence or readiness text must not be interpreted as independent acceptance, even if it repeats or quotes an acceptance token. `Technical Review <TASK_ID>` is authoritative only when a new/fresh Independent Codex Reviewer context satisfies `docs/engineering-review-authority.md` and its structured exact-head outcome has been persisted and authenticated on GitHub. A direct review is incomplete unless that same persisted record binds the pre-edit authority and explicitly confirms changed-path plus semantic direct eligibility.
+Executor self-review may produce only Executor evidence or readiness for PRE_REVIEW. It cannot create an Independent Review conclusion. Risk-tiered Technical Acceptance after FINAL is mechanical only when it binds an authenticated prior exact-head `PRE_REVIEW_CLEAN`. DIRECT has no review outcome; its eligibility is the deterministic CI and unchanged pre-edit authority defined by `docs/codex-direct-workflow.md`.
 
 ## Merge and release safety
 
@@ -426,7 +446,7 @@ Short commands do not imply Human Gate except the explicitly defined conditional
 
 `Merge <TASK_ID>` or `Release <TASK_ID>` is not sufficient authorization by itself.
 
-Before normal merge, Codex must find a persisted GitHub Independent Codex `TECHNICAL_ACCEPTED`, ChatGPT `ACCEPTANCE_ACCEPTED`, and an explicit actor-authenticated Human Gate in the canonical GitHub task/PR context, all bound to the exact unchanged PR head. Conversation/session-only Technical Acceptance is non-authoritative. If either acceptance is absent, merge is not authorized. If Human Gate is absent, stop with:
+Before normal merge, Codex must find task-appropriate persisted exact-head evidence (`EXECUTOR_EVIDENCE_READY` for LOW/no-trigger MEDIUM, or independently grounded `TECHNICAL_ACCEPTED` for reviewed work), ChatGPT `ACCEPTANCE_ACCEPTED`, and actor-authenticated Human Gate. If required evidence or Acceptance is absent, merge is unauthorized. If Human Gate is absent, stop with:
 
 `HUMAN_GATE_REQUIRED`
 
@@ -434,7 +454,7 @@ If the accepted/head SHA has drifted, technical review and acceptance must be re
 
 `TECHNICAL_REVIEW_REQUIRED`
 
-Before direct merge, Codex must instead authenticate the pre-edit `DIRECT_HUMAN_AUTHORIZED`, exact-head persisted Independent Codex `TECHNICAL_ACCEPTED` with direct eligibility confirmed, successful protected-branch `Required CI`, unchanged CSS-first scope/source/base/head/ruleset, and no unresolved blocking thread. Only then may it persist `HUMAN_GATE_APPROVED_DIRECT` derived from that exact human authority and squash-merge. ChatGPT `ACCEPTANCE_ACCEPTED` is neither required nor permitted as a substitute for missing direct eligibility. Any missing condition stops fail-closed under `docs/codex-direct-workflow.md`.
+Before direct merge, Codex authenticates pre-edit `DIRECT_HUMAN_AUTHORIZED`, exact-head `DIRECT_FAST` protected `Required CI`, unchanged deterministic CSS scope/source/base/head/ruleset, artifacts=0, and no unresolved blocking thread. Only then may it persist `HUMAN_GATE_APPROVED_DIRECT` derived from the human authority and squash-merge. DIRECT has no Independent Review or ChatGPT Acceptance substitute.
 
 Before release/tag/publication, Codex must find the separate explicit, actor-authenticated release Human Gate required by the task contract. A prior implementation or merge Human Gate never implicitly authorizes release.
 
@@ -467,9 +487,9 @@ Operator:
 
 `Chạy WOS-MERGE-009`
 
-Codex resolves the Issue and runs the complete Executor/CI/Independent Review loop when separate reviewer provenance is available. Exact-head Technical Acceptance returns `READY_TO_FINALIZE`; unavailable reviewer dispatch returns `INDEPENDENT_REVIEW_DISPATCH_REQUIRED`.
+Codex resolves the Issue and runs its assurance/profile loop: no-review LOW/MEDIUM returns persisted Executor evidence; reviewed work runs PRECHECK, fresh PRE_REVIEW and FINAL before Technical Acceptance. WOS-GOV-009 itself uses source-base FULL review.
 
-Operator in Codex after WOS-GOV-007 activation:
+Operator in Codex after WOS-GOV-009 activation:
 
 `Direct Reduce the spacing between existing admin order cards`
 
@@ -491,13 +511,13 @@ Operator:
 
 `Review WOS-MERGE-009`
 
-Codex performs complete-diff/evidence self-review and, if ready, emits the task's exact `TECHNICAL_REVIEW_REQUIRED` signal for a new/fresh Independent Codex Reviewer.
+Codex performs complete-diff/evidence self-review and prepares either persisted `EXECUTOR_EVIDENCE_READY` or fresh PRE_REVIEW according to the resolved assurance path; source-bound tasks may retain `TECHNICAL_REVIEW_REQUIRED`.
 
 Operator opens a new Codex reviewer task:
 
 `Technical Review WOS-MERGE-009`
 
-The Independent Codex Reviewer fallback resolves the complete PR and exact-head evidence, stays source read-only, and produces `TECHNICAL_ACCEPTED` or `TECHNICAL_CHANGES_REQUIRED`. The reviewer/orchestrating surface automatically persists and re-reads the structured GitHub record. Active compressed tasks route to `Finalize` only after that authority exists; older/bootstrap tasks follow their explicit lower-level handoff.
+The Independent Codex Reviewer fallback resolves the complete exact PR head and PRECHECK, stays source read-only, and persists `PRE_REVIEW_CLEAN` or `PRE_REVIEW_CHANGES_REQUIRED`; source-bound bootstrap tasks retain their Technical Review outcome. Clean risk-tiered review proceeds to stale-safe FINAL before Finalize.
 
 Operator:
 
@@ -525,7 +545,7 @@ When ChatGPT creates a new `LOW`, `MEDIUM`, or `HIGH` implementation/release tas
 
 The Issue should reference stable repository architecture, CI, package, and governance contracts instead of copying their global invariants. Its compact task-specific authority block should contain, as applicable:
 
-- classification and `LOW`, `MEDIUM`, or `HIGH` risk profile; `TRIVIAL / CODEX_DIRECT` is created only by the explicit Codex bootstrap in `docs/codex-direct-workflow.md`;
+- assurance profile LOW/MEDIUM/HIGH, CI floor/stage, and MEDIUM review triggers; deterministic DIRECT is created only by explicit Codex bootstrap;
 - mission;
 - exact source SHA and dependencies/source authority;
 - the exact expected gate map or the authoritative code-owned gate files plus task-bound expectations;

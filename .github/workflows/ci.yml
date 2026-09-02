@@ -5,75 +5,244 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open PR number to certify after PRE_REVIEW_CLEAN
+        required: true
+        type: string
+      task_id:
+        description: Canonical WOS task ID bound by the review record
+        required: true
+        type: string
+      task_issue_number:
+        description: Canonical task Issue number containing the immutable review authority
+        required: true
+        type: string
+      expected_head_sha:
+        description: Exact unchanged PR head authorized for FINAL certification
+        required: true
+        type: string
+      requested_profile:
+        description: Profile request; classifier may raise it and never lower its machine floor
+        required: true
+        type: choice
+        options:
+          - MEDIUM_DOMAIN
+          - HIGH_DEEP
+          - HIGH_FINANCIAL
+          - RELEASE_CERT
+      pre_review_authority:
+        description: Immutable issue-comment:ID or pr-review:ID containing PRE_REVIEW_CLEAN
+        required: true
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
+  actions: read
   contents: read
+  issues: read
+  pull-requests: read
 
 jobs:
   classify-pr-scope:
     name: Classify PR CI profile
     runs-on: ubuntu-latest
     outputs:
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      task_id: ${{ steps.resolve.outputs.task_id }}
+      task_issue_number: ${{ steps.resolve.outputs.task_issue_number }}
+      base_sha: ${{ steps.resolve.outputs.base_sha }}
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+      head_ref: ${{ steps.resolve.outputs.head_ref }}
       profile: ${{ steps.classify.outputs.profile }}
       reason: ${{ steps.classify.outputs.reason }}
+      assurance: ${{ steps.classify.outputs.assurance }}
+      review_required: ${{ steps.classify.outputs.review_required }}
+      domain: ${{ steps.classify.outputs.domain }}
+      stage: ${{ steps.classify.outputs.stage }}
+      storage_matrix: ${{ steps.classify.outputs.storage_matrix }}
     steps:
       - name: Checkout complete authority graph
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Resolve exact PR authority
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_HEAD_REF: ${{ github.head_ref }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          INPUT_TASK_ID: ${{ inputs.task_id }}
+          INPUT_TASK_ISSUE_NUMBER: ${{ inputs.task_issue_number }}
+          EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            test -n "$EVENT_PR_NUMBER"
+            test -n "$EVENT_BASE_SHA"
+            test -n "$EVENT_HEAD_SHA"
+            test -n "$EVENT_HEAD_REF"
+            {
+              printf 'pr_number=%s\n' "$EVENT_PR_NUMBER"
+              printf 'task_id=\n'
+              printf 'task_issue_number=\n'
+              printf 'base_sha=%s\n' "$EVENT_BASE_SHA"
+              printf 'head_sha=%s\n' "$EVENT_HEAD_SHA"
+              printf 'head_ref=%s\n' "$EVENT_HEAD_REF"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          [[ "$INPUT_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          [[ "$INPUT_TASK_ID" =~ ^WOS-[A-Z0-9-]+$ ]]
+          [[ "$INPUT_TASK_ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          expected_head=$(printf '%s' "$EXPECTED_HEAD_SHA" | tr '[:upper:]' '[:lower:]')
+          pr_json=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$INPUT_PR_NUMBER")
+          test "$(jq -r '.state' <<< "$pr_json")" = open
+          test "$(jq -r '.base.ref' <<< "$pr_json")" = main
+          base_sha=$(jq -r '.base.sha' <<< "$pr_json")
+          head_sha=$(jq -r '.head.sha' <<< "$pr_json")
+          head_ref=$(jq -r '.head.ref' <<< "$pr_json")
+          test "$head_sha" = "$expected_head"
+          test "$GITHUB_SHA" = "$expected_head"
+          issue_json=$(gh api "repos/$GITHUB_REPOSITORY/issues/$INPUT_TASK_ISSUE_NUMBER")
+          test "$(jq -r '.pull_request // empty' <<< "$issue_json")" = ''
+          test "$(jq -r '.state' <<< "$issue_json")" = open
+          test "$(jq -r '.author_association' <<< "$issue_json")" = OWNER
+          jq -e --arg task "$INPUT_TASK_ID" '.title | contains($task)' <<< "$issue_json" >/dev/null
+          {
+            printf 'pr_number=%s\n' "$INPUT_PR_NUMBER"
+            printf 'task_id=%s\n' "$INPUT_TASK_ID"
+            printf 'task_issue_number=%s\n' "$INPUT_TASK_ISSUE_NUMBER"
+            printf 'base_sha=%s\n' "$base_sha"
+            printf 'head_sha=%s\n' "$head_sha"
+            printf 'head_ref=%s\n' "$head_ref"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Classify exact base-to-head scope
         id: classify
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_HEAD_REF: ${{ github.head_ref }}
+          PR_BASE_SHA: ${{ steps.resolve.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
+          PR_HEAD_REF: ${{ steps.resolve.outputs.head_ref }}
+          REQUESTED_PROFILE: ${{ inputs.requested_profile }}
         run: |
           set -euo pipefail
-          if [[ "$EVENT_NAME" != pull_request ]]; then
-            printf 'profile=FULL\nreason=non_pull_request_event\n' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
           test -n "$PR_BASE_SHA"
           test -n "$PR_HEAD_SHA"
           base_classifier="$RUNNER_TEMP/classify-pr-scope.sh"
+          classifier_output="$RUNNER_TEMP/classifier-output"
           if ! git cat-file -e "$PR_BASE_SHA:.github/scripts/classify-pr-scope.sh" 2>/dev/null; then
-            printf 'profile=FULL\nreason=classifier_not_present_in_base\n' >> "$GITHUB_OUTPUT"
+            {
+              printf 'profile=FULL\n'
+              printf 'reason=classifier_not_present_in_base\n'
+              printf 'assurance=HIGH\n'
+              printf 'review_required=true\n'
+              printf 'domain=control-plane\n'
+              printf 'stage=FINAL\n'
+              printf 'storage_matrix=["legacy","hpos","hpos-sync"]\n'
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           git show "$PR_BASE_SHA:.github/scripts/classify-pr-scope.sh" > "$base_classifier"
           chmod +x "$base_classifier"
-          "$base_classifier" "$EVENT_NAME" "$PR_BASE_SHA" "$PR_HEAD_SHA" "$PR_HEAD_REF" "$GITHUB_OUTPUT"
+          "$base_classifier" pull_request "$PR_BASE_SHA" "$PR_HEAD_SHA" "$PR_HEAD_REF" "$classifier_output" "$REQUESTED_PROFILE"
+
+          profile=$(sed -n 's/^profile=//p' "$classifier_output" | tail -n 1)
+          reason=$(sed -n 's/^reason=//p' "$classifier_output" | tail -n 1)
+          assurance=$(sed -n 's/^assurance=//p' "$classifier_output" | tail -n 1)
+          review_required=$(sed -n 's/^review_required=//p' "$classifier_output" | tail -n 1)
+          domain=$(sed -n 's/^domain=//p' "$classifier_output" | tail -n 1)
+          stage=$(sed -n 's/^stage=//p' "$classifier_output" | tail -n 1)
+          storage_matrix=$(sed -n 's/^storage_matrix=//p' "$classifier_output" | tail -n 1)
+
+          if [[ "$profile" == FULL ]]; then
+            assurance=HIGH
+            review_required=true
+            domain=control-plane
+            stage=FINAL
+            storage_matrix='["legacy","hpos","hpos-sync"]'
+          elif [[ "$profile" == DIRECT_CSS_FAST ]]; then
+            assurance=DIRECT
+            review_required=true
+            domain=presentation
+            stage=FINAL
+            storage_matrix='["none"]'
+          fi
+
+          test -n "$profile"
+          test -n "$reason"
+          test -n "$assurance"
+          test "$review_required" = true || test "$review_required" = false
+          test -n "$domain"
+          test "$stage" = PRECHECK || test "$stage" = FINAL
+          test -n "$storage_matrix"
+
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            test "$review_required" = true
+            case "$profile" in MEDIUM_DOMAIN|HIGH_DEEP|HIGH_FINANCIAL|RELEASE_CERT) ;; *) exit 1 ;; esac
+            stage=FINAL
+            case "$profile" in
+              MEDIUM_DOMAIN) storage_matrix='["hpos"]' ;;
+              *) storage_matrix='["legacy","hpos","hpos-sync"]' ;;
+            esac
+          fi
+
+          {
+            printf 'profile=%s\n' "$profile"
+            printf 'reason=%s\n' "$reason"
+            printf 'assurance=%s\n' "$assurance"
+            printf 'review_required=%s\n' "$review_required"
+            printf 'domain=%s\n' "$domain"
+            printf 'stage=%s\n' "$stage"
+            printf 'storage_matrix=%s\n' "$storage_matrix"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Log exact classifier authority
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ steps.resolve.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
           PROFILE: ${{ steps.classify.outputs.profile }}
           REASON: ${{ steps.classify.outputs.reason }}
+          ASSURANCE: ${{ steps.classify.outputs.assurance }}
+          REVIEW_REQUIRED: ${{ steps.classify.outputs.review_required }}
+          DOMAIN: ${{ steps.classify.outputs.domain }}
+          CI_STAGE: ${{ steps.classify.outputs.stage }}
         run: |
           set -euo pipefail
-          test "$PROFILE" = FULL || test "$PROFILE" = DIRECT_CSS_FAST
+          case "$PROFILE" in FULL|DIRECT_CSS_FAST|DIRECT_FAST|LOW_FOCUSED|MEDIUM_DOMAIN|HIGH_DEEP|HIGH_FINANCIAL|RELEASE_CERT) ;; *) exit 1 ;; esac
           echo "event_name=$EVENT_NAME"
           echo "pr_base_sha=$PR_BASE_SHA"
           echo "pr_head_sha=$PR_HEAD_SHA"
           echo "ci_profile=$PROFILE"
           echo "ci_profile_reason=$REASON"
+          echo "assurance_profile=$ASSURANCE"
+          echo "independent_review_required=$REVIEW_REQUIRED"
+          echo "affected_domain=$DOMAIN"
+          echo "ci_stage=$CI_STAGE"
 
   php-syntax:
     name: PHP syntax and unit contracts (PHP ${{ matrix.php }})
     needs: classify-pr-scope
-    if: needs['classify-pr-scope'].outputs.profile == 'FULL'
+    if: >-
+      needs['classify-pr-scope'].outputs.profile == 'FULL' ||
+      (needs['classify-pr-scope'].outputs.stage == 'FINAL' &&
+      contains(fromJSON('["HIGH_DEEP","HIGH_FINANCIAL","RELEASE_CERT"]'), needs['classify-pr-scope'].outputs.profile))
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -103,13 +272,16 @@ jobs:
   foundation-contract:
     name: Architecture and approved production gate contract
     needs: classify-pr-scope
-    if: needs['classify-pr-scope'].outputs.profile == 'FULL'
+    if: >-
+      needs['classify-pr-scope'].outputs.profile == 'FULL' ||
+      (needs['classify-pr-scope'].outputs.stage == 'FINAL' &&
+      contains(fromJSON('["HIGH_DEEP","HIGH_FINANCIAL","RELEASE_CERT"]'), needs['classify-pr-scope'].outputs.profile))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Record exact PR merge-candidate authority
         if: github.event_name == 'pull_request'
@@ -137,6 +309,8 @@ jobs:
         run: |
           tests/ci/direct-css-fast-contract.sh
           tests/ci/required-ci-profile-contract.sh
+          tests/ci/integration-suite-contract.sh
+          tests/ci/pre-review-authority-contract.sh
 
       - name: Enforce persisted Merge authority reads
         shell: bash
@@ -293,7 +467,10 @@ jobs:
   package-check:
     name: Package safety contract
     needs: classify-pr-scope
-    if: needs['classify-pr-scope'].outputs.profile == 'FULL'
+    if: >-
+      needs['classify-pr-scope'].outputs.profile == 'FULL' ||
+      (needs['classify-pr-scope'].outputs.stage == 'FINAL' &&
+      contains(fromJSON('["HIGH_DEEP","HIGH_FINANCIAL","RELEASE_CERT"]'), needs['classify-pr-scope'].outputs.profile))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -315,7 +492,10 @@ jobs:
   integration-smoke:
     name: WooCommerce 11.0.1 / ${{ matrix.storage }} storage
     needs: [classify-pr-scope, php-syntax, foundation-contract]
-    if: needs['classify-pr-scope'].outputs.profile == 'FULL'
+    if: >-
+      needs['classify-pr-scope'].outputs.profile == 'FULL' ||
+      (needs['classify-pr-scope'].outputs.profile == 'RELEASE_CERT' &&
+      needs['classify-pr-scope'].outputs.stage == 'FINAL')
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -964,10 +1144,230 @@ jobs:
         if: always()
         run: npx wp-env stop
 
+  focused-contract:
+    name: Focused deterministic profile contract
+    needs: classify-pr-scope
+    if: >-
+      needs['classify-pr-scope'].outputs.stage == 'FINAL' &&
+      contains(fromJSON('["LOW_FOCUSED","MEDIUM_DOMAIN"]'), needs['classify-pr-scope'].outputs.profile)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout complete authority graph
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs['classify-pr-scope'].outputs.head_sha }}
+
+      - name: Revalidate exact focused diff and routing contracts
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ needs['classify-pr-scope'].outputs.base_sha }}
+          PR_HEAD_SHA: ${{ needs['classify-pr-scope'].outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PR_HEAD_SHA"
+          git diff --check "$PR_BASE_SHA" "$PR_HEAD_SHA"
+          tests/ci/direct-css-fast-contract.sh
+          tests/ci/required-ci-profile-contract.sh
+          tests/ci/integration-suite-contract.sh
+          tests/ci/pre-review-authority-contract.sh
+          tests/ci/workflow-contract.sh
+          while IFS= read -r changed_js; do
+            test -z "$changed_js" || node --check "$changed_js"
+          done < <(git diff --name-only --diff-filter=AM "$PR_BASE_SHA" "$PR_HEAD_SHA" -- 'js/*.js')
+          echo 'focused-profile-artifacts=0'
+
+  precheck:
+    name: Risk-tiered PRECHECK / deterministic contracts
+    needs: classify-pr-scope
+    if: >-
+      needs['classify-pr-scope'].outputs.stage == 'PRECHECK' &&
+      needs['classify-pr-scope'].outputs.review_required == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout complete authority graph
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs['classify-pr-scope'].outputs.head_sha }}
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      - name: Run cheap exact-head PRECHECK evidence
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ needs['classify-pr-scope'].outputs.base_sha }}
+          PR_HEAD_SHA: ${{ needs['classify-pr-scope'].outputs.head_sha }}
+          CI_PROFILE: ${{ needs['classify-pr-scope'].outputs.profile }}
+          AFFECTED_DOMAIN: ${{ needs['classify-pr-scope'].outputs.domain }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PR_HEAD_SHA"
+          git diff --check "$PR_BASE_SHA" "$PR_HEAD_SHA"
+          while IFS= read -r -d '' file; do php -l "$file"; done < <(find . -type f -name '*.php' -print0)
+          php tests/unit/run.php
+          tests/ci/direct-css-fast-contract.sh
+          tests/ci/required-ci-profile-contract.sh
+          tests/ci/integration-suite-contract.sh
+          tests/ci/pre-review-authority-contract.sh
+          tests/ci/merge-canonical-read-contract.sh
+          tests/ci/workflow-contract.sh
+          echo "precheck-profile=$CI_PROFILE"
+          echo "precheck-domain=$AFFECTED_DOMAIN"
+          echo 'precheck-artifacts=0'
+
+  profile-integration:
+    name: Risk-tiered ${{ needs['classify-pr-scope'].outputs.stage }} domain / ${{ matrix.storage }}
+    needs: [classify-pr-scope, precheck]
+    if: >-
+      always() && needs['classify-pr-scope'].result == 'success' &&
+      (contains(fromJSON('["MEDIUM_DOMAIN","HIGH_DEEP","HIGH_FINANCIAL"]'), needs['classify-pr-scope'].outputs.profile) ||
+      (needs['classify-pr-scope'].outputs.profile == 'RELEASE_CERT' && needs['classify-pr-scope'].outputs.stage == 'PRECHECK')) &&
+      (needs['classify-pr-scope'].outputs.stage == 'FINAL' || needs['precheck'].result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        storage: ${{ fromJSON(needs['classify-pr-scope'].outputs.storage_matrix) }}
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs['classify-pr-scope'].outputs.head_sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Install wp-env and start WordPress
+        run: |
+          npm install --no-audit --no-fund
+          npx wp-env start
+
+      - name: Install and activate WooCommerce 11.0.1
+        run: npx wp-env run cli wp plugin install https://downloads.wordpress.org/plugin/woocommerce.11.0.1.zip --activate
+
+      - name: Configure selected order storage
+        shell: bash
+        env:
+          STORAGE: ${{ matrix.storage }}
+        run: |
+          set -euo pipefail
+          case "$STORAGE" in
+            legacy)
+              npx wp-env run cli wp option update woocommerce_custom_orders_table_enabled no
+              npx wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled no
+              ;;
+            hpos)
+              npx wp-env run cli wp option update woocommerce_custom_orders_table_enabled yes
+              npx wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled no
+              ;;
+            hpos-sync)
+              npx wp-env run cli wp option update woocommerce_custom_orders_table_enabled yes
+              npx wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled yes
+              ;;
+            *) exit 1 ;;
+          esac
+
+      - name: Activate plugin and run affected-domain suites plus sentinels
+        shell: bash
+        env:
+          CI_PROFILE: ${{ needs['classify-pr-scope'].outputs.profile }}
+          CI_STAGE: ${{ needs['classify-pr-scope'].outputs.stage }}
+          PR_HEAD_SHA: ${{ needs['classify-pr-scope'].outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PR_HEAD_SHA"
+          npx wp-env run cli wp plugin activate wc-order-splitter
+          .github/scripts/run-integration-profile.sh "$CI_PROFILE" "$CI_STAGE"
+          echo 'profile-integration-artifacts=0'
+
+      - name: Verify HIGH final real-worker lease exclusion
+        if: >-
+          matrix.storage == 'hpos' &&
+          needs['classify-pr-scope'].outputs.stage == 'FINAL' &&
+          contains(fromJSON('["HIGH_DEEP","HIGH_FINANCIAL"]'), needs['classify-pr-scope'].outputs.profile)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t cli_containers < <(
+            docker ps --filter 'status=running' --filter 'label=com.docker.compose.service=cli' --format '{{.ID}}'
+          )
+          test "${#cli_containers[@]}" -eq 1
+          cli_container="${cli_containers[0]}"
+          docker inspect --format '{{.State.Status}}' "$cli_container" | grep -Fxq running
+          raw="$(npx wp-env run cli wp eval '$o = wc_create_order(); $o->set_status("pending"); $o->save(); echo "WCOS_ORDER_ID=" . $o->get_id() . "\n";')"
+          order_id="$(printf '%s\n' "$raw" | sed -n 's/.*WCOS_ORDER_ID=\([0-9][0-9]*\).*/\1/p' | tail -n 1)"
+          test -n "$order_id"
+          worker='wp-content/plugins/wc-order-splitter/tests/integration/concurrency-lock-worker.php'
+          docker exec --workdir /var/www/html "$cli_container" wp eval-file "$worker" "$order_id" worker-a 4 > /tmp/wcos-profile-worker-a.log 2>&1 &
+          worker_a_pid=$!
+          sleep 1
+          docker exec --workdir /var/www/html "$cli_container" wp eval-file "$worker" "$order_id" worker-b 0 > /tmp/wcos-profile-worker-b.log 2>&1 &
+          worker_b_pid=$!
+          wait "$worker_a_pid"
+          wait "$worker_b_pid"
+          grep -Fq 'ACQUIRED worker-a' /tmp/wcos-profile-worker-a.log
+          grep -Fq 'BLOCKED worker-b' /tmp/wcos-profile-worker-b.log
+          npx wp-env run cli wp eval '$o = wc_get_order('"$order_id"'); if ($o) { $o->delete(true); }'
+
+      - name: Stop WordPress
+        if: always()
+        run: npx wp-env stop
+
+  final-authority:
+    name: Authenticate unchanged PRE_REVIEW_CLEAN for FINAL
+    needs: classify-pr-scope
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      needs['classify-pr-scope'].outputs.stage == 'FINAL' &&
+      needs['classify-pr-scope'].outputs.review_required == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout complete authority graph
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs['classify-pr-scope'].outputs.head_sha }}
+
+      - name: Re-resolve and authenticate persisted exact-head review authority
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs['classify-pr-scope'].outputs.pr_number }}
+          TASK_ID: ${{ needs['classify-pr-scope'].outputs.task_id }}
+          TASK_ISSUE_NUMBER: ${{ needs['classify-pr-scope'].outputs.task_issue_number }}
+          PR_BASE_SHA: ${{ needs['classify-pr-scope'].outputs.base_sha }}
+          PR_HEAD_SHA: ${{ needs['classify-pr-scope'].outputs.head_sha }}
+          PRE_REVIEW_AUTHORITY: ${{ inputs.pre_review_authority }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PR_HEAD_SHA"
+          head_tree=$(git rev-parse "$PR_HEAD_SHA^{tree}")
+          verifier="$RUNNER_TEMP/verify-pre-review-authority.sh"
+          validator="$RUNNER_TEMP/validate-pre-review-record.sh"
+          git cat-file -e "$PR_BASE_SHA:.github/scripts/verify-pre-review-authority.sh"
+          git cat-file -e "$PR_BASE_SHA:.github/scripts/validate-pre-review-record.sh"
+          git show "$PR_BASE_SHA:.github/scripts/verify-pre-review-authority.sh" > "$verifier"
+          git show "$PR_BASE_SHA:.github/scripts/validate-pre-review-record.sh" > "$validator"
+          chmod +x "$verifier" "$validator"
+          WCOS_PRE_REVIEW_VALIDATOR="$validator" "$verifier" "$GITHUB_REPOSITORY" "$PR_NUMBER" "$TASK_ID" "$TASK_ISSUE_NUMBER" "$PR_BASE_SHA" "$PR_HEAD_SHA" "$head_tree" "$PRE_REVIEW_AUTHORITY"
+          echo 'final-authority-artifacts=0'
+
   direct-css-fast:
     name: CODEX_DIRECT focused CSS contract
     needs: classify-pr-scope
-    if: needs['classify-pr-scope'].outputs.profile == 'DIRECT_CSS_FAST'
+    if: >-
+      needs['classify-pr-scope'].outputs.profile == 'DIRECT_CSS_FAST' ||
+      needs['classify-pr-scope'].outputs.profile == 'DIRECT_FAST'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout complete authority graph
@@ -1000,7 +1400,7 @@ jobs:
         run: |
           set -euo pipefail
           profile=$(.github/scripts/classify-pr-scope.sh pull_request "$PR_BASE_SHA" "$PR_HEAD_SHA" "$PR_HEAD_REF" | sed -n 's/^ci_profile=//p')
-          test "$profile" = DIRECT_CSS_FAST
+          test "$profile" = DIRECT_CSS_FAST || test "$profile" = DIRECT_FAST
           git diff --check "$PR_BASE_SHA" "$PR_HEAD_SHA"
           tests/ci/direct-css-fast-contract.sh
           tests/ci/required-ci-profile-contract.sh
@@ -1029,13 +1429,21 @@ jobs:
 
   required:
     name: Required CI
-    if: always()
+    if: >-
+      always() &&
+      (needs['classify-pr-scope'].outputs.profile == 'FULL' ||
+      needs['classify-pr-scope'].outputs.profile == 'DIRECT_CSS_FAST' ||
+      needs['classify-pr-scope'].outputs.stage == 'FINAL')
     needs:
       - classify-pr-scope
       - php-syntax
       - foundation-contract
       - package-check
       - integration-smoke
+      - focused-contract
+      - precheck
+      - profile-integration
+      - final-authority
       - direct-css-fast
     runs-on: ubuntu-latest
     steps:
@@ -1047,30 +1455,54 @@ jobs:
       - name: Verify all required jobs passed
         env:
           EVENT_NAME: ${{ github.event_name }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_SHA: ${{ needs['classify-pr-scope'].outputs.base_sha }}
           CLASSIFIER_RESULT: ${{ needs['classify-pr-scope'].result }}
           CI_PROFILE: ${{ needs['classify-pr-scope'].outputs.profile }}
           CI_PROFILE_REASON: ${{ needs['classify-pr-scope'].outputs.reason }}
+          CI_STAGE: ${{ needs['classify-pr-scope'].outputs.stage }}
+          REVIEW_REQUIRED: ${{ needs['classify-pr-scope'].outputs.review_required }}
           PHP_SYNTAX_RESULT: ${{ needs['php-syntax'].result }}
           FOUNDATION_RESULT: ${{ needs['foundation-contract'].result }}
           PACKAGE_RESULT: ${{ needs['package-check'].result }}
           INTEGRATION_RESULT: ${{ needs['integration-smoke'].result }}
+          FOCUSED_RESULT: ${{ needs['focused-contract'].result }}
+          PRECHECK_RESULT: ${{ needs['precheck'].result }}
+          PROFILE_INTEGRATION_RESULT: ${{ needs['profile-integration'].result }}
+          FINAL_AUTHORITY_RESULT: ${{ needs['final-authority'].result }}
           DIRECT_CSS_FAST_RESULT: ${{ needs['direct-css-fast'].result }}
         run: |
           set -euo pipefail
           aggregator="$RUNNER_TEMP/verify-required-ci.sh"
-          if [[ "$EVENT_NAME" == pull_request ]] && git cat-file -e "$PR_BASE_SHA:.github/scripts/verify-required-ci.sh" 2>/dev/null; then
+          if git cat-file -e "$PR_BASE_SHA:.github/scripts/verify-required-ci.sh" 2>/dev/null; then
             git show "$PR_BASE_SHA:.github/scripts/verify-required-ci.sh" > "$aggregator"
           else
             cp .github/scripts/verify-required-ci.sh "$aggregator"
           fi
           chmod +x "$aggregator"
-          "$aggregator" \
-            "$CLASSIFIER_RESULT" \
-            "$CI_PROFILE" \
-            "$CI_PROFILE_REASON" \
-            "$PHP_SYNTAX_RESULT" \
-            "$FOUNDATION_RESULT" \
-            "$PACKAGE_RESULT" \
-            "$INTEGRATION_RESULT" \
-            "$DIRECT_CSS_FAST_RESULT"
+          if grep -Fq 'risk-tiered-v1' "$aggregator"; then
+            "$aggregator" \
+              "$CLASSIFIER_RESULT" \
+              "$CI_PROFILE" \
+              "$CI_PROFILE_REASON" \
+              "$CI_STAGE" \
+              "$REVIEW_REQUIRED" \
+              "$PHP_SYNTAX_RESULT" \
+              "$FOUNDATION_RESULT" \
+              "$PACKAGE_RESULT" \
+              "$INTEGRATION_RESULT" \
+              "$FOCUSED_RESULT" \
+              "$PROFILE_INTEGRATION_RESULT" \
+              "$PRECHECK_RESULT" \
+              "$DIRECT_CSS_FAST_RESULT" \
+              "$FINAL_AUTHORITY_RESULT"
+          else
+            "$aggregator" \
+              "$CLASSIFIER_RESULT" \
+              "$CI_PROFILE" \
+              "$CI_PROFILE_REASON" \
+              "$PHP_SYNTAX_RESULT" \
+              "$FOUNDATION_RESULT" \
+              "$PACKAGE_RESULT" \
+              "$INTEGRATION_RESULT" \
+              "$DIRECT_CSS_FAST_RESULT"
+          fi
