@@ -69,7 +69,9 @@ function rejected(label, change) {
 assert.equal(verifySnapshot(fixture(), input).candidate, candidate);
 const redacted = fixture();
 delete redacted.rules.bypass_actors;
-assert.equal(verifySnapshot(redacted, input).rulesetRevision, '2026-08-25T10:09:48.838+07:00');
+assert.equal(verifySnapshot(redacted, input).rulesetRevision, '2026-08-25T03:09:48.838Z');
+redacted.rules.updated_at = '2026-08-25T03:09:48.838Z';
+assert.equal(verifySnapshot(redacted, input).rulesetRevision, '2026-08-25T03:09:48.838Z');
 for (const profile of ['LOW_FOCUSED', 'MEDIUM_DOMAIN']) {
   const selected = { ...input, profile, assurance: profile === 'LOW_FOCUSED' ? 'LOW' : 'MEDIUM', reviewFloor: 'OPTIONAL', preReview: '' };
   assert.equal(verifySnapshot(fixture(selected), selected).review, 'none');

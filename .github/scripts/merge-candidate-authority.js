@@ -13,7 +13,7 @@ const RULESET = 21367637;
 // Owner-authenticated source ruleset revision, history version 47541914.
 // GitHub redacts bypass_actors without Administration:write; never grant that
 // capability to Actions merely to read it. Any ruleset edit invalidates this pin.
-const RULESET_UPDATED_AT = '2026-08-25T10:09:48.838+07:00';
+const RULESET_UPDATED_AT = '2026-08-25T03:09:48.838Z';
 const SHA = /^[0-9a-f]{40}$/;
 const ID = /^[1-9][0-9]*$/;
 const PROFILE = /^(LOW_FOCUSED|MEDIUM_DOMAIN|HIGH_DEEP|HIGH_FINANCIAL|RELEASE_CERT)$/;
@@ -80,7 +80,7 @@ function verifyRules(rules) {
   equal(rules.target, 'branch', 'ruleset target');
   equal(rules.source_type, 'Repository', 'ruleset source type');
   equal(rules.source, REPO, 'ruleset source');
-  equal(rules.updated_at, RULESET_UPDATED_AT, 'source-bound ruleset revision');
+  equal(Date.parse(rules.updated_at), Date.parse(RULESET_UPDATED_AT), 'source-bound ruleset revision');
   equal(rules.enforcement, 'active', 'ruleset enforcement');
   if (Object.hasOwn(rules, 'bypass_actors')) equal(rules.bypass_actors, [], 'ruleset bypass');
   equal(rules.conditions?.ref_name, { exclude: [], include: ['~DEFAULT_BRANCH'] }, 'ruleset branch selection');
@@ -323,4 +323,4 @@ if (require.main === module) {
   materialize(input, () => collectLive(input), liveApi).then(result => console.log(`merge-authority-ok ${JSON.stringify(result)}`)).catch(error => { console.error(error.message); process.exitCode = 1; });
 }
 
-module.exports = { verifySnapshot, materialize, checkResult, recordFields, issueField };
+module.exports = { verifySnapshot, materialize, checkResult, recordFields, issueField, verifyRules };
