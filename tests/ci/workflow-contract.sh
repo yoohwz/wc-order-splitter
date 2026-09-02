@@ -66,6 +66,7 @@ assert_absent "$bridge_workflow" 'workflow_dispatch'
 assert_absent "$bridge_workflow" 'checks: write'
 assert_absent "$bridge_workflow" 'continue-on-error'
 assert_occurrences "$ci_workflow" 'node tests/ci/merge-candidate-authority-contract.js' 3
+assert_occurrences "$ci_workflow" 'node tests/ci/classifier-determinism-contract.js' 3
 assert_contains "$ci_workflow" 'if: always()'
 assert_contains "$ci_workflow" 'actions: read'
 assert_contains "$ci_workflow" 'issues: read'

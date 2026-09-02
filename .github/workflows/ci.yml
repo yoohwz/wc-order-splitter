@@ -379,6 +379,7 @@ jobs:
           tests/ci/integration-suite-contract.sh
           tests/ci/pre-review-authority-contract.sh
           node tests/ci/merge-candidate-authority-contract.js
+          node tests/ci/classifier-determinism-contract.js
 
       - name: Enforce persisted Merge authority reads
         shell: bash
@@ -1240,6 +1241,7 @@ jobs:
           tests/ci/integration-suite-contract.sh
           tests/ci/pre-review-authority-contract.sh
           node tests/ci/merge-candidate-authority-contract.js
+          node tests/ci/classifier-determinism-contract.js
           tests/ci/workflow-contract.sh
           while IFS= read -r changed_js; do
             test -z "$changed_js" || node --check "$changed_js"
@@ -1283,6 +1285,7 @@ jobs:
           tests/ci/integration-suite-contract.sh
           tests/ci/pre-review-authority-contract.sh
           node tests/ci/merge-candidate-authority-contract.js
+          node tests/ci/classifier-determinism-contract.js
           tests/ci/merge-canonical-read-contract.sh
           tests/ci/workflow-contract.sh
           echo "precheck-profile=$CI_PROFILE"

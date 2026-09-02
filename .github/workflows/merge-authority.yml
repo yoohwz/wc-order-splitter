@@ -60,17 +60,17 @@ jobs:
           done
           authority_source=$base_sha
           if ! git cat-file -e "$base_sha:.github/scripts/merge-candidate-authority.js" 2>/dev/null; then
-            # The only bootstrap is the reviewed GOV-010 source-bound head.
+            # The only bootstrap is the reviewed GOV-011 source-bound head.
             test "$base_sha" = 545b82b452adfc4d43fd4744f3f83d7a8f5e68fb
-            test "$pr_number" = 133
+            test "$pr_number" = 135
             pr_body=$(jq -r '.pull_request.body' "$GITHUB_EVENT_PATH")
-            grep -Fxq -- '- Task: `WOS-GOV-010`' <<< "$pr_body"
-            grep -Fxq -- '- Canonical Issue: #132' <<< "$pr_body"
-            issue=$(gh api "repos/$GITHUB_REPOSITORY/issues/132")
+            grep -Fxq -- '- Task: `WOS-GOV-011`' <<< "$pr_body"
+            grep -Fxq -- '- Canonical Issue: #134' <<< "$pr_body"
+            issue=$(gh api "repos/$GITHUB_REPOSITORY/issues/134")
             jq -e '.user.login == "yoohwz" and .user.id == 152001663 and .author_association == "OWNER" and .state == "open" and (.pull_request == null)' <<< "$issue" >/dev/null
             issue_body=$(jq -r '.body' <<< "$issue")
-            grep -Fxq -- '- **Task:** `WOS-GOV-010`' <<< "$issue_body"
-            grep -Fxq -- '- **CI profile floor:** `HIGH_DEEP`' <<< "$issue_body"
+            grep -Fxq -- '- **Task:** `WOS-GOV-011`' <<< "$issue_body"
+            grep -Fxq -- '- **CI profile floor:** `HIGH_FINANCIAL`' <<< "$issue_body"
             grep -Fxq -- '- **Assurance floor:** `HIGH`' <<< "$issue_body"
             grep -Fxq -- '- **Independent review floor:** `REQUIRED`' <<< "$issue_body"
             authority_source=$head_sha
@@ -138,17 +138,17 @@ jobs:
           done
           authority_source=$base_sha
           if ! git cat-file -e "$base_sha:.github/scripts/merge-candidate-authority.js" 2>/dev/null; then
-            # The only bootstrap is the reviewed GOV-010 source-bound head.
+            # The only bootstrap is the reviewed GOV-011 source-bound head.
             test "$base_sha" = 545b82b452adfc4d43fd4744f3f83d7a8f5e68fb
-            test "$pr_number" = 133
+            test "$pr_number" = 135
             pr_body=$(jq -r '.pull_request.body' "$GITHUB_EVENT_PATH")
-            grep -Fxq -- '- Task: `WOS-GOV-010`' <<< "$pr_body"
-            grep -Fxq -- '- Canonical Issue: #132' <<< "$pr_body"
-            issue=$(gh api "repos/$GITHUB_REPOSITORY/issues/132")
+            grep -Fxq -- '- Task: `WOS-GOV-011`' <<< "$pr_body"
+            grep -Fxq -- '- Canonical Issue: #134' <<< "$pr_body"
+            issue=$(gh api "repos/$GITHUB_REPOSITORY/issues/134")
             jq -e '.user.login == "yoohwz" and .user.id == 152001663 and .author_association == "OWNER" and .state == "open" and (.pull_request == null)' <<< "$issue" >/dev/null
             issue_body=$(jq -r '.body' <<< "$issue")
-            grep -Fxq -- '- **Task:** `WOS-GOV-010`' <<< "$issue_body"
-            grep -Fxq -- '- **CI profile floor:** `HIGH_DEEP`' <<< "$issue_body"
+            grep -Fxq -- '- **Task:** `WOS-GOV-011`' <<< "$issue_body"
+            grep -Fxq -- '- **CI profile floor:** `HIGH_FINANCIAL`' <<< "$issue_body"
             grep -Fxq -- '- **Assurance floor:** `HIGH`' <<< "$issue_body"
             grep -Fxq -- '- **Independent review floor:** `REQUIRED`' <<< "$issue_body"
             authority_source=$head_sha

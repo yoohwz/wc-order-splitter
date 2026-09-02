@@ -1,0 +1,1201 @@
+diff --git a/.github/scripts/merge-candidate-authority.js b/.github/scripts/merge-candidate-authority.js
+new file mode 100644
+index 0000000..32e4ebc
+--- /dev/null
++++ b/.github/scripts/merge-candidate-authority.js
+@@ -0,0 +1,474 @@
++'use strict';
++
++// Read-only verification inside a native pull_request merge-ref job. GitHub
++// supplies the check; this program never creates/patches checks or approvals.
++const { execFileSync } = require('node:child_process');
++const { readFileSync } = require('node:fs');
++const { createHash } = require('node:crypto');
++const { isDeepStrictEqual } = require('node:util');
++
++const REPO = 'yoohwz/wc-order-splitter';
++const OWNER = { login: 'yoohwz', id: 152001663 };
++const APP = 15368;
++const RULESET = 21367637;
++const WORKFLOW = '.github/workflows/merge-authority.yml';
++// Owner-authenticated source ruleset revision, history version 47541914.
++// GitHub redacts bypass_actors without Administration:write; never grant that
++// capability to Actions merely to read it. Any ruleset edit invalidates this pin.
++const RULESET_UPDATED_AT = '2026-08-25T03:09:48.838Z';
++const SHA = /^[0-9a-f]{40}$/;
++const ID = /^[1-9][0-9]*$/;
++const PROFILE = /^(LOW_FOCUSED|MEDIUM_DOMAIN|HIGH_DEEP|HIGH_FINANCIAL|RELEASE_CERT)$/;
++const fail = message => { throw new Error(`merge-authority-error: ${message}`); };
++const need = (condition, message) => { if (!condition) fail(message); };
++const equal = (actual, expected, label) => need(isDeepStrictEqual(actual, expected), label);
++const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
++
++function owner(record) {
++  equal(record.user?.login, OWNER.login, 'record actor login');
++  equal(record.user?.id, OWNER.id, 'record actor ID');
++  equal(record.author_association, 'OWNER', 'record actor association');
++}
++
++function lines(body) {
++  need(typeof body === 'string' && !/[`~<>\r]/.test(body), 'quoted/fenced/HTML record');
++  return body.split('\n').filter(line => line !== '');
++}
++
++function recordFields(record, issue, header, role, terminal) {
++  owner(record);
++  equal(record.issue_url, `https://api.github.com/repos/${REPO}/issues/${issue}`, 'canonical Issue record');
++  need(record.created_at && record.created_at === record.updated_at, 'edited/missing record timestamp');
++  const body = lines(record.body);
++  equal(body.shift(), header, 'canonical record header');
++  equal(body.pop(), terminal, 'canonical record terminal');
++  const fields = {};
++  for (const line of body) {
++    const match = /^([A-Za-z][A-Za-z _-]*): (\S(?:.*\S)?)$/.exec(line);
++    need(match && !Object.hasOwn(fields, match[1]), 'malformed/duplicate record field');
++    fields[match[1]] = match[2];
++  }
++  equal(fields['Record version'], 'merge-authority-v1', 'record version');
++  equal(fields.Role, role, 'record role');
++  return fields;
++}
++
++function commonFields(fields, common, extras) {
++  const expected = { 'Record version': 'merge-authority-v1', ...common, ...extras };
++  equal(Object.keys(fields).sort(), Object.keys(expected).sort(), 'unexpected/missing authority field');
++  for (const [key, value] of Object.entries(expected)) equal(fields[key], value, `authority ${key}`);
++}
++
++function issueField(body, label) {
++  const exact = body.split('\n').filter(line => line.startsWith(`- **${label}:** `));
++  need(exact.length === 1 && body.split(`**${label}:**`).length === 2, `ambiguous Task Capsule ${label}`);
++  const match = /^- \*\*[^*]+:\*\* `([^`]+)`$/.exec(exact[0]);
++  need(match, `malformed Task Capsule ${label}`);
++  return match[1];
++}
++
++function resolveTask(pr, issue) {
++  const one = (pattern, label) => {
++    const matches = [...(pr.body || '').matchAll(pattern)];
++    need(matches.length === 1, `unique PR ${label}`);
++    return matches[0][1];
++  };
++  const task = one(/^- Task: `(WOS-[A-Z0-9-]+)`$/gm, 'task');
++  const issueNumber = one(/^- Canonical Issue: #([1-9][0-9]*)$/gm, 'Issue');
++  if (issue) {
++    owner(issue);
++    equal(String(issue.number), issueNumber, 'resolved Issue number');
++    need(!issue.pull_request && issue.state === 'open' && issue.title.includes(task), 'canonical open Issue');
++    equal(issueField(issue.body, 'Task'), task, 'resolved Task Capsule');
++  }
++  return { task, issue: issueNumber };
++}
++
++function nativeContext(event, env) {
++  equal(env.GITHUB_REPOSITORY, REPO, 'native repository');
++  equal(env.GITHUB_EVENT_NAME, 'pull_request', 'native event');
++  equal(event.action, 'ready_for_review', 'native action');
++  equal(event.repository?.full_name, REPO, 'event repository');
++  equal(event.sender?.login, OWNER.login, 'ready actor login');
++  equal(event.sender?.id, OWNER.id, 'ready actor ID');
++  const pr = event.pull_request;
++  need(pr && ID.test(String(event.number)) && pr.number === event.number, 'event PR');
++  equal(pr.state, 'open', 'event open PR');
++  equal(pr.draft, false, 'event ready PR');
++  equal(pr.base.ref, 'main', 'event base branch');
++  equal(pr.base.repo.full_name, REPO, 'event base repository');
++  equal(pr.head.repo.full_name, REPO, 'event head repository');
++  const ref = `refs/pull/${event.number}/merge`;
++  equal(env.GITHUB_REF, ref, 'native merge ref');
++  need(SHA.test(env.GITHUB_SHA) && SHA.test(pr.head.sha) && SHA.test(pr.base.sha), 'native Git objects');
++  equal(env.GITHUB_SHA, pr.merge_commit_sha, 'event merge candidate');
++  equal(env.GITHUB_WORKFLOW_REF, `${REPO}/${WORKFLOW}@${ref}`, 'native workflow ref');
++  equal(env.GITHUB_WORKFLOW_SHA, env.GITHUB_SHA, 'native workflow source');
++  need(ID.test(env.GITHUB_RUN_ID), 'native run ID');
++  equal(env.GITHUB_RUN_ATTEMPT, '1', 'fresh ready event, not rerun');
++  need(Number.isFinite(Date.parse(pr.updated_at)), 'ready event timestamp');
++  return { pr: String(event.number), head: pr.head.sha, base: pr.base.sha, candidate: env.GITHUB_SHA,
++    ref, readyAt: pr.updated_at, run: Number(env.GITHUB_RUN_ID) };
++}
++
++function selectGate(comments, input) {
++  const header = `## Merge Human Gate — ${input.task}`;
++  const terminal = `HUMAN_GATE_APPROVED: ${input.task} / PR #${input.pr} / exact head ${input.head}`;
++  // Select the latest direct positive record, then authenticate it completely.
++  // Do not fall back to an older approval when that record is malformed/edited.
++  const candidates = comments.filter(record => record.body?.split('\n')[0] === header &&
++    record.body.trimEnd().endsWith(terminal) && record.user?.id === OWNER.id);
++  candidates.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id);
++  need(candidates.length > 0, 'missing current-head Human Gate');
++  const selected = candidates[0];
++  recordFields(selected, input.issue, header, 'repository_owner', terminal);
++  return selected;
++}
++
++function checkResult(check, sha, suite) {
++  equal(check.name, 'Required CI', 'protected check name');
++  equal(check.head_sha, sha, 'protected check SHA');
++  equal(check.app?.id, APP, 'protected check app');
++  equal(check.status, 'completed', 'protected check status');
++  equal(check.conclusion, 'success', 'protected check conclusion');
++  if (suite !== undefined) equal(check.check_suite?.id, suite, 'protected check suite');
++}
++
++function verifyRules(rules) {
++  equal(rules.id, RULESET, 'ruleset ID');
++  equal(rules.name, 'Protect main', 'ruleset name');
++  equal(rules.target, 'branch', 'ruleset target');
++  equal(rules.source_type, 'Repository', 'ruleset source type');
++  equal(rules.source, REPO, 'ruleset source');
++  equal(Date.parse(rules.updated_at), Date.parse(RULESET_UPDATED_AT), 'source-bound ruleset revision');
++  equal(rules.enforcement, 'active', 'ruleset enforcement');
++  if (Object.hasOwn(rules, 'bypass_actors')) equal(rules.bypass_actors, [], 'ruleset bypass');
++  equal(rules.conditions?.ref_name, { exclude: [], include: ['~DEFAULT_BRANCH'] }, 'ruleset branch selection');
++  equal(rules.rules.map(rule => rule.type).sort(), ['deletion', 'non_fast_forward', 'pull_request', 'required_status_checks'], 'ruleset rule types');
++  const status = rules.rules.find(rule => rule.type === 'required_status_checks').parameters;
++  equal(status.strict_required_status_checks_policy, true, 'strict checks');
++  equal(status.do_not_enforce_on_create, false, 'checks on create');
++  equal(status.required_status_checks, [{ context: 'Required CI', integration_id: APP }], 'required integration');
++  const pr = rules.rules.find(rule => rule.type === 'pull_request').parameters;
++  equal(pr, { allowed_merge_methods: ['squash'], dismiss_stale_reviews_on_push: false,
++    require_code_owner_review: false, require_extra_approval_for_unattributed_changes: true,
++    require_last_push_approval: false, required_approving_review_count: 0,
++    required_review_thread_resolution: true, required_reviewers: [] }, 'PR rules unchanged');
++}
++
++function adverseCheckpoint(record, input, base, tree) {
++  // Apply the same direct-record boundary to negative authority as to approval.
++  // A token in an example, copied transcript, reference comment, or a different
++  // role's evidence is data, not an Independent Review or human decision.
++  const formats = {
++    PRE_REVIEW_CHANGES_REQUIRED: ['Independent Codex PRE_REVIEW', 'independent_codex_reviewer'],
++    TECHNICAL_CHANGES_REQUIRED: ['Independent Codex Technical Review', 'independent_codex_reviewer'],
++    ACCEPTANCE_CHANGES_REQUIRED: ['Merge Acceptance', 'chatgpt_acceptance_reviewer'],
++    HUMAN_GATE_REVOKED: ['Merge Human Gate', 'repository_owner'],
++  };
++  try {
++    owner(record);
++    const body = lines(record.body);
++    const terminal = body[body.length - 1];
++    const token = terminal?.split(': ')[0];
++    if (!Object.hasOwn(formats, token)) return null;
++    const [header, role] = formats[token];
++    equal(body[0], `## ${header} — ${input.task}`, 'direct adverse header');
++    equal(terminal, `${token}: ${input.task} / PR #${input.pr} / exact head ${input.head}`, 'direct adverse terminal');
++    const required = { Role: role, 'Canonical Issue': `#${input.issue}`,
++      'Exact base': base, 'Exact head': input.head, 'Exact head tree': tree };
++    if (role === 'independent_codex_reviewer') {
++      Object.assign(required, { 'Fresh context': 'yes', 'Executor session reused': 'no',
++        'Source read-only/no-implementation-write': 'yes', 'Complete diff reviewed': 'yes' });
++    } else {
++      Object.assign(required, { 'Record version': 'merge-authority-v1', PR: `#${input.pr}` });
++    }
++    for (const [key, value] of Object.entries(required)) {
++      equal(body.filter(line => line.includes(`${key}:`)), [`${key}: ${value}`], `direct adverse ${key}`);
++    }
++    equal(body.filter(line => /^(PRE_REVIEW_CHANGES_REQUIRED|TECHNICAL_CHANGES_REQUIRED|ACCEPTANCE_CHANGES_REQUIRED|HUMAN_GATE_REVOKED):/.test(line)), [terminal], 'unique adverse outcome');
++    if (record.commit_id !== undefined) {
++      equal(role, 'independent_codex_reviewer', 'PR review role');
++      equal(record.commit_id, input.head, 'adverse PR review commit');
++      need(Number.isFinite(Date.parse(record.submitted_at)), 'adverse review timestamp');
++    } else {
++      equal(record.issue_url, `https://api.github.com/repos/${REPO}/issues/${input.issue}`, 'adverse canonical Issue');
++      need(record.created_at && record.created_at === record.updated_at && Number.isFinite(Date.parse(record.created_at)), 'immutable adverse Issue record');
++    }
++    return token;
++  } catch {
++    return null; // Unauthenticated/quoted evidence is never promoted to a stop.
++  }
++}
++
++function verifySnapshot(s, input) {
++  equal(input.repo, REPO, 'repository');
++  need(ID.test(input.pr) && ID.test(input.issue) && /^WOS-[A-Z0-9-]+$/.test(input.task), 'task identifiers');
++  need(SHA.test(input.head), 'expected head');
++  equal(s.repository.full_name, REPO, 'repository identity');
++  equal(s.repository.owner.login, OWNER.login, 'repository owner');
++  equal(s.repository.owner.id, OWNER.id, 'repository owner ID');
++  equal(s.repository.default_branch, 'main', 'default branch');
++  owner(s.issue);
++  need(!s.issue.pull_request && s.issue.state === 'open' && s.issue.title.includes(input.task), 'canonical task Issue');
++  equal(issueField(s.issue.body, 'Task'), input.task, 'task ID');
++  equal(issueField(s.issue.body, 'CI profile floor'), input.profile, 'CI floor');
++  equal(issueField(s.issue.body, 'Assurance floor'), input.assurance, 'assurance floor');
++  equal(issueField(s.issue.body, 'Independent review floor'), input.reviewFloor, 'review floor');
++  need(s.pr.body.split('\n').filter(line => line === `- Canonical Issue: #${input.issue}`).length === 1, 'PR Issue binding');
++  need(s.pr.body.split('\n').filter(line => line === `- Task: \`${input.task}\``).length === 1, 'PR task binding');
++  equal(s.pr.state, 'open', 'open PR');
++  equal(s.pr.draft, false, 'PR must be ready before binding candidate');
++  equal(s.pr.base.ref, 'main', 'PR base branch');
++  equal(s.pr.base.repo.full_name, REPO, 'PR base repository');
++  equal(s.pr.head.repo.full_name, REPO, 'same-repository head');
++  equal(s.pr.head.sha, input.head, 'unchanged PR head');
++  equal(input.context.pr, input.pr, 'event PR binding');
++  equal(input.context.head, input.head, 'event head binding');
++  equal(input.context.base, s.pr.base.sha, 'event base drift');
++  equal(input.context.candidate, s.pr.merge_commit_sha, 'event candidate regeneration');
++  equal(input.context.ref, `refs/pull/${input.pr}/merge`, 'native ref binding');
++  equal(s.main.object.sha, s.pr.base.sha, 'current main/base');
++  equal(s.pr.mergeable, true, 'mergeable PR');
++  equal(s.candidate.sha, s.pr.merge_commit_sha, 'current merge candidate');
++  need(SHA.test(s.candidate.sha) && SHA.test(s.pr.base.sha) && SHA.test(s.head.tree.sha), 'exact Git objects');
++  equal(s.candidate.parents.map(parent => parent.sha), [s.pr.base.sha, input.head], 'merge candidate parents');
++  equal(s.candidate.tree.sha, s.head.tree.sha, 'candidate must equal certified source tree');
++  equal(s.head.sha, input.head, 'head Git object');
++  equal(s.threads, 0, 'unresolved review threads');
++  verifyRules(s.rules);
++
++  const { profile, assurance, review_required: reviewed } = s.classification;
++  need(PROFILE.test(profile) && /^(LOW|MEDIUM|HIGH)$/.test(assurance) && /^(true|false)$/.test(reviewed), 'base classification');
++  need(!profile.startsWith('HIGH_') && profile !== 'RELEASE_CERT' || reviewed === 'true', 'HIGH requires review');
++  const reviewRef = reviewed === 'true' ? input.preReview : 'none';
++  need(reviewed === 'true' ? /^(issue-comment|pr-review):[1-9][0-9]*$/.test(reviewRef) : !input.preReview, 'review authority selection');
++  const gateTerminal = `HUMAN_GATE_APPROVED: ${input.task} / PR #${input.pr} / exact head ${input.head}`;
++  const gate = recordFields(s.gate, input.issue, `## Merge Human Gate — ${input.task}`, 'repository_owner', gateTerminal);
++  const evidenceKind = reviewed === 'true' ? 'TECHNICAL_ACCEPTED' : 'EXECUTOR_EVIDENCE_READY';
++  const evidenceTerminal = `${evidenceKind}: ${input.task} / PR #${input.pr} / exact head ${input.head}`;
++  const evidence = recordFields(s.evidence, input.issue, `## Merge CI evidence — ${input.task}`, 'codex_executor', evidenceTerminal);
++  const acceptance = recordFields(s.acceptance, input.issue, `## Merge Acceptance — ${input.task}`, 'chatgpt_acceptance_reviewer', `ACCEPTANCE_ACCEPTED: ${input.task} / PR #${input.pr} / exact head ${input.head}`);
++  const common = {
++    'Canonical Issue': `#${input.issue}`, PR: `#${input.pr}`, 'Exact base': s.pr.base.sha,
++    'Exact head': input.head, 'Exact head tree': s.head.tree.sha, 'CI profile': profile,
++    Assurance: assurance, 'Review required': reviewed, 'PRE_REVIEW authority': reviewRef,
++    'FINAL run': String(s.final.id), 'FINAL attempt': String(s.final.run_attempt), Artifacts: '0',
++  };
++  commonFields(evidence, common, { Role: 'codex_executor', 'Evidence kind': evidenceKind });
++  commonFields(acceptance, common, { Role: 'chatgpt_acceptance_reviewer', 'Evidence authority': `issue-comment:${s.evidence.id}` });
++  commonFields(gate, common, {
++    Role: 'repository_owner', 'Evidence authority': `issue-comment:${s.evidence.id}`,
++    'Acceptance authority': `issue-comment:${s.acceptance.id}`, 'Human command': `Finalize ${input.task}`,
++    'Merge candidate': s.candidate.sha, 'Merge candidate tree': s.candidate.tree.sha,
++    'Unresolved review threads': '0', 'PR state': 'draft',
++  });
++  equal(`issue-comment:${s.gate.id}`, input.gate, 'selected Human Gate ID');
++  equal(s.final.event, 'workflow_dispatch', 'FINAL event');
++  equal(s.final.path, '.github/workflows/ci.yml', 'FINAL workflow path');
++  equal(s.final.head_sha, input.head, 'FINAL head');
++  equal(s.final.head_branch, s.pr.head.ref, 'FINAL branch');
++  equal(s.final.repository.full_name, REPO, 'FINAL repository');
++  equal(s.final.status, 'completed', 'FINAL status');
++  equal(s.final.conclusion, 'success', 'FINAL conclusion');
++  equal(s.finalArtifacts.total_count, 0, 'FINAL artifacts');
++  const required = s.jobs.filter(job => job.name === 'Required CI');
++  need(required.length === 1 && required[0].conclusion === 'success' && required[0].status === 'completed', 'exact successful FINAL Required CI');
++  equal(required[0].run_id, s.final.id, 'FINAL job run');
++  const binding = `FINAL binding / ${input.task} / ${profile} / ${s.pr.base.sha} / ${reviewRef}`;
++  need(s.jobs.filter(job => job.name === binding && job.status === 'completed' && job.conclusion === 'success').length === 1, 'FINAL exact task/profile/base/review binding');
++  checkResult(s.finalCheck, input.head, s.final.check_suite_id);
++  equal(s.finalCheck.id, required[0].id, 'FINAL check identity');
++  if (reviewed === 'true') {
++    owner(s.review);
++    equal(s.review.commit_id || input.head, input.head, 'review commit');
++    need(s.reviewVerified === true, 'base-owned PRE_REVIEW validator');
++    const reviewedAt = s.review.submitted_at || s.review.created_at;
++    need(Date.parse(reviewedAt) <= Date.parse(s.final.created_at), 'FINAL must follow review');
++  }
++  const times = [s.final.updated_at, s.evidence.created_at, s.acceptance.created_at, s.gate.created_at, input.context.readyAt, s.bridge.created_at].map(Date.parse);
++  need(times.every(Number.isFinite) && times.every((time, i) => i === 0 || times[i - 1] <= time), 'authority chronology');
++  const ready = s.readyEvents.filter(event => Date.parse(event.created_at) >= Date.parse(s.gate.created_at));
++  need(ready.length === 1, 'Human Gate requires exactly one ready transition');
++  equal(ready[0].created_at, input.context.readyAt, 'ready timeline/event binding');
++  equal(ready[0].actor?.id, OWNER.id, 'ready timeline actor');
++  equal(s.bridge.id, input.context.run, 'native run identity');
++  equal(s.bridge.event, 'pull_request', 'bridge event');
++  equal(s.bridge.path, WORKFLOW, 'bridge path');
++  equal(s.bridge.repository?.full_name, REPO, 'native run repository');
++  // Actions REST identifies a PR-native run/suite/check by the branch head.
++  // The immutable event/runner context above separately binds its merge SHA.
++  equal(s.bridge.head_sha, input.head, 'native run head');
++  equal(s.bridge.head_branch, s.pr.head.ref, 'native run branch');
++  equal(s.bridge.run_attempt, 1, 'bridge requires fresh ready event, not rerun');
++  equal(s.bridge.status, 'in_progress', 'native job must be running');
++  const associated = records => need(records?.some(pr => String(pr.number) === input.pr &&
++    pr.head.sha === input.head && pr.base.sha === s.pr.base.sha), 'native PR association');
++  associated(s.bridge.pull_requests);
++  equal(s.bridgeSuite.id, s.bridge.check_suite_id, 'native suite identity');
++  equal(s.bridgeSuite.app?.id, APP, 'native suite app');
++  equal(s.bridgeSuite.head_sha, input.head, 'native suite head');
++  associated(s.bridgeSuite.pull_requests);
++  equal(s.bridgeCheck.name, 'Required CI', 'native protected job');
++  equal(s.bridgeCheck.head_sha, input.head, 'native check PR head');
++  equal(s.bridgeCheck.app?.id, APP, 'native check app');
++  equal(s.bridgeCheck.check_suite?.id, s.bridgeSuite.id, 'native check suite');
++  equal(s.bridgeCheck.status, 'in_progress', 'native check must run, not skip');
++  equal(s.bridgeCheck.conclusion, null, 'native check not pre-completed');
++  equal(s.bridgeArtifacts.total_count, 0, 'bridge artifacts');
++  for (const record of [...s.comments, ...s.reviews]) {
++    const adverse = adverseCheckpoint(record, input, s.pr.base.sha, s.head.tree.sha);
++    if (!adverse) continue;
++    const baseline = adverse === 'ACCEPTANCE_CHANGES_REQUIRED' ? s.acceptance.created_at :
++      adverse === 'HUMAN_GATE_REVOKED' ? s.gate.created_at :
++        (s.review?.submitted_at || s.review?.created_at || s.final.created_at);
++    if (Date.parse(record.submitted_at || record.created_at) >= Date.parse(baseline)) fail('later adverse governance checkpoint');
++  }
++  return { version: 'merge-authority-v1', repository: REPO, task: input.task, issue: input.issue, pr: input.pr,
++    base: s.pr.base.sha, head: input.head, tree: s.head.tree.sha, candidate: s.candidate.sha,
++    profile, assurance, review: reviewRef, final: s.final.id, finalAttempt: s.final.run_attempt,
++    evidence: s.evidence.id, acceptance: s.acceptance.id, humanGate: s.gate.id,
++    recordDigest: digest([s.evidence, s.acceptance, s.gate, s.review || null]), artifacts: 0, unresolvedThreads: 0,
++    bridge: s.bridge.id, nativeRef: input.context.ref, nativeCheck: s.bridgeCheck.id, nativeSuite: s.bridgeSuite.id,
++    ruleset: RULESET, rulesetRevision: RULESET_UPDATED_AT, app: APP };
++}
++
++async function verifyNative(input, collect) {
++  const attestation = verifySnapshot(await collect(), input);
++  equal(verifySnapshot(await collect(), input), attestation, 'authority drift before native completion');
++  // The current job cannot already be successful/clean while it is running.
++  // Finalize must authenticate its completed result and live clean state.
++  return attestation;
++}
++
++function liveApi(endpoint, method = 'GET', payload) {
++  need(method === 'GET' || (endpoint === 'graphql' && method === 'POST' && /^query\b/.test(payload?.query || '')), 'read-only API');
++  const args = ['api', endpoint, '--method', method];
++  if (payload) args.push('--input', '-');
++  return JSON.parse(execFileSync('gh', args, { input: payload ? JSON.stringify(payload) : undefined, encoding: 'utf8', timeout: 30000, maxBuffer: 16 * 1024 * 1024 }));
++}
++
++function paginate(endpoint, field) {
++  const pages = JSON.parse(execFileSync('gh', ['api', endpoint, '--paginate', '--slurp'], { encoding: 'utf8', timeout: 30000, maxBuffer: 16 * 1024 * 1024 }));
++  return pages.flatMap(page => field ? page[field] : page);
++}
++
++function comment(ref) {
++  need(/^issue-comment:[1-9][0-9]*$/.test(ref), 'canonical Issue comment reference');
++  return liveApi(`repos/${REPO}/issues/comments/${ref.split(':')[1]}`);
++}
++
++function rawField(record, key) {
++  const matches = (record.body || '').split('\n').filter(line => line.startsWith(`${key}: `));
++  need(matches.length === 1, `missing/ambiguous ${key}`);
++  return matches[0].slice(key.length + 2);
++}
++
++function classify(pr, input, raised = true) {
++  const args = [process.env.WCOS_BASE_CLASSIFIER, 'pull_request', pr.base.sha, input.head, pr.head.ref, '',
++    raised ? input.profile : '', raised ? input.assurance : '', raised ? input.reviewFloor : ''];
++  const text = execFileSync('bash', args, { encoding: 'utf8' });
++  const values = Object.fromEntries(text.trim().split('\n').map(line => {
++    const at = line.indexOf('='); return [line.slice(0, at), line.slice(at + 1)];
++  }));
++  return { profile: values.ci_profile, assurance: values.assurance_profile, review_required: values.independent_review_required };
++}
++
++function directScope(task, pr, issue, classification) {
++  // Exclusion is not Direct approval and emits no protected check. A branch or
++  // label alone cannot exclude semantic/governed work from the native bridge.
++  const optionalDirectField = (label, value) => !issue.body.includes(`**${label}:**`) || issueField(issue.body, label) === value;
++  return /^WOS-DIRECT-[0-9]{8}-[0-9]{6}$/.test(task) &&
++    pr.head.ref === `codex/direct/${task.toLowerCase()}` &&
++    optionalDirectField('CI profile floor', 'DIRECT_FAST') && optionalDirectField('Assurance floor', 'DIRECT') &&
++    optionalDirectField('Independent review floor', 'OPTIONAL') &&
++    classification.profile === 'DIRECT_FAST' && classification.assurance === 'DIRECT' && classification.review_required === 'false';
++}
++
++function resolveLive(context) {
++  const pr = liveApi(`repos/${REPO}/pulls/${context.pr}`);
++  equal(pr.head.sha, context.head, 'resolution head drift');
++  equal(pr.base.sha, context.base, 'resolution base drift');
++  equal(pr.merge_commit_sha, context.candidate, 'resolution candidate drift');
++  const task = resolveTask(pr);
++  const issue = liveApi(`repos/${REPO}/issues/${task.issue}`);
++  resolveTask(pr, issue);
++  const input = { repo: REPO, ...task, pr: context.pr, head: context.head, context };
++  if (directScope(task.task, pr, issue, classify(pr, input, false))) return { route: 'direct', input };
++  Object.assign(input, { profile: issueField(issue.body, 'CI profile floor'), assurance: issueField(issue.body, 'Assurance floor'),
++    reviewFloor: issueField(issue.body, 'Independent review floor') });
++  need(PROFILE.test(input.profile) && /^(LOW|MEDIUM|HIGH)$/.test(input.assurance) && /^(OPTIONAL|REQUIRED)$/.test(input.reviewFloor), 'normal task floors');
++  return { route: 'governed', input };
++}
++
++function collectLive(input) {
++  const repository = liveApi(`repos/${REPO}`);
++  const pr = liveApi(`repos/${REPO}/pulls/${input.pr}`);
++  const rules = liveApi(`repos/${REPO}/rulesets/${RULESET}`);
++  verifyRules(rules);
++  console.log(`merge-authority-rules-read-ok revision=${rules.updated_at} bypass-field=${Object.hasOwn(rules, 'bypass_actors') ? 'visible' : 'redacted'}`);
++  const comments = paginate(`repos/${REPO}/issues/${input.issue}/comments?per_page=100`);
++  const gate = selectGate(comments, input);
++  equal(`issue-comment:${gate.id}`, input.gate, 'latest Human Gate unchanged');
++  const evidence = comment(rawField(gate, 'Evidence authority'));
++  const acceptance = comment(rawField(gate, 'Acceptance authority'));
++  const finalId = rawField(gate, 'FINAL run');
++  need(ID.test(finalId), 'FINAL run ID');
++  const final = liveApi(`repos/${REPO}/actions/runs/${finalId}`);
++  const jobs = paginate(`repos/${REPO}/actions/runs/${finalId}/attempts/${final.run_attempt}/jobs?per_page=100`, 'jobs');
++  const required = jobs.filter(job => job.name === 'Required CI');
++  need(required.length === 1, 'FINAL protected job count');
++  const classification = classify(pr, input);
++  const head = liveApi(`repos/${REPO}/git/commits/${input.head}`);
++  execFileSync('git', ['merge-base', '--is-ancestor', pr.base.sha, input.head]);
++  let review;
++  let reviewVerified = false;
++  if (input.preReview) {
++    need(/^(issue-comment|pr-review):[1-9][0-9]*$/.test(input.preReview), 'review reference');
++    review = input.preReview.startsWith('issue-comment:') ? comment(input.preReview) : liveApi(`repos/${REPO}/pulls/${input.pr}/reviews/${input.preReview.split(':')[1]}`);
++    execFileSync('bash', [process.env.WCOS_PRE_REVIEW_VERIFIER, REPO, input.pr, input.task, input.issue, pr.base.sha, input.head, head.tree.sha, classification.profile, input.preReview], { stdio: ['ignore', 'pipe', 'inherit'] });
++    reviewVerified = true;
++  }
++  let cursor = null;
++  let threads = 0;
++  do {
++    const query = 'query($pr:Int!,$cursor:String){repository(owner:"yoohwz",name:"wc-order-splitter"){pullRequest(number:$pr){reviewThreads(first:100,after:$cursor){nodes{isResolved}pageInfo{hasNextPage endCursor}}}}}';
++    const result = liveApi('graphql', 'POST', { query, variables: { pr: Number(input.pr), cursor } });
++    need(!result.errors, 'review thread query');
++    const page = result.data.repository.pullRequest.reviewThreads;
++    threads += page.nodes.filter(thread => !thread.isResolved).length;
++    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
++  } while (cursor);
++  const bridge = liveApi(`repos/${REPO}/actions/runs/${input.context.run}`);
++  const bridgeJobs = paginate(`repos/${REPO}/actions/runs/${bridge.id}/attempts/1/jobs?per_page=100`, 'jobs');
++  const native = bridgeJobs.filter(job => job.name === 'Required CI');
++  need(native.length === 1 && native[0].run_id === bridge.id && native[0].status === 'in_progress', 'one executing native protected job');
++  return { repository, pr, gate, evidence, acceptance, final, jobs, head, review, reviewVerified, threads, classification,
++    issue: liveApi(`repos/${REPO}/issues/${input.issue}`), main: liveApi(`repos/${REPO}/git/ref/heads/main`),
++    candidate: liveApi(`repos/${REPO}/git/commits/${pr.merge_commit_sha}`), rules,
++    finalArtifacts: liveApi(`repos/${REPO}/actions/runs/${finalId}/artifacts`), finalCheck: liveApi(`repos/${REPO}/check-runs/${required[0].id}`),
++    bridge, bridgeArtifacts: liveApi(`repos/${REPO}/actions/runs/${bridge.id}/artifacts`),
++    bridgeSuite: liveApi(`repos/${REPO}/check-suites/${bridge.check_suite_id}`),
++    bridgeCheck: liveApi(`repos/${REPO}/check-runs/${native[0].id}`),
++    readyEvents: paginate(`repos/${REPO}/issues/${input.pr}/timeline?per_page=100`).filter(event => event.event === 'ready_for_review'),
++    comments, reviews: paginate(`repos/${REPO}/pulls/${input.pr}/reviews?per_page=100`) };
++}
++
++if (require.main === module) {
++  (async () => {
++    const context = nativeContext(JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')), process.env);
++    const { route, input } = resolveLive(context);
++    if (process.argv[2] === '--scope') { console.log(`route=${route}`); return; }
++    equal(process.argv[2], '--verify', 'native verifier mode');
++    equal(route, 'governed', 'DIRECT must not enter normal bridge');
++    const gate = selectGate(paginate(`repos/${REPO}/issues/${input.issue}/comments?per_page=100`), input);
++    input.gate = `issue-comment:${gate.id}`;
++    const review = rawField(gate, 'PRE_REVIEW authority');
++    input.preReview = review === 'none' ? '' : review;
++    const result = await verifyNative(input, () => collectLive(input));
++    console.log(`native-merge-authority-verified ${JSON.stringify(result)}`);
++    console.log('artifacts=0; Finalize must verify completed native check and GitHub clean before merge');
++  })().catch(error => { console.error(error.message); process.exitCode = 1; });
++}
++
++module.exports = { verifySnapshot, verifyNative, nativeContext, resolveTask, directScope, selectGate, checkResult, recordFields, issueField, verifyRules };
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 6f046d7..7a8e245 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -51 +51 @@ on:
+-        description: PRECHECK before review/evidence or FINAL certification
++        description: PRECHECK or FINAL certification
+@@ -58 +58 @@ on:
+-        description: FINAL-only immutable issue-comment:ID or pr-review:ID containing PRE_REVIEW_CLEAN when review is required
++        description: FINAL immutable issue-comment:ID or pr-review:ID containing required PRE_REVIEW_CLEAN
+@@ -380,0 +381 @@ jobs:
++          node tests/ci/merge-candidate-authority-contract.js
+@@ -1240,0 +1242 @@ jobs:
++          node tests/ci/merge-candidate-authority-contract.js
+@@ -1282,0 +1285 @@ jobs:
++          node tests/ci/merge-candidate-authority-contract.js
+@@ -1625,0 +1629,15 @@ jobs:
++
++  final-binding:
++    name: FINAL binding / ${{ needs['classify-pr-scope'].outputs.task_id }} / ${{ needs['classify-pr-scope'].outputs.profile }} / ${{ needs['classify-pr-scope'].outputs.base_sha }} / ${{ inputs.pre_review_authority || 'none' }}
++    needs: [classify-pr-scope, required]
++    if: >-
++      !cancelled() &&
++      github.event_name == 'workflow_dispatch' &&
++      inputs.certification_stage == 'FINAL' &&
++      needs['classify-pr-scope'].result == 'success' &&
++      needs['classify-pr-scope'].outputs.stage == 'FINAL' &&
++      needs.required.result == 'success'
++    runs-on: ubuntu-latest
++    steps:
++      - name: Bind successful FINAL without creating a merge-ready claim
++        run: echo 'FINAL head certification is not merge-candidate authority; artifacts=0'
+diff --git a/.github/workflows/merge-authority.yml b/.github/workflows/merge-authority.yml
+new file mode 100644
+index 0000000..eee2970
+--- /dev/null
++++ b/.github/workflows/merge-authority.yml
+@@ -0,0 +1,160 @@
++name: Native merge authority
++
++on:
++  pull_request:
++    branches: [main]
++    types: [ready_for_review]
++
++# This workflow is metadata-only and cannot create/patch checks or merge.
++permissions:
++  actions: read
++  contents: read
++  issues: read
++  pull-requests: read
++  checks: read
++
++concurrency:
++  group: native-merge-authority-${{ github.event.pull_request.number }}
++  cancel-in-progress: true
++
++jobs:
++  scope:
++    name: Resolve native bridge scope
++    runs-on: ubuntu-latest
++    timeout-minutes: 5
++    outputs:
++      route: ${{ steps.scope.outputs.route }}
++    steps:
++      - name: Checkout exact native merge context without credentials
++        uses: actions/checkout@v7
++        with:
++          fetch-depth: 0
++          persist-credentials: false
++          ref: ${{ github.sha }}
++
++      - name: Resolve scope from base-owned authority
++        id: scope
++        shell: bash
++        env:
++          GH_TOKEN: ${{ github.token }}
++        run: |
++          set -euo pipefail
++          test "$GITHUB_REPOSITORY" = yoohwz/wc-order-splitter
++          test "$GITHUB_EVENT_NAME" = pull_request
++          test "$(jq -r '.action' "$GITHUB_EVENT_PATH")" = ready_for_review
++          test "$GITHUB_RUN_ATTEMPT" = 1
++          pr_number=$(jq -r '.number' "$GITHUB_EVENT_PATH")
++          base_sha=$(jq -r '.pull_request.base.sha' "$GITHUB_EVENT_PATH")
++          head_sha=$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")
++          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]
++          [[ "$base_sha" =~ ^[0-9a-f]{40}$ && "$head_sha" =~ ^[0-9a-f]{40}$ ]]
++          test "$GITHUB_REF" = "refs/pull/$pr_number/merge"
++          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
++          test "$(git show -s --format=%P HEAD)" = "$base_sha $head_sha"
++          test "$(git rev-parse HEAD^{tree})" = "$(git rev-parse "$head_sha^{tree}")"
++          git merge-base --is-ancestor "$base_sha" "$head_sha"
++          authority_dir=$(mktemp -d "$RUNNER_TEMP/wcos-native-authority.XXXXXX")
++          for script in classify-pr-scope.sh verify-pre-review-authority.sh validate-pre-review-record.sh; do
++            git show "$base_sha:.github/scripts/$script" > "$authority_dir/$script"
++            chmod +x "$authority_dir/$script"
++          done
++          authority_source=$base_sha
++          if ! git cat-file -e "$base_sha:.github/scripts/merge-candidate-authority.js" 2>/dev/null; then
++            # The only bootstrap is the reviewed GOV-010 source-bound head.
++            test "$base_sha" = 545b82b452adfc4d43fd4744f3f83d7a8f5e68fb
++            test "$pr_number" = 133
++            pr_body=$(jq -r '.pull_request.body' "$GITHUB_EVENT_PATH")
++            grep -Fxq -- '- Task: `WOS-GOV-010`' <<< "$pr_body"
++            grep -Fxq -- '- Canonical Issue: #132' <<< "$pr_body"
++            issue=$(gh api "repos/$GITHUB_REPOSITORY/issues/132")
++            jq -e '.user.login == "yoohwz" and .user.id == 152001663 and .author_association == "OWNER" and .state == "open" and (.pull_request == null)' <<< "$issue" >/dev/null
++            issue_body=$(jq -r '.body' <<< "$issue")
++            grep -Fxq -- '- **Task:** `WOS-GOV-010`' <<< "$issue_body"
++            grep -Fxq -- '- **CI profile floor:** `HIGH_DEEP`' <<< "$issue_body"
++            grep -Fxq -- '- **Assurance floor:** `HIGH`' <<< "$issue_body"
++            grep -Fxq -- '- **Independent review floor:** `REQUIRED`' <<< "$issue_body"
++            authority_source=$head_sha
++          fi
++          git show "$authority_source:.github/scripts/merge-candidate-authority.js" > "$authority_dir/merge-candidate-authority.js"
++          export WCOS_BASE_CLASSIFIER="$authority_dir/classify-pr-scope.sh"
++          export WCOS_PRE_REVIEW_VERIFIER="$authority_dir/verify-pre-review-authority.sh"
++          export WCOS_PRE_REVIEW_VALIDATOR="$authority_dir/validate-pre-review-record.sh"
++          node "$authority_dir/merge-candidate-authority.js" --scope >> "$GITHUB_OUTPUT"
++
++  required:
++    # A failed/missing scope output still names and RUNS a failing Required CI.
++    # DIRECT exclusion never emits a skipped/successful protected context.
++    name: ${{ needs.scope.result == 'success' && needs.scope.outputs.route == 'direct' && 'Native bridge not applicable to DIRECT' || 'Required CI' }}
++    needs: scope
++    if: always()
++    runs-on: ubuntu-latest
++    timeout-minutes: 10
++    steps:
++      - name: Fail closed on unresolved scope
++        env:
++          SCOPE_RESULT: ${{ needs.scope.result }}
++          SCOPE_ROUTE: ${{ needs.scope.outputs.route }}
++        run: |
++          test "$SCOPE_RESULT" = success
++          test "$SCOPE_ROUTE" = governed || test "$SCOPE_ROUTE" = direct
++
++      - name: Preserve separate DIRECT lifecycle
++        if: needs.scope.outputs.route == 'direct'
++        run: echo 'No normal bridge authority; DIRECT retains its existing Required CI and Human Gate'
++
++      - name: Checkout exact native merge context without credentials
++        if: needs.scope.outputs.route != 'direct'
++        uses: actions/checkout@v7
++        with:
++          fetch-depth: 0
++          persist-credentials: false
++          ref: ${{ github.sha }}
++
++      - name: Authenticate complete authority before native job completion
++        if: needs.scope.outputs.route != 'direct'
++        shell: bash
++        env:
++          GH_TOKEN: ${{ github.token }}
++        run: |
++          set -euo pipefail
++          test "$GITHUB_REPOSITORY" = yoohwz/wc-order-splitter
++          test "$GITHUB_EVENT_NAME" = pull_request
++          test "$(jq -r '.action' "$GITHUB_EVENT_PATH")" = ready_for_review
++          test "$GITHUB_RUN_ATTEMPT" = 1
++          pr_number=$(jq -r '.number' "$GITHUB_EVENT_PATH")
++          base_sha=$(jq -r '.pull_request.base.sha' "$GITHUB_EVENT_PATH")
++          head_sha=$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")
++          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]
++          [[ "$base_sha" =~ ^[0-9a-f]{40}$ && "$head_sha" =~ ^[0-9a-f]{40}$ ]]
++          test "$GITHUB_REF" = "refs/pull/$pr_number/merge"
++          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
++          test "$(git show -s --format=%P HEAD)" = "$base_sha $head_sha"
++          test "$(git rev-parse HEAD^{tree})" = "$(git rev-parse "$head_sha^{tree}")"
++          git merge-base --is-ancestor "$base_sha" "$head_sha"
++          authority_dir=$(mktemp -d "$RUNNER_TEMP/wcos-native-authority.XXXXXX")
++          for script in classify-pr-scope.sh verify-pre-review-authority.sh validate-pre-review-record.sh; do
++            git show "$base_sha:.github/scripts/$script" > "$authority_dir/$script"
++            chmod +x "$authority_dir/$script"
++          done
++          authority_source=$base_sha
++          if ! git cat-file -e "$base_sha:.github/scripts/merge-candidate-authority.js" 2>/dev/null; then
++            # The only bootstrap is the reviewed GOV-010 source-bound head.
++            test "$base_sha" = 545b82b452adfc4d43fd4744f3f83d7a8f5e68fb
++            test "$pr_number" = 133
++            pr_body=$(jq -r '.pull_request.body' "$GITHUB_EVENT_PATH")
++            grep -Fxq -- '- Task: `WOS-GOV-010`' <<< "$pr_body"
++            grep -Fxq -- '- Canonical Issue: #132' <<< "$pr_body"
++            issue=$(gh api "repos/$GITHUB_REPOSITORY/issues/132")
++            jq -e '.user.login == "yoohwz" and .user.id == 152001663 and .author_association == "OWNER" and .state == "open" and (.pull_request == null)' <<< "$issue" >/dev/null
++            issue_body=$(jq -r '.body' <<< "$issue")
++            grep -Fxq -- '- **Task:** `WOS-GOV-010`' <<< "$issue_body"
++            grep -Fxq -- '- **CI profile floor:** `HIGH_DEEP`' <<< "$issue_body"
++            grep -Fxq -- '- **Assurance floor:** `HIGH`' <<< "$issue_body"
++            grep -Fxq -- '- **Independent review floor:** `REQUIRED`' <<< "$issue_body"
++            authority_source=$head_sha
++          fi
++          git show "$authority_source:.github/scripts/merge-candidate-authority.js" > "$authority_dir/merge-candidate-authority.js"
++          export WCOS_BASE_CLASSIFIER="$authority_dir/classify-pr-scope.sh"
++          export WCOS_PRE_REVIEW_VERIFIER="$authority_dir/verify-pre-review-authority.sh"
++          export WCOS_PRE_REVIEW_VALIDATOR="$authority_dir/validate-pre-review-record.sh"
++          node "$authority_dir/merge-candidate-authority.js" --verify
+diff --git a/docs/ci-workflow-contract.md b/docs/ci-workflow-contract.md
+index a3ce6b7..3c39c75 100644
+--- a/docs/ci-workflow-contract.md
++++ b/docs/ci-workflow-contract.md
+@@ -50,0 +51,69 @@ Any head-changing correction invalidates the earlier PRE_REVIEW and returns to P
++## Strict merge-candidate authority (WOS-GOV-010)
++
++FINAL remains exact-head certification with protected `Required CI`; it is **not** by itself proof that GitHub considers a PR merge-ready. A workflow-dispatch check can remain successful while the PR rollup selects a different pull-request suite. A regenerated test-merge SHA also has no inherited check. Resolve the live state rather than inferring mergeability from an earlier run.
++
++The metadata-only native bridge is `.github/workflows/merge-authority.yml`, triggered only by `pull_request: ready_for_review` against `main`. The failed custom Check Run architecture and `workflow_dispatch MERGE_AUTHORITY` input/path are retired: do not retry them, lengthen polling, manually patch a check, or create a status through another integration. Ordinary discovery CI and expensive FINAL certification are unchanged.
++
++All governed non-DIRECT PRs remain draft through PRECHECK, required Independent Review, FINAL, task-appropriate evidence, and ChatGPT Acceptance. While the PR is still draft, ChatGPT persists a new Human Gate that binds the exact base/head/tree/current candidate and `PR state: draft`. Only after that record is authenticated may ChatGPT mark the unchanged PR ready once. That transition triggers the native bridge; no dispatch inputs or title/label claims grant authority.
++
++GitHub's [native pull-request semantics](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request) supply `GITHUB_REF=refs/pull/PR/merge` and `GITHUB_SHA` equal to the event merge commit. This is distinct from the Actions REST run/suite/check `head_sha`, which identifies the PR branch head: the existing native discovery run `33615919165` demonstrates that API representation. Do not require these different fields to be identical or mistake a manually created unassociated candidate check for a PR-native check. The verifier binds both the runner's exact candidate/ref/workflow source and the live native run/suite/check's exact PR association, head, base, workflow path and app `15368`. Positive live recognition still has to be proven during Finalize.
++
++A base-owned scope job resolves the owner-authored canonical Issue and complete-diff classification. Only canonical Direct task/branch plus proven `DIRECT_FAST / DIRECT / false` and no normal-task floor is excluded; this emits no protected check and grants no Direct approval. A normal task whose CSS happens to fit the direct lexical envelope still uses its Task Capsule floors and normal authority. The dependent native job uses `always()`: for governed, invalid, failed or missing scope it is named exactly `Required CI` and must run. Scope failure, invalid scope, or any failed verification exits failure, never skipped/neutral success. Proven DIRECT instead uses the non-protected name `Native bridge not applicable to DIRECT` and retains its existing lifecycle.
++
++Both jobs have read-only permissions, including `checks: read`, and check out the exact event merge SHA without persisted credentials. No Checks API write or second certification occurs. Before its native protected job may complete, the verifier authenticates twice:
++
++- real owner-triggered `pull_request / ready_for_review`, first run attempt, exact event PR/base/head/candidate, merge ref and workflow ref/source; candidate parents current base/head, candidate tree equal to the reviewed head tree, current main unchanged;
++- owner login/numeric ID, exact canonical PR/Issue/Task Capsule, independently raised CI/assurance/review floors;
++- latest direct immutable current-head Human Gate, distinct CI evidence and Acceptance, their exact references, roles, schemas and chronology; malformed/edited latest positive authority cannot fall back to an older Gate;
++- Gate's draft-state attestation and exactly one owner ready transition since that Gate, bound to the event timestamp; a repeat transition or rerun cannot reuse it;
++- `EXECUTOR_EVIDENCE_READY` for LOW/no-trigger MEDIUM, or independently grounded `TECHNICAL_ACCEPTED` plus the exact-base PRE_REVIEW validator for reviewed work;
++- successful exact-head FINAL, app/check/suite/run/attempt/profile/artifacts=0 and exact successful `FINAL binding / TASK / PROFILE / BASE / PRE_REVIEW_REFERENCE_OR_none`;
++- native running protected check, app/suite/PR association, artifacts=0, pinned ruleset and all paginated unresolved threads=0;
++- later direct PRE_REVIEW/Technical/Acceptance changes-required or Human Gate revocation, with authenticated role/provenance, all remain blocking.
++
++The `native-merge-authority-verified` log attestation binds the immutable event merge ref/candidate, base/head/tree, FINAL and native run/check/suite identities, evidence/Acceptance/Gate/review IDs and record digest, artifacts=0 and threads=0. It is not a claim that its own running job is already successful or that GitHub is already clean.
++
++After the job completes, ChatGPT must independently re-read the successful native run/check (never skipped/neutral), its candidate-bound attestation and native PR association, current owner ruleset including bypass actors, full current authority and current candidate. Require `mergeable=true` and `mergeable_state=clean` immediately before squash merge. If GitHub does not recognize this native merge-context authority, stop before merge. A failure/cancellation is not authority, and there is no custom check to flip manually.
++
++There is no atomic API across mutable authority, job completion and merge. Head/base drift requires fresh task-appropriate certification/review/Acceptance/Human Gate. Candidate regeneration with unchanged base/head/tree requires a newly bound Gate while draft and a new ready transition, never copying prior authority or silently reusing the old event. Do not repeat expensive FINAL solely for candidate regeneration. Strict up-to-date and unresolved-thread protection remain active across the final merge race.
++
++GitHub's [ruleset API](https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset) redacts `bypass_actors` unless the caller can write the ruleset. Actions must not gain Administration permission for this read. The verifier pins the owner-authenticated source ruleset revision `updated_at=2026-08-25T10:09:48.838+07:00` (history version `47541914`, owner actor `152001663`, verified empty bypass list) and all visible constraints; a missing/changed revision fails closed even when hidden fields are redacted. If the bypass field is visible it must be empty. Finalize must use owner authority to re-read the complete ruleset, including bypass actors, before Human Gate and immediately before merge. Future intentional ruleset edits require a separately reviewed pin transition, never an automatic revision update.
++
++### Canonical bridge records
++
++Each record is a new top-level comment on the canonical task Issue by the authenticated owner. Never edit an existing record. It starts with its exact header, contains one of each field and no other fields, and ends with its exact terminal. Records contain plain unfenced text, without backticks, indentation, HTML, quoted transcripts, or a footer. A separate navigation/reference comment may carry `NEXT_ACTION_HINT`.
++
++All three records contain these common fields (replace placeholders with exact values):
++
++```text
++Record version: merge-authority-v1
++Canonical Issue: #ISSUE
++PR: #PR
++Exact base: BASE_SHA
++Exact head: HEAD_SHA
++Exact head tree: TREE_SHA
++CI profile: SELECTED_PROFILE
++Assurance: SELECTED_ASSURANCE
++Review required: true_OR_false
++PRE_REVIEW authority: pr-review:ID_OR_issue-comment:ID_OR_none
++FINAL run: RUN_ID
++FINAL attempt: ATTEMPT
++Artifacts: 0
++```
++
++Evidence: header `## Merge CI evidence — TASK`; fields `Role: codex_executor` and `Evidence kind: TECHNICAL_ACCEPTED` for reviewed work, or `Evidence kind: EXECUTOR_EVIDENCE_READY` for no-review work. Terminal `TECHNICAL_ACCEPTED: TASK / PR #PR / exact head HEAD_SHA` or the corresponding `EXECUTOR_EVIDENCE_READY` terminal. This is mechanical post-FINAL promotion of the separately authenticated review, not a new technical conclusion.
++
++Acceptance: header `## Merge Acceptance — TASK`; fields `Role: chatgpt_acceptance_reviewer` and `Evidence authority: issue-comment:ID`. Terminal `ACCEPTANCE_ACCEPTED: TASK / PR #PR / exact head HEAD_SHA`. A separate accompanying comment may explain Acceptance findings; the Executor cannot issue this record.
++
++Human Gate: header `## Merge Human Gate — TASK`; fields `Role: repository_owner`, `Evidence authority: issue-comment:ID`, `Acceptance authority: issue-comment:ID`, `Human command: Finalize TASK`, `Merge candidate: CANDIDATE_SHA`, `Merge candidate tree: TREE_SHA`, `Unresolved review threads: 0`, and `PR state: draft`. Persist while draft and before the ready transition. Terminal `HUMAN_GATE_APPROVED: TASK / PR #PR / exact head HEAD_SHA`. This comes only from the authenticated human's conditional Finalize authority, not from `Run`, CI, a PR body, or a title/label.
++
++### Source-bound self-bootstrap
++
++WOS-GOV-010 itself still uses GOV-009 task-bound PRECHECK, fresh Independent PRE_REVIEW, and FINAL. Since its exact source base lacks the new verifier/workflow, the native loader has one bootstrap: repository `yoohwz/wc-order-splitter`, task `WOS-GOV-010`, Issue `132`, PR `133`, source base `545b82b452adfc4d43fd4744f3f83d7a8f5e68fb`, HIGH_DEEP floor, HIGH assurance and REQUIRED review. Only there may it load the newly reviewed/accepted verifier from the event's exact head; classifier and PRE_REVIEW validators remain base-owned. The native workflow comes from the exact event merge context. Source/tree proof, fresh review, green FINAL, new Acceptance and draft-bound Human Gate remain mandatory before protected success. After accepted main owns the verifier, the fallback is inert; other missing-verifier bases fail closed.
++
++The replacement is authorized by Issue #132 `issue-comment:5508357529`, with old Human Gate revoked by `5508342233`. It permits one replacement source head, not a correction-budget reset: focused local evidence, fresh pre-push Independent advisory, push once, task-bound PRECHECK, fresh complete-diff Independent PRE_REVIEW, FINAL/live binding, then mechanical Technical Acceptance. A material finding requiring another source head after that push stops `ARCHITECTURE_REVIEW_REQUIRED` and requires a new governance task. Old-head approvals are historical only.
++
++Positive native merge-context check and GitHub recognition occur only after new ChatGPT Acceptance and Human Gate while draft, then mark-ready during Finalize, **before merge**. `READY_TO_FINALIZE` does not claim live bridge success. Unrecognized native authority stops `ARCHITECTURE_REVIEW_REQUIRED: WOS-GOV-010`; do not merge or weaken protection.
++
++After GOV-010 is terminally accepted, WOS-COMPAT-007 requires explicit ChatGPT/Human rebind to the new main and fresh required certification authority. Its old Acceptance/Human Gate cannot be reused. No consumer rebind or release authority is implicit in this bridge.
++
+diff --git a/docs/compressed-engineering-workflow.md b/docs/compressed-engineering-workflow.md
+index 0ec96ed..d5505dd 100644
+--- a/docs/compressed-engineering-workflow.md
++++ b/docs/compressed-engineering-workflow.md
+@@ -99,0 +100,4 @@ On failure it records `ACCEPTANCE_CHANGES_REQUIRED` or `TECHNICAL_REVIEW_FOLLOWU
++For WOS-GOV-010 and later normal tasks, squash merge is additionally gated by the native `pull_request: ready_for_review` bridge in `docs/ci-workflow-contract.md`. Keep the PR draft through technical evidence and Acceptance; persist the exact candidate-bound Human Gate with `PR state: draft`, then mark the unchanged PR ready once. The dedicated native merge-ref workflow verifies prior authority in its running `Required CI` job, without Checks API writes or another FINAL. After completion, re-read the successful native run/check/app/PR association, its exact candidate/ref attestation, no-drift authority and live `mergeable=true`/`mergeable_state=clean` before merge. REST run/check `head_sha` identifies the PR head; the native event/runner SHA separately binds the merge candidate. Head FINAL success alone is not merge readiness. LOW/no-trigger MEDIUM uses Executor evidence with no added Independent Review. DIRECT remains separate. The retired custom-check `workflow_dispatch MERGE_AUTHORITY` path must not be retried.
++
++WOS-GOV-010's own positive live bridge proof belongs to this pre-merge Finalize step; `Run` cannot invent Acceptance/Human Gate to obtain it early. A failed bridge stops merge. A missing safe self-bootstrap or unrecognized live candidate authority stops `ARCHITECTURE_REVIEW_REQUIRED: WOS-GOV-010`.
++
+diff --git a/docs/engineering-review-authority.md b/docs/engineering-review-authority.md
+index 3a3166e..a075b2b 100644
+--- a/docs/engineering-review-authority.md
++++ b/docs/engineering-review-authority.md
+@@ -90,0 +91,2 @@ The complete final Technical Acceptance record must bind task, PR, independent r
++WOS-GOV-010 and later normal tasks use the versioned merge CI evidence, Acceptance and Human Gate records in `docs/ci-workflow-contract.md`. CI evidence remains Executor evidence or mechanical promotion; Acceptance remains ChatGPT-owned and Human Gate remains conditional human authority. Keep the PR draft through Acceptance and persist the candidate-bound Gate with `PR state: draft`; only then may ChatGPT mark it ready once. A dedicated native `pull_request: ready_for_review` workflow verifies the complete chain in its running `Required CI` job on the event merge ref, using read-only APIs. No custom check write, successful head FINAL, dispatch input, title/label/PR-body claim or Executor record substitutes for upstream roles. Finalize independently verifies completed native check/run/app/PR association, exact candidate attestation and live GitHub clean before merge. Native REST head identity and event merge SHA are separately bound, not conflated. The source-bound GOV-010 bootstrap has the same boundaries and requires new exact-head review/FINAL/Acceptance/Gate; positive recognition is proved only before merge. The failed custom-check dispatch architecture is retired.
++
+diff --git a/tests/ci/merge-candidate-authority-contract.js b/tests/ci/merge-candidate-authority-contract.js
+new file mode 100644
+index 0000000..c15160d
+--- /dev/null
++++ b/tests/ci/merge-candidate-authority-contract.js
+@@ -0,0 +1,405 @@
++'use strict';
++
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const path = require('node:path');
++const vm = require('node:vm');
++const { execFileSync } = require('node:child_process');
++const { verifySnapshot, verifyNative, nativeContext, resolveTask, directScope, selectGate } = require('../../.github/scripts/merge-candidate-authority.js');
++
++const repo = 'yoohwz/wc-order-splitter';
++const base = 'a'.repeat(40), head = 'b'.repeat(40), tree = 'c'.repeat(40), candidate = 'd'.repeat(40);
++const input = { repo, pr: '133', issue: '132', task: 'WOS-GOV-010', head, profile: 'HIGH_DEEP', assurance: 'HIGH', reviewFloor: 'REQUIRED', preReview: 'pr-review:42', gate: 'issue-comment:3' };
++const actor = { user: { login: 'yoohwz', id: 152001663 }, author_association: 'OWNER' };
++const time = second => `2026-09-02T08:00:${String(second).padStart(2, '0')}Z`;
++const clone = value => JSON.parse(JSON.stringify(value));
++input.context = { pr: input.pr, head, base, candidate, ref: 'refs/pull/133/merge', readyAt: time(24), run: 101 };
++
++function fixture(selected = input) {
++  const reviewed = selected.preReview ? 'true' : 'false';
++  const common = { 'Record version': 'merge-authority-v1', 'Canonical Issue': '#132', PR: '#133', 'Exact base': base,
++    'Exact head': head, 'Exact head tree': tree, 'CI profile': selected.profile, Assurance: selected.assurance,
++    'Review required': reviewed, 'PRE_REVIEW authority': selected.preReview || 'none', 'FINAL run': '100', 'FINAL attempt': '1', Artifacts: '0' };
++  const terminal = token => `${token}: WOS-GOV-010 / PR #133 / exact head ${head}`;
++  const record = (id, name, role, fields, token) => ({ ...actor, id, issue_url: `https://api.github.com/repos/${repo}/issues/132`,
++    created_at: time(id + 20), updated_at: time(id + 20), body: [`## Merge ${name} — WOS-GOV-010`, ...Object.entries({ ...common, Role: role, ...fields }).map(([key, value]) => `${key}: ${value}`), terminal(token)].join('\n') });
++  const kind = reviewed === 'true' ? 'TECHNICAL_ACCEPTED' : 'EXECUTOR_EVIDENCE_READY';
++  const binding = `FINAL binding / WOS-GOV-010 / ${selected.profile} / ${base} / ${selected.preReview || 'none'}`;
++  return {
++    repository: { full_name: repo, owner: actor.user, default_branch: 'main' },
++    issue: { ...actor, number: 132, state: 'open', title: 'WOS-GOV-010 — Strict Merge-Candidate Required CI Authority',
++      body: `- **Task:** \`WOS-GOV-010\`\n- **CI profile floor:** \`${selected.profile}\`\n- **Assurance floor:** \`${selected.assurance}\`\n- **Independent review floor:** \`${selected.reviewFloor}\`` },
++    pr: { state: 'open', draft: false, body: '- Canonical Issue: #132\n- Task: `WOS-GOV-010`',
++      base: { sha: base, ref: 'main', repo: { full_name: repo } }, head: { sha: head, ref: 'codex/task', repo: { full_name: repo } },
++      merge_commit_sha: candidate, mergeable: true, mergeable_state: 'clean' },
++    main: { object: { sha: base } }, candidate: { sha: candidate, tree: { sha: tree }, parents: [{ sha: base }, { sha: head }] },
++    head: { sha: head, tree: { sha: tree } }, threads: 0,
++    rules: { id: 21367637, name: 'Protect main', target: 'branch', source_type: 'Repository', source: repo,
++      updated_at: '2026-08-25T10:09:48.838+07:00', enforcement: 'active', bypass_actors: [],
++      conditions: { ref_name: { exclude: [], include: ['~DEFAULT_BRANCH'] } }, rules: [
++        { type: 'deletion' }, { type: 'non_fast_forward' },
++        { type: 'pull_request', parameters: { allowed_merge_methods: ['squash'], dismiss_stale_reviews_on_push: false,
++          require_code_owner_review: false, require_extra_approval_for_unattributed_changes: true, require_last_push_approval: false,
++          required_approving_review_count: 0, required_review_thread_resolution: true, required_reviewers: [] } },
++        { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: true, do_not_enforce_on_create: false,
++          required_status_checks: [{ context: 'Required CI', integration_id: 15368 }] } },
++      ] },
++    classification: { profile: selected.profile, assurance: selected.assurance, review_required: reviewed },
++    evidence: record(1, 'CI evidence', 'codex_executor', { 'Evidence kind': kind }, kind),
++    acceptance: record(2, 'Acceptance', 'chatgpt_acceptance_reviewer', { 'Evidence authority': 'issue-comment:1' }, 'ACCEPTANCE_ACCEPTED'),
++    gate: record(3, 'Human Gate', 'repository_owner', { 'Evidence authority': 'issue-comment:1', 'Acceptance authority': 'issue-comment:2',
++      'Human command': 'Finalize WOS-GOV-010', 'Merge candidate': candidate, 'Merge candidate tree': tree, 'Unresolved review threads': '0', 'PR state': 'draft' }, 'HUMAN_GATE_APPROVED'),
++    final: { id: 100, event: 'workflow_dispatch', path: '.github/workflows/ci.yml', repository: { full_name: repo }, head_sha: head,
++      head_branch: 'codex/task', status: 'completed', conclusion: 'success', run_attempt: 1, check_suite_id: 88, created_at: time(11), updated_at: time(20) },
++    jobs: [{ id: 11, run_id: 100, name: 'Required CI', status: 'completed', conclusion: 'success' },
++      { id: 12, run_id: 100, name: binding, status: 'completed', conclusion: 'success' }],
++    finalArtifacts: { total_count: 0 },
++    finalCheck: { id: 11, name: 'Required CI', head_sha: head, app: { id: 15368 }, status: 'completed', conclusion: 'success', check_suite: { id: 88 } },
++    review: selected.preReview ? { ...actor, commit_id: head, submitted_at: time(10) } : undefined, reviewVerified: Boolean(selected.preReview),
++    bridge: { id: 101, event: 'pull_request', path: '.github/workflows/merge-authority.yml', head_sha: head,
++      repository: { full_name: repo }, head_branch: 'codex/task', status: 'in_progress', run_attempt: 1, created_at: time(24), check_suite_id: 89,
++      pull_requests: [{ number: 133, head: { sha: head }, base: { sha: base } }] },
++    bridgeSuite: { id: 89, head_sha: head, app: { id: 15368 }, pull_requests: [{ number: 133, head: { sha: head }, base: { sha: base } }] },
++    bridgeCheck: { id: 13, name: 'Required CI', head_sha: head, app: { id: 15368 }, check_suite: { id: 89 }, status: 'in_progress', conclusion: null },
++    readyEvents: [{ event: 'ready_for_review', created_at: time(24), actor: actor.user }],
++    bridgeArtifacts: { total_count: 0 }, comments: [], reviews: [],
++  };
++}
++
++let assertions = 0;
++let ignoredAdverse = 0;
++function rejected(label, change) {
++  const snapshot = fixture();
++  change(snapshot);
++  assert.throws(() => verifySnapshot(snapshot, input), /merge-authority-error/, label);
++  assertions++;
++}
++
++assert.equal(verifySnapshot(fixture(), input).candidate, candidate);
++const redacted = fixture();
++delete redacted.rules.bypass_actors;
++assert.equal(verifySnapshot(redacted, input).rulesetRevision, '2026-08-25T03:09:48.838Z');
++redacted.rules.updated_at = '2026-08-25T03:09:48.838Z';
++assert.equal(verifySnapshot(redacted, input).rulesetRevision, '2026-08-25T03:09:48.838Z');
++for (const profile of ['LOW_FOCUSED', 'MEDIUM_DOMAIN']) {
++  const selected = { ...input, profile, assurance: profile === 'LOW_FOCUSED' ? 'LOW' : 'MEDIUM', reviewFloor: 'OPTIONAL', preReview: '' };
++  assert.equal(verifySnapshot(fixture(selected), selected).review, 'none');
++}
++const release = { ...input, profile: 'RELEASE_CERT' };
++assert.equal(verifySnapshot(fixture(release), release).profile, 'RELEASE_CERT');
++const financial = { ...input, profile: 'HIGH_FINANCIAL' };
++assert.equal(verifySnapshot(fixture(financial), financial).profile, 'HIGH_FINANCIAL');
++
++const env = { GITHUB_REPOSITORY: repo, GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/133/merge',
++  GITHUB_SHA: candidate, GITHUB_RUN_ID: '101', GITHUB_RUN_ATTEMPT: '1',
++  GITHUB_WORKFLOW_REF: `${repo}/.github/workflows/merge-authority.yml@refs/pull/133/merge`, GITHUB_WORKFLOW_SHA: candidate };
++const event = { repository: { full_name: repo }, action: 'ready_for_review', number: 133, sender: actor.user,
++  pull_request: { ...fixture().pr, number: 133, updated_at: time(24) } };
++assert.deepEqual(nativeContext(event, env), input.context);
++for (const [label, change] of [
++  ['dispatch', (e, v) => { v.GITHUB_EVENT_NAME = 'workflow_dispatch'; }],
++  ['target event', (e, v) => { v.GITHUB_EVENT_NAME = 'pull_request_target'; }],
++  ['discovery', e => { e.action = 'synchronize'; }],
++  ['wrong actor', e => { e.sender = { login: 'stranger', id: 1 }; }],
++  ['wrong PR', e => { e.number = 131; }],
++  ['draft event', e => { e.pull_request.draft = true; }],
++  ['closed event', e => { e.pull_request.state = 'closed'; }],
++  ['fork', e => { e.pull_request.head.repo.full_name = 'someone/fork'; }],
++  ['head ref', (e, v) => { v.GITHUB_REF = 'refs/heads/codex/task'; }],
++  ['head instead of candidate', (e, v) => { v.GITHUB_SHA = head; }],
++  ['wrong workflow source', (e, v) => { v.GITHUB_WORKFLOW_SHA = head; }],
++  ['wrong workflow ref', (e, v) => { v.GITHUB_WORKFLOW_REF = `${repo}/.github/workflows/ci.yml@refs/pull/133/merge`; }],
++  ['rerun', (e, v) => { v.GITHUB_RUN_ATTEMPT = '2'; }],
++  ['missing event time', e => { delete e.pull_request.updated_at; }],
++]) {
++  const e = clone(event), v = clone(env); change(e, v);
++  assert.throws(() => nativeContext(e, v), /merge-authority-error/, label); assertions++;
++}
++assert.deepEqual(resolveTask(fixture().pr, fixture().issue), { task: input.task, issue: input.issue });
++const directTask = 'WOS-DIRECT-20260902-120000';
++const directPr = { head: { ref: `codex/direct/${directTask.toLowerCase()}` } };
++const directClass = { profile: 'DIRECT_FAST', assurance: 'DIRECT', review_required: 'false' };
++assert(directScope(directTask, directPr, { body: '' }, directClass));
++assert(directScope(directTask, directPr, { body: '- **CI profile floor:** `DIRECT_FAST`\n- **Assurance floor:** `DIRECT`\n- **Independent review floor:** `OPTIONAL`' }, directClass));
++assert(!directScope(directTask, directPr, { body: '- **Assurance floor:** `HIGH`' }, directClass));
++assert(!directScope(input.task, directPr, { body: '' }, directClass), 'normal task does not opt into DIRECT');
++assert(!directScope(directTask, directPr, { body: '- **CI profile floor:** `LOW_FOCUSED`' }, directClass), 'transitioned normal task not excluded');
++assert(!directScope(directTask, directPr, { body: '' }, { ...directClass, profile: 'HIGH_DEEP' }), 'branch claim cannot bypass semantic scope');
++assert(!directScope(directTask, { head: { ref: 'codex/normal' } }, { body: '' }, directClass));
++const gate = fixture().gate;
++assert.equal(selectGate([gate], input).id, gate.id);
++assert.throws(() => selectGate([], input), /missing current-head Human Gate/);
++assert.throws(() => selectGate([gate, { ...gate, id: 4, created_at: time(24), updated_at: time(25) }], input), /edited/, 'no fallback to old approval');
++
++function adverseRecord(token, at = 25) {
++  const formats = {
++    PRE_REVIEW_CHANGES_REQUIRED: ['Independent Codex PRE_REVIEW', 'independent_codex_reviewer'],
++    TECHNICAL_CHANGES_REQUIRED: ['Independent Codex Technical Review', 'independent_codex_reviewer'],
++    ACCEPTANCE_CHANGES_REQUIRED: ['Merge Acceptance', 'chatgpt_acceptance_reviewer'],
++    HUMAN_GATE_REVOKED: ['Merge Human Gate', 'repository_owner'],
++  };
++  const [header, role] = formats[token];
++  const fields = { Role: role, 'Canonical Issue': '#132', 'Exact base': base, 'Exact head': head, 'Exact head tree': tree };
++  if (role === 'independent_codex_reviewer') Object.assign(fields, { 'Fresh context': 'yes', 'Executor session reused': 'no',
++    'Source read-only/no-implementation-write': 'yes', 'Complete diff reviewed': 'yes' });
++  else Object.assign(fields, { 'Record version': 'merge-authority-v1', PR: '#133' });
++  return { ...actor, issue_url: `https://api.github.com/repos/${repo}/issues/132`, created_at: time(at), updated_at: time(at),
++    body: [`## ${header} — WOS-GOV-010`, ...Object.entries(fields).map(([key, value]) => `${key}: ${value}`),
++      `${token}: WOS-GOV-010 / PR #133 / exact head ${head}`].join('\n') };
++}
++
++rejected('changes-required has no validated clean review', s => { s.reviewVerified = false; });
++rejected('clean without FINAL', s => { s.final.status = 'queued'; });
++rejected('failed FINAL', s => { s.final.conclusion = 'failure'; });
++rejected('missing Human Gate', s => { s.gate.body = ''; });
++rejected('missing Acceptance', s => { s.acceptance.body = ''; });
++rejected('base drift', s => { s.pr.base.sha = 'e'.repeat(40); });
++rejected('main drift', s => { s.main.object.sha = 'e'.repeat(40); });
++rejected('head drift', s => { s.pr.head.sha = 'e'.repeat(40); });
++rejected('candidate regeneration', s => { s.candidate.sha = s.pr.merge_commit_sha = 'e'.repeat(40); });
++rejected('candidate tree differs from certified tree', s => { s.candidate.tree.sha = 'e'.repeat(40); });
++rejected('wrong merge parents', s => { s.candidate.parents.reverse(); });
++rejected('unresolved thread', s => { s.threads = 1; });
++rejected('draft', s => { s.pr.draft = true; });
++rejected('fork', s => { s.pr.head.repo.full_name = 'stranger/fork'; });
++rejected('wrong app', s => { s.finalCheck.app.id = 1144995; });
++rejected('wrong SHA', s => { s.finalCheck.head_sha = candidate; });
++rejected('wrong suite', s => { s.finalCheck.check_suite.id++; });
++rejected('wrong check', s => { s.finalCheck.id++; });
++for (const conclusion of ['skipped', 'neutral', null, 'failure', 'cancelled', 'timed_out']) {
++  rejected(`bad conclusion ${conclusion}`, s => { s.finalCheck.conclusion = conclusion; });
++}
++rejected('missing FINAL job', s => { s.jobs.shift(); });
++rejected('skipped FINAL job', s => { s.jobs[0].conclusion = 'skipped'; });
++rejected('duplicate FINAL', s => { s.jobs.push(s.jobs[0]); });
++rejected('missing FINAL binding', s => { s.jobs.pop(); });
++rejected('skipped FINAL binding', s => { s.jobs[1].conclusion = 'skipped'; });
++rejected('neutral FINAL binding', s => { s.jobs[1].conclusion = 'neutral'; });
++rejected('incomplete FINAL binding', s => { s.jobs[1].status = 'in_progress'; });
++rejected('duplicate FINAL binding', s => { s.jobs.push(s.jobs[1]); });
++rejected('raw-name FINAL binding', s => { s.jobs[1].name = 'FINAL binding / ${{ needs.classify-pr-scope.outputs.task_id }}'; });
++rejected('unbound FINAL task', s => { s.jobs[1].name = s.jobs[1].name.replace('WOS-GOV-010', 'WOS-GOV-009'); });
++rejected('unbound FINAL profile', s => { s.jobs[1].name = s.jobs[1].name.replace('HIGH_DEEP', 'LOW_FOCUSED'); });
++rejected('unbound FINAL base', s => { s.jobs[1].name = s.jobs[1].name.replace(base, head); });
++rejected('unbound FINAL review', s => { s.jobs[1].name = s.jobs[1].name.replace('pr-review:42', 'none'); });
++rejected('discovery event cannot be FINAL', s => { s.final.event = 'pull_request'; });
++rejected('wrong workflow', s => { s.final.path = '.github/workflows/build-plugin.yml'; });
++rejected('artifacts', s => { s.finalArtifacts.total_count = 1; });
++rejected('bridge artifacts', s => { s.bridgeArtifacts.total_count = 1; });
++rejected('rerun bridge', s => { s.bridge.run_attempt = 2; });
++rejected('old custom bridge event', s => { s.bridge.event = 'workflow_dispatch'; });
++rejected('old custom bridge workflow', s => { s.bridge.path = '.github/workflows/ci.yml'; });
++rejected('wrong native run', s => { s.bridge.id++; });
++rejected('native run candidate mistaken for REST head', s => { s.bridge.head_sha = candidate; });
++rejected('no native run PR association', s => { s.bridge.pull_requests = []; });
++rejected('no native suite PR association', s => { s.bridgeSuite.pull_requests = []; });
++rejected('wrong native suite app', s => { s.bridgeSuite.app.id = 1; });
++rejected('wrong native check app', s => { s.bridgeCheck.app.id = 1; });
++rejected('wrong native check suite', s => { s.bridgeCheck.check_suite.id++; });
++rejected('skipped native job', s => { s.bridgeCheck.status = 'completed'; s.bridgeCheck.conclusion = 'skipped'; });
++rejected('precompleted native job', s => { s.bridgeCheck.conclusion = 'success'; });
++rejected('Gate must attest draft', s => { s.gate.body = s.gate.body.replace('PR state: draft', 'PR state: ready'); });
++rejected('missing draft Gate binding', s => { s.gate.body = s.gate.body.replace('PR state: draft\n', ''); });
++rejected('Gate cannot follow ready event', s => { s.gate.created_at = s.gate.updated_at = time(25); });
++rejected('missing native ready transition', s => { s.readyEvents = []; });
++rejected('same Gate cannot authorize another ready transition', s => { s.readyEvents.push({ ...s.readyEvents[0], created_at: time(25) }); });
++rejected('wrong ready timeline event', s => { s.readyEvents[0].created_at = time(25); });
++rejected('wrong ready timeline actor', s => { s.readyEvents[0].actor = { id: 1 }; });
++for (const key of ['head', 'base', 'candidate', 'ref']) {
++  const changed = { ...input, context: { ...input.context, [key]: 'e'.repeat(40) } };
++  assert.throws(() => verifySnapshot(fixture(), changed), /merge-authority-error/, `native context ${key}`); assertions++;
++}
++rejected('quoted authority', s => { s.gate.body = s.gate.body.split('\n').map(line => `> ${line}`).join('\n'); });
++rejected('fenced authority', s => { s.gate.body = `\`\`\`\n${s.gate.body}\n\`\`\``; });
++rejected('edited authority', s => { s.gate.updated_at = time(25); });
++rejected('wrong role', s => { s.acceptance.body = s.acceptance.body.replace('chatgpt_acceptance_reviewer', 'codex_executor'); });
++rejected('wrong actor', s => { s.gate.user = { login: 'yoohwz', id: 123 }; });
++rejected('wrong canonical Issue', s => { s.gate.issue_url = s.gate.issue_url.replace('132', '131'); });
++rejected('duplicate field', s => { s.gate.body = s.gate.body.replace('Role: repository_owner', 'Role: repository_owner\nRole: repository_owner'); });
++rejected('unknown field', s => { s.gate.body = s.gate.body.replace('Role: repository_owner', 'Role: repository_owner\nOverride: yes'); });
++rejected('duplicate task floor', s => { s.issue.body += '\n- **CI profile floor:** `LOW_FOCUSED`'; });
++rejected('task claim cannot lower machine floor', s => { s.classification.profile = 'HIGH_FINANCIAL'; });
++rejected('Human Gate before FINAL', s => { s.gate.created_at = s.gate.updated_at = time(5); });
++rejected('review after FINAL', s => { s.review.submitted_at = time(15); });
++rejected('bypass', s => { s.rules.bypass_actors.push({ actor_id: 1 }); });
++rejected('redacted bypass with changed revision', s => { delete s.rules.bypass_actors; s.rules.updated_at = time(15); });
++rejected('missing revision', s => { delete s.rules.updated_at; });
++rejected('wrong ruleset target', s => { s.rules.target = 'tag'; });
++rejected('non-strict', s => { s.rules.rules[3].parameters.strict_required_status_checks_policy = false; });
++rejected('wrong required app', s => { s.rules.rules[3].parameters.required_status_checks[0].integration_id = 1144995; });
++rejected('thread rule removed', s => { s.rules.rules[2].parameters.required_review_thread_resolution = false; });
++for (const token of ['PRE_REVIEW_CHANGES_REQUIRED', 'TECHNICAL_CHANGES_REQUIRED', 'ACCEPTANCE_CHANGES_REQUIRED', 'HUMAN_GATE_REVOKED']) {
++  rejected(`later direct ${token}`, s => { s.comments.push(adverseRecord(token)); });
++  const direct = adverseRecord(token);
++  const rawEvidence = fixture();
++  rawEvidence.comments.push({ ...direct, body: `Role: codex_executor\n${token}: WOS-GOV-010 / PR #133 / exact head ${head}` });
++  assert.doesNotThrow(() => verifySnapshot(rawEvidence, input), `raw Executor ${token} is not authority`);
++  ignoredAdverse++;
++  for (const [label, change] of [
++    ['backtick fence', record => { record.body = `\`\`\`text\n${record.body}\n\`\`\``; }],
++    ['tilde fence', record => { record.body = `~~~text\n${record.body}\n~~~`; }],
++    ['HTML comment', record => { record.body = `<!--\n${record.body}\n-->`; }],
++    ['HTML wrapper', record => { record.body = `<details>\n${record.body}\n</details>`; }],
++    ['blockquote', record => { record.body = record.body.split('\n').map(line => `> ${line}`).join('\n'); }],
++    ['copied transcript', record => { record.body = `Copied evidence only:\n${record.body}`; }],
++    ['Executor role', record => { record.body = record.body.replace(/^Role: .+$/m, 'Role: codex_executor'); }],
++    ['missing role', record => { record.body = record.body.replace(/^Role: .+\n/m, ''); }],
++    ['duplicate role', record => { record.body = record.body.replace(/^Role: (.+)$/m, 'Role: $1\nRole: $1'); }],
++    ['different Issue', record => { record.issue_url = record.issue_url.replace('/132', '/131'); }],
++    ['edited evidence', record => { record.updated_at = time(26); }],
++    ['different actor', record => { record.user = { login: 'someone', id: 1 }; }],
++    ['different task', record => { record.body = record.body.replaceAll('WOS-GOV-010', 'WOS-GOV-0100'); }],
++  ]) {
++    const snapshot = fixture(), record = clone(direct);
++    change(record);
++    snapshot.comments.push(record);
++    assert.doesNotThrow(() => verifySnapshot(snapshot, input), `${label} ${token} must remain evidence, not authority`);
++    ignoredAdverse++;
++  }
++}
++rejected('adverse PR review before mechanical evidence still blocks', s => {
++  const record = adverseRecord('PRE_REVIEW_CHANGES_REQUIRED', 15);
++  delete record.issue_url;
++  delete record.created_at;
++  delete record.updated_at;
++  s.reviews.push({ ...record, commit_id: head, submitted_at: time(15) });
++});
++const wrongCommit = fixture();
++wrongCommit.reviews.push({ ...adverseRecord('PRE_REVIEW_CHANGES_REQUIRED'), commit_id: base, submitted_at: time(25) });
++assert.doesNotThrow(() => verifySnapshot(wrongCommit, input), 'PR review must bind its actual commit');
++ignoredAdverse++;
++for (const [label, change] of [
++  ['reused Executor session', record => { record.body = record.body.replace('Executor session reused: no', 'Executor session reused: yes'); }],
++  ['non-fresh reviewer', record => { record.body = record.body.replace('Fresh context: yes', 'Fresh context: no'); }],
++  ['incomplete diff', record => { record.body = record.body.replace('Complete diff reviewed: yes', 'Complete diff reviewed: no'); }],
++]) {
++  const snapshot = fixture(), record = adverseRecord('PRE_REVIEW_CHANGES_REQUIRED');
++  change(record);
++  snapshot.comments.push(record);
++  assert.doesNotThrow(() => verifySnapshot(snapshot, input), `${label} is not Independent Review authority`);
++  ignoredAdverse++;
++}
++
++async function simulation(change = () => {}, selected = input) {
++  let snapshot = fixture(selected), collected = 0;
++  const collect = async () => { collected++; change(snapshot, collected); return clone(snapshot); };
++  try { return { result: await verifyNative(selected, collect), collected }; }
++  catch (error) { return { error, collected }; }
++}
++
++function verifyFinalBindingScheduling(workflow) {
++  const sections = workflow.split(/^  final-binding:\n/m);
++  assert.equal(sections.length, 2, 'exactly one FINAL binding job definition');
++  const job = sections[1].split(/^  [\w-]+:\n/m)[0];
++  assert(job.includes('    needs: [classify-pr-scope, required]\n'));
++  const condition = job.match(/^    if: >-\n((?:      .+\n)+)/m)?.[1].trim();
++  // This exact boolean-only subset is shared by GitHub expressions and JS.
++  // Evaluate the source predicate, not a separately maintained copy of it.
++  assert.deepEqual(condition?.split(/\s*&&\s*/), [
++    '!cancelled()', "github.event_name == 'workflow_dispatch'", "inputs.certification_stage == 'FINAL'",
++    "needs['classify-pr-scope'].result == 'success'", "needs['classify-pr-scope'].outputs.stage == 'FINAL'",
++    "needs.required.result == 'success'",
++  ]);
++  const name = job.match(/^    name: (.+)$/m)[1];
++  const initial = { event: 'workflow_dispatch', requested: 'FINAL', stage: 'FINAL', classifier: 'success',
++    required: 'success', cancelled: false, optional: ['skipped', 'skipped', 'skipped', 'skipped'] };
++  const schedule = (state, predicate = condition) => {
++    const context = { github: { event_name: state.event },
++      inputs: { certification_stage: state.requested, pre_review_authority: input.preReview },
++      needs: { 'classify-pr-scope': { result: state.classifier,
++        outputs: { stage: state.stage, task_id: input.task, profile: input.profile, base_sha: base } },
++      required: { result: state.required } }, cancelled: () => state.cancelled };
++    // Model GitHub's implicit success()/ancestor-skip guard. A live FINAL must
++    // still prove the real scheduler; this local model is not CI authority.
++    const explicitStatus = /\b(?:success|failure|always|cancelled)\s*\(/.test(predicate);
++    const implicitSuccess = !state.cancelled && [state.classifier, state.required, ...state.optional].every(value => value === 'success');
++    if ((!explicitStatus && !implicitSuccess) || !vm.runInNewContext(predicate, context)) return [];
++    return [{ id: 12, run_id: 100, status: 'completed', conclusion: 'success',
++      name: name.replace(/\$\{\{\s*(.*?)\s*\}\}/g, (_, expression) => vm.runInNewContext(expression, context)) }];
++  };
++  const binding = schedule(initial);
++  assert.equal(binding.length, 1, 'optional ancestor skips must not suppress successful FINAL binding');
++  const snapshot = fixture();
++  snapshot.jobs = [snapshot.jobs[0], ...binding];
++  assert.equal(verifySnapshot(snapshot, input).final, 100, 'scheduled exact binding satisfies the unchanged verifier');
++  assert.equal(schedule({ ...initial, optional: ['success'] }).length, 1);
++  assert.equal(schedule(initial, condition.replace(/^!cancelled\(\)\s*&&\s*/, '')).length, 0,
++    'regression reproduces the implicit skip that blocked live FINAL 33613591709');
++  const negatives = [
++    { event: 'push' }, { event: 'pull_request' }, { cancelled: true },
++    { requested: 'PRECHECK' }, { requested: 'MERGE_AUTHORITY' },
++    { stage: 'PRECHECK' }, { stage: 'MERGE_AUTHORITY' }, { stage: '' },
++  ];
++  for (const result of ['failure', 'skipped', 'cancelled', '', undefined]) {
++    negatives.push({ classifier: result }, { required: result });
++  }
++  for (const change of negatives) assert.equal(schedule({ ...initial, ...change }).length, 0, `binding must reject ${JSON.stringify(change)}`);
++  return { positive: 2, negative: negatives.length, implicitSkipReproduction: 1 };
++}
++
++(async () => {
++  let result = await simulation();
++  assert.equal(result.result.candidate, candidate);
++  assert.equal(result.collected, 2);
++  for (const change of [
++    s => { s.pr.head.sha = 'e'.repeat(40); },
++    s => { s.comments.push(adverseRecord('HUMAN_GATE_REVOKED')); },
++    s => { s.threads++; },
++    s => { s.candidate.sha = 'e'.repeat(40); },
++  ]) {
++    result = await simulation((s, n) => { if (n === 2) change(s); });
++    assert(result.error, 'drift during read-only verification must fail');
++  }
++  result = await simulation(s => { s.gate.body = ''; });
++  assert(result.error);
++  result = await simulation(s => { s.pr.mergeable_state = 'blocked'; });
++  assert(!result.error, 'running native job cannot yet make GitHub clean; Finalize must inspect after completion');
++  const low = { ...input, profile: 'LOW_FOCUSED', assurance: 'LOW', reviewFloor: 'OPTIONAL', preReview: '' };
++  result = await simulation(() => {}, low);
++  assert.equal(result.result.review, 'none', 'LOW adds no independent-review lifecycle');
++
++  const workflow = fs.readFileSync(path.join(__dirname, '../../.github/workflows/ci.yml'), 'utf8');
++  const scheduling = verifyFinalBindingScheduling(workflow);
++  assert(!workflow.includes('MERGE_AUTHORITY') && !workflow.includes('merge_authority:'), 'retired dispatch path absent');
++  assert(!workflow.includes('checks: write'));
++  const bridgePath = path.join(__dirname, '../../.github/workflows/merge-authority.yml');
++  const bridge = fs.readFileSync(bridgePath, 'utf8');
++  const parsed = JSON.parse(execFileSync('ruby', ['-rjson', '-ryaml', '-e', 'puts YAML.load_file(ARGV[0]).to_json', bridgePath], { encoding: 'utf8' }));
++  assert.deepEqual(parsed.on || parsed.true, { pull_request: { branches: ['main'], types: ['ready_for_review'] } });
++  assert.deepEqual(parsed.permissions, { actions: 'read', contents: 'read', issues: 'read', 'pull-requests': 'read', checks: 'read' });
++  assert.equal(parsed.jobs.required.if, 'always()');
++  assert.equal(parsed.jobs.required.needs, 'scope');
++  const expression = parsed.jobs.required.name.slice(3, -2).trim();
++  for (const status of ['success', 'failure', 'skipped', 'cancelled', '']) {
++    for (const route of ['governed', 'direct', '', undefined, 'invalid']) {
++      const name = vm.runInNewContext(expression, { needs: { scope: { result: status, outputs: { route } } } });
++      assert.equal(name, status === 'success' && route === 'direct' ? 'Native bridge not applicable to DIRECT' : 'Required CI');
++    }
++  }
++  const guard = parsed.jobs.required.steps[0];
++  assert(!guard.if && !guard['continue-on-error']);
++  for (const status of ['success', 'failure', 'skipped', 'cancelled', '']) {
++    for (const route of ['governed', 'direct', '', 'invalid']) {
++      let passes = false;
++      try { execFileSync('bash', ['-e', '-c', guard.run], { env: { ...process.env, SCOPE_RESULT: status, SCOPE_ROUTE: route }, stdio: 'ignore' }); passes = true; } catch {}
++      assert.equal(passes, status === 'success' && ['governed', 'direct'].includes(route));
++    }
++  }
++  const normal = parsed.jobs.required.steps.at(-1);
++  assert.equal(normal.if, "needs.scope.outputs.route != 'direct'");
++  assert(!normal['continue-on-error'] && normal.run.endsWith('--verify\n'));
++  const scope = parsed.jobs.scope.steps.at(-1).run;
++  // Both jobs load exactly the same trusted source before their different mode.
++  assert.equal(scope.slice(0, scope.lastIndexOf('node ')), normal.run.slice(0, normal.run.lastIndexOf('node ')));
++  for (const snippet of ['persist-credentials: false', 'git show "$authority_source:.github/scripts/merge-candidate-authority.js"',
++    'test "$pr_number" = 133', 'test "$base_sha" = 545b82b452adfc4d43fd4744f3f83d7a8f5e68fb',
++    'authority_source=$head_sha', 'verify-pre-review-authority.sh', 'validate-pre-review-record.sh']) assert(bridge.includes(snippet));
++  assert(!bridge.includes('workflow_dispatch') && !bridge.includes('checks: write') && !bridge.includes('continue-on-error'));
++  assert(!bridge.includes('npm ') && !bridge.includes('wp-env') && !bridge.includes('upload-artifact'));
++  const verifier = fs.readFileSync(path.join(__dirname, '../../.github/scripts/merge-candidate-authority.js'), 'utf8');
++  assert(!/\bmaterialize\b|['"]PATCH['"]|['"]DELETE['"]/.test(verifier));
++  assert(verifier.includes("method === 'GET' || (endpoint === 'graphql' && method === 'POST'"));
++  assert(!/liveApi\([^;]*check-runs[^;]*['"]POST['"]/.test(verifier));
++  console.log('merge-candidate-authority-contract-ok negative-cases=' + assertions + ' untrusted-adverse-cases=' + ignoredAdverse +
++    ' final-binding-scheduling=' + JSON.stringify(scheduling) + ' native-scope-topology=20-cases live-writes=none');
++})().catch(error => { console.error(error); process.exitCode = 1; });
+diff --git a/tests/ci/workflow-contract.sh b/tests/ci/workflow-contract.sh
+index 89b3f51..e061549 100755
+--- a/tests/ci/workflow-contract.sh
++++ b/tests/ci/workflow-contract.sh
+@@ -6,0 +7 @@ ci_workflow="$repo_root/.github/workflows/ci.yml"
++bridge_workflow="$repo_root/.github/workflows/merge-authority.yml"
+@@ -43 +44 @@ assert_before() {
+-ruby -e 'require "yaml"; ARGV.each { |file| Psych.parse_file(file) }' "$ci_workflow" "$main_workflow" "$package_workflow"
++ruby -e 'require "yaml"; ARGV.each { |file| Psych.parse_file(file) }' "$ci_workflow" "$main_workflow" "$package_workflow" "$bridge_workflow"
+@@ -56,0 +58,12 @@ assert_contains "$ci_workflow" 'pre_review_authority:'
++assert_absent "$ci_workflow" 'merge_authority:'
++assert_absent "$ci_workflow" 'MERGE_AUTHORITY'
++assert_contains "$ci_workflow" 'name: FINAL binding /'
++assert_absent "$ci_workflow" 'checks: write'
++assert_contains "$bridge_workflow" 'types: [ready_for_review]'
++assert_contains "$bridge_workflow" 'checks: read'
++assert_contains "$bridge_workflow" 'if: always()'
++assert_absent "$bridge_workflow" 'workflow_dispatch'
++assert_absent "$bridge_workflow" 'checks: write'
++assert_absent "$bridge_workflow" 'continue-on-error'
++assert_occurrences "$ci_workflow" 'node tests/ci/merge-candidate-authority-contract.js' 3
++assert_contains "$ci_workflow" 'if: always()'

@@ -391,8 +391,50 @@ function verifyFinalBindingScheduling(workflow) {
   const scope = parsed.jobs.scope.steps.at(-1).run;
   // Both jobs load exactly the same trusted source before their different mode.
   assert.equal(scope.slice(0, scope.lastIndexOf('node ')), normal.run.slice(0, normal.run.lastIndexOf('node ')));
+  // Execute the source-bound fallback itself. The original GOV-010 tuple must
+  // not select head-owned authority, nor may a partial/wrong GOV-011 tuple.
+  const bootstrap = scope.slice(scope.indexOf('authority_source=$base_sha'), scope.indexOf('git show "$authority_source:'));
+  assert(bootstrap && !bootstrap.includes('GOV-010') && !bootstrap.includes('HIGH_DEEP'));
+  const bootstrapRoot = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'wcos-bootstrap-'));
+  let bootstrapCases = 0;
+  try {
+    const eventFile = path.join(bootstrapRoot, 'event.json');
+    const issue = { ...actor, state: 'open', body: '- **Task:** `WOS-GOV-011`\n- **CI profile floor:** `HIGH_FINANCIAL`\n- **Assurance floor:** `HIGH`\n- **Independent review floor:** `REQUIRED`' };
+    const event = { pull_request: { body: '- Task: `WOS-GOV-011`\n- Canonical Issue: #134' } };
+    const checkBootstrap = (change = {}, valid = false) => {
+      const currentIssue = clone(issue), currentEvent = clone(event);
+      change.issue?.(currentIssue);
+      change.event?.(currentEvent);
+      fs.writeFileSync(eventFile, JSON.stringify(currentEvent));
+      const sourceBase = change.base || '545b82b452adfc4d43fd4744f3f83d7a8f5e68fb';
+      const script = `set -euo pipefail
+git() { test "$*" = "cat-file -e $base_sha:.github/scripts/merge-candidate-authority.js" || exit 9; return 1; }
+gh() { test "$*" = "api repos/yoohwz/wc-order-splitter/issues/134" || exit 9; printf '%s' "$ISSUE_JSON"; }
+${bootstrap}
+test "$authority_source" = "$head_sha"
+`;
+      const result = require('node:child_process').spawnSync('bash', ['-c', script], { encoding: 'utf8',
+        env: { ...process.env, base_sha: sourceBase, head_sha: head, pr_number: change.pr || '135',
+          GITHUB_REPOSITORY: repo, GITHUB_EVENT_PATH: eventFile, ISSUE_JSON: JSON.stringify(currentIssue) } });
+      assert.equal(result.status === 0, valid, result.stderr || JSON.stringify(change));
+      bootstrapCases++;
+    };
+    checkBootstrap({}, true);
+    for (const change of [
+      { base }, { pr: '133' }, { pr: '136' },
+      { event: e => { e.pull_request.body = e.pull_request.body.replace('GOV-011', 'GOV-010'); } },
+      { event: e => { e.pull_request.body = e.pull_request.body.replace('#134', '#132'); } },
+      { issue: i => { i.user.login = 'other'; } }, { issue: i => { i.user.id++; } },
+      { issue: i => { i.author_association = 'CONTRIBUTOR'; } }, { issue: i => { i.state = 'closed'; } },
+      { issue: i => { i.pull_request = {}; } },
+      { issue: i => { i.body = i.body.replace('GOV-011', 'GOV-010'); } },
+      { issue: i => { i.body = i.body.replace('HIGH_FINANCIAL', 'HIGH_DEEP'); } },
+      { issue: i => { i.body = i.body.replace('`HIGH`', '`LOW`'); } },
+      { issue: i => { i.body = i.body.replace('REQUIRED', 'OPTIONAL'); } },
+    ]) checkBootstrap(change);
+  } finally { fs.rmSync(bootstrapRoot, { recursive: true, force: true }); }
   for (const snippet of ['persist-credentials: false', 'git show "$authority_source:.github/scripts/merge-candidate-authority.js"',
-    'test "$pr_number" = 133', 'test "$base_sha" = 545b82b452adfc4d43fd4744f3f83d7a8f5e68fb',
+    'test "$pr_number" = 135', 'test "$base_sha" = 545b82b452adfc4d43fd4744f3f83d7a8f5e68fb',
     'authority_source=$head_sha', 'verify-pre-review-authority.sh', 'validate-pre-review-record.sh']) assert(bridge.includes(snippet));
   assert(!bridge.includes('workflow_dispatch') && !bridge.includes('checks: write') && !bridge.includes('continue-on-error'));
   assert(!bridge.includes('npm ') && !bridge.includes('wp-env') && !bridge.includes('upload-artifact'));
@@ -401,5 +443,5 @@ function verifyFinalBindingScheduling(workflow) {
   assert(verifier.includes("method === 'GET' || (endpoint === 'graphql' && method === 'POST'"));
   assert(!/liveApi\([^;]*check-runs[^;]*['"]POST['"]/.test(verifier));
   console.log('merge-candidate-authority-contract-ok negative-cases=' + assertions + ' untrusted-adverse-cases=' + ignoredAdverse +
-    ' final-binding-scheduling=' + JSON.stringify(scheduling) + ' native-scope-topology=20-cases live-writes=none');
+    ' final-binding-scheduling=' + JSON.stringify(scheduling) + ' native-scope-topology=20-cases bootstrap-cases=' + bootstrapCases + ' live-writes=none');
 })().catch(error => { console.error(error); process.exitCode = 1; });

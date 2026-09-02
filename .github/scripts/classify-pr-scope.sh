@@ -71,7 +71,8 @@ git cat-file -e "$head_sha^{commit}" 2>/dev/null || fail_closed unresolved_head_
 diff_records=$(mktemp)
 resulting_file=$(mktemp)
 changed_paths=$(mktemp)
-trap 'rm -f "$diff_records" "$resulting_file" "$changed_paths"' EXIT
+changed_content=$(mktemp)
+trap 'rm -f "$diff_records" "$resulting_file" "$changed_paths" "$changed_content"' EXIT
 
 if ! git diff --name-status --no-renames --no-ext-diff -z "$base_sha" "$head_sha" > "$diff_records"; then
   fail_closed unresolved_pr_diff
@@ -307,12 +308,29 @@ else
       || "$path" == inc/domain/class-wcos-merge-journal-context.php \
       || "$path" == *financial* || "$path" == *refund* || "$path" == *payment* || "$path" == *price* \
       || "$path" == *money* || "$path" == *reduced-stock* || "$path" == *stock-marker* \
-      || "$path" == *order-totals* || "$path" == *tax-variation* ]] \
-      || git diff --unified=0 --no-ext-diff "$base_sha" "$head_sha" -- "$path" \
-        | sed -n '/^[+-][^+-]/p' \
-        | LC_ALL=C grep -Eiq '(^|[^[:alnum:]])(financial|settlement|total|totals|subtotal|fee|fees|coupon|coupons|transaction|currency|amount|tax|taxes|refund|payment|price|money|_reduced_stock|stock)([^[:alnum:]]|$)'; then
+      || "$path" == *order-totals* || "$path" == *tax-variation* ]]; then
       raise_floor 4 financial_or_stock_authority financial
       continue
+    fi
+
+    # Finish both producers before scanning: grep -q on their pipe can turn a
+    # real match into SIGPIPE/fallthrough under pipefail. Keep producer/filter
+    # failure distinct from a successful scan with no match. The file reader
+    # also consumes all input (no -q), so a read error cannot hide behind a hit.
+    if ! git diff --unified=0 --no-ext-diff "$base_sha" "$head_sha" -- "$path" \
+      | sed -n '/^[+-][^+-]/p' > "$changed_content"; then
+      raise_floor 4 unresolved_financial_content_scan financial
+      continue
+    fi
+    if LC_ALL=C grep -Ei '(^|[^[:alnum:]])(financial|settlement|total|totals|subtotal|fee|fees|coupon|coupons|transaction|currency|amount|tax|taxes|refund|payment|price|money|_reduced_stock|stock)([^[:alnum:]]|$)' "$changed_content" > /dev/null; then
+      raise_floor 4 financial_or_stock_authority financial
+      continue
+    else
+      scan_status=$?
+      if [[ "$scan_status" -ne 1 ]]; then
+        raise_floor 4 unresolved_financial_content_scan financial
+        continue
+      fi
     fi
 
     case "$path" in
