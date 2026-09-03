@@ -94,7 +94,7 @@
     margin-bottom: 6px;
 }
 
-.wcos-modal-upsell-dismiss {
+.wcos-modal-upsell .wcos-modal-upsell-dismiss {
     margin-left: 14px;
     color: #646970;
     white-space: nowrap;
