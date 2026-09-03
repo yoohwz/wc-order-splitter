@@ -290,6 +290,103 @@ for inherited in list(Product.__dict__):
 
 
 class GithubContracts(unittest.TestCase):
+    def http_api(self, responses):
+        with patch.dict(os.environ, {'GH_TOKEN': 'fixture-not-a-real-token'}):
+            api = gh.API()
+
+        def respond(request, timeout):
+            self.assertEqual(timeout, 60)
+            return io.BytesIO(pkg.encoded(responses[request.full_url]))
+
+        # Keep production request/get/pages validation; replace only HTTP transport.
+        api.opener.open = Mock(side_effect=respond)
+        return api
+
+    def test_api_path_guard_allows_compare_repository_routes_and_queries(self):
+        prefix = f'repos/{pkg.REPOSITORY}/'
+        paths = [prefix + endpoint for endpoint in (
+            f'compare/{BASE}...{CERT_HEAD}', 'branches/main', 'git/ref/tags/1.5.0',
+            'actions/runs/33727158970/artifacts?per_page=100&page=2',
+            'releases/1/assets?name=release..zip', 'releases?note=../query-only')]
+        api = self.http_api({'https://api.github.com/' + path: {'ok': True} for path in paths})
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertEqual(api.request(path), {'ok': True})
+                request = api.opener.open.call_args.args[0]
+                self.assertEqual(request.full_url, 'https://api.github.com/' + path)
+                self.assertEqual(request.get_method(), 'GET')
+        self.assertEqual(api.opener.open.call_count, len(paths))
+
+        upload = prefix + 'releases/1/assets?name=release..zip'
+        api = self.http_api({'https://uploads.github.com/' + upload: {'id': 1}})
+        self.assertEqual(api.request(upload, method='POST', upload=b'fixture'), {'id': 1})
+        request = api.opener.open.call_args.args[0]
+        self.assertEqual(request.full_url, 'https://uploads.github.com/' + upload)
+        self.assertEqual(request.data, b'fixture')
+
+    def test_api_path_guard_rejects_traversal_and_non_repository_before_http(self):
+        prefix = f'repos/{pkg.REPOSITORY}/'
+        paths = ['../' + prefix + 'branches/main', '/repos/' + pkg.REPOSITORY + '/branches/main',
+                 'repos/attacker/repository/branches/main', prefix[:-1] + '-other/branches/main',
+                 'users/yoohwz', 'https://example.test/' + prefix + 'branches/main',
+                 'http://api.github.com/' + prefix + 'branches/main', '//example.test/' + prefix]
+        paths += [prefix + endpoint for endpoint in (
+            '../outside', 'git/../outside', 'git/..', './branches/main', 'git/./refs', 'git/.',
+            '%2e%2e/outside', 'git/%2E%2e/refs', 'git/.%2e', '%2e/branches/main',
+            'git%2f..%2foutside', 'git/%2E%2E%2Foutside', 'git/%2e%2e?per_page=100')]
+        api = self.http_api({})
+        for path in paths:
+            for kwargs in ({}, {'method': 'POST', 'upload': b'fixture'}):
+                with self.subTest(path=path, upload=bool(kwargs)), self.assertRaisesRegex(ValueError, 'unsafe GitHub API path'):
+                    api.request(path, **kwargs)
+        api.opener.open.assert_not_called()
+
+    def test_api_pages_preserves_existing_query(self):
+        prefix = f'https://api.github.com/repos/{pkg.REPOSITORY}/'
+        first = [{'id': number} for number in range(100)]
+        second = [{'id': 100}]
+        urls = [prefix + f'pulls?state=closed&per_page=100&page={page}' for page in (1, 2)]
+        api = self.http_api(dict(zip(urls, (first, second))))
+        self.assertEqual(api.pages('pulls?state=closed'), first + second)
+        self.assertEqual([call.args[0].full_url for call in api.opener.open.call_args_list], urls)
+
+    def test_failed_prepare_provenance_through_production_http_guard(self):
+        # Run 33744352719 failed before HTTP on this protected-main Compare route.
+        control = 'f7a6ad93a597a58cedd8db654f572fe4d9dfbabe'
+        tree = '0c3e2ba937b21a24100e1402f11e267531501abc'
+        repository = {'full_name': pkg.REPOSITORY}
+        pull = {'merged_at': '2026-09-03T07:47:46Z', 'base': {'ref': 'main', 'repo': repository},
+                'merge_commit_sha': BASE, 'head': {'sha': CERT_HEAD}}
+        check = {'id': 1, 'name': 'Required CI', 'app': {'slug': 'github-actions'},
+                 'status': 'completed', 'conclusion': 'success',
+                 'details_url': f'https://github.com/{pkg.REPOSITORY}/actions/runs/33726798296/job/1'}
+        responses = {
+            'branches/main': {'protected': True, 'commit': {'sha': control}},
+            f'compare/{control}...{control}': {'status': 'identical'},
+            f'compare/{BASE}...{control}': {'status': 'ahead'},
+            f'commits/{BASE}/pulls?per_page=100&page=1': [pull],
+            f'git/commits/{BASE}': {'tree': {'sha': tree}},
+            f'git/commits/{CERT_HEAD}': {'tree': {'sha': tree}},
+            f'commits/{CERT_HEAD}/check-runs?per_page=100&page=1': {'check_runs': [check]},
+            'actions/runs/33726798296': {'repository': repository, 'head_repository': repository,
+                'path': '.github/workflows/ci.yml', 'event': 'pull_request', 'head_sha': CERT_HEAD,
+                'status': 'completed', 'conclusion': 'success'},
+        }
+        prefix = f'https://api.github.com/repos/{pkg.REPOSITORY}/'
+        api = self.http_api({prefix + endpoint: value for endpoint, value in responses.items()})
+        env = {'GITHUB_REPOSITORY': pkg.REPOSITORY, 'GITHUB_REF': 'refs/heads/main', 'GITHUB_REF_PROTECTED': 'true',
+               'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_SHA': control,
+               'GITHUB_WORKFLOW_SHA': control, 'GITHUB_WORKFLOW_REF': f'{pkg.REPOSITORY}/{gh.PREPARE}@refs/heads/main'}
+        with patch.dict(os.environ, env):
+            self.assertEqual(gh.control_context(api, gh.PREPARE), control)
+        self.assertEqual(gh.accepted_source(api, BASE), {
+            'accepted_sha': BASE, 'reviewed_head': CERT_HEAD, 'required_ci_run_id': 33726798296})
+        requests = [call.args[0] for call in api.opener.open.call_args_list]
+        compares = [request.full_url for request in requests if '/compare/' in request.full_url]
+        self.assertEqual(compares, [prefix + f'compare/{control}...{control}'] +
+                         [prefix + f'compare/{BASE}...{control}'] * 2)
+        self.assertTrue(all(request.get_method() == 'GET' for request in requests))
+
     def test_api_binary_download_headers_and_error_classification(self):
         with patch.dict(os.environ, {'GH_TOKEN': 'fixture-not-a-real-token'}):
             api = gh.API()
