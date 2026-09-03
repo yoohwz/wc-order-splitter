@@ -106,25 +106,21 @@ final class WCOS_Premium_Upsell {
 			'wcosPremiumUpsell',
 			array(
 				'productUrl' => self::product_url(),
-				'ctaLabel' => __('Explore Advanced Order Actions', 'wc-order-splitter'),
+				'ctaLabel' => __('Explore Advanced Order Actions →', 'wc-order-splitter'),
 				'dismissLabel' => __('Dismiss', 'wc-order-splitter'),
 				'splitHint' => __('Need more routing options? Advanced Order Actions adds product group, tag, attribute, and conditional routing. Vendor and bundle routing require compatible marketplace or bundle integrations.', 'wc-order-splitter'),
-				'splitHintCta' => __('See advanced split methods', 'wc-order-splitter'),
+				'splitHintTitle' => __('Need more advanced routing?', 'wc-order-splitter'),
 				'thresholds' => array(
 					'split' => 3,
 					'duplicate' => 2,
 					'merge' => 2,
-				),
-				'executeActions' => array(
-					'wcos_split_execute' => 'split',
-					'wcos_split_strategy_execute' => 'split',
-					'wcos_duplicate_execute' => 'duplicate',
-					'wcos_merge_execute' => 'merge',
+					'return' => 2,
 				),
 				'actionTips' => array(
 					'split' => __('Splitting orders repeatedly? Advanced Order Actions can automate split or merge rules, show queued work and failure or skip reasons, and retry eligible failures.', 'wc-order-splitter'),
 					'duplicate' => __('Need more control over duplicates? Advanced Order Actions can choose full or itemless contents, status, payment and customer-note behavior, preview the result, and run recoverable Bulk Duplicate batches.', 'wc-order-splitter'),
 					'merge' => __('Merging orders regularly? Advanced Order Actions adds dry-run Merge previews and automatic same-customer merging within a configured time window.', 'wc-order-splitter'),
+					'return' => __('Need more operational control? Advanced Order Actions adds Action Logs and guarded rollback for supported Split, Merge, Return and Duplicate workflows.', 'wc-order-splitter'),
 				),
 			)
 		);

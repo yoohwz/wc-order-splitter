@@ -1,340 +1,194 @@
-(function($) {
+(function() {
     'use strict';
 
     var config = window.wcosPremiumUpsell || {};
+    // Keep V1 dismissals/shown campaigns; do not replay its later-page notices.
     var storageKey = 'wcosPremiumUpsellStateV1';
-    var legacyKeys = [
-        'wcosPostActionTip',
-        'wcosPostSplitTip',
-        'wcosPostActionTipDismissedAt'
-    ];
-    var validActions = ['split', 'duplicate', 'merge'];
+    var validActions = ['split', 'duplicate', 'merge', 'return'];
     var seenLimit = 40;
+    var memoryState = null;
+    var storageFailed = false;
+    var resultSelectors = {
+        split: '.wcos-split-result, .wcos-strategy-result',
+        duplicate: '.wcos-duplicate-result',
+        merge: '.wcos-merge-result',
+        return: '.wcos-return-result'
+    };
+
+    function thresholdFor(action) {
+        var threshold = parseInt((config.thresholds || {})[action], 10);
+        return isFinite(threshold) && threshold > 0 ? Math.min(threshold, 3) : 0;
+    }
 
     function emptyState() {
         return {
-            usage: { split: 0, duplicate: 0, merge: 0 },
+            usage: { split: 0, duplicate: 0, merge: 0, return: 0 },
             seenOperations: [],
-            pending: {},
             shown: {},
             dismissed: {},
             hints: { splitRoutingDismissed: false }
         };
     }
 
-    function getStoredItem(key) {
-        try {
-            return window.localStorage.getItem(key);
-        } catch (error) {
-            return null;
-        }
-    }
-
-    function setStoredItem(key, value) {
-        try {
-            window.localStorage.setItem(key, value);
-        } catch (error) {}
-    }
-
-    function removeStoredItem(key) {
-        try {
-            window.localStorage.removeItem(key);
-        } catch (error) {}
-    }
-
-    function isValidAction(action) {
-        return validActions.indexOf(action) !== -1;
-    }
-
-    function normalizeCount(value) {
-        var count = parseInt(value, 10);
-        return isFinite(count) && count > 0 ? Math.min(count, seenLimit) : 0;
-    }
-
     function normalizeState(rawState) {
         var normalized = emptyState();
         var state = rawState && typeof rawState === 'object' ? rawState : {};
-        var i;
-
-        for (i = 0; i < validActions.length; i++) {
-            var action = validActions[i];
-            normalized.usage[action] = normalizeCount(state.usage && state.usage[action]);
-            normalized.pending[action] = !!(state.pending && state.pending[action]);
+        validActions.forEach(function(action) {
+            var count = parseInt((state.usage || {})[action], 10);
+            normalized.usage[action] = isFinite(count) && count > 0 ? Math.min(count, thresholdFor(action)) : 0;
             normalized.shown[action] = !!(state.shown && state.shown[action]);
             normalized.dismissed[action] = !!(state.dismissed && state.dismissed[action]);
-        }
-
+        });
         if (Array.isArray(state.seenOperations)) {
-            normalized.seenOperations = state.seenOperations
-                .filter(function(operation) {
-                    return typeof operation === 'string' && operation.length > 0 && operation.length <= 120;
-                })
-                .slice(-seenLimit);
+            normalized.seenOperations = state.seenOperations.filter(function(operation, index, operations) {
+                return typeof operation === 'string' && /^(split|duplicate|merge|return):[a-z0-9_-]{1,100}$/.test(operation) && operations.indexOf(operation) === index;
+            }).slice(-seenLimit);
         }
-
         normalized.hints.splitRoutingDismissed = !!(state.hints && state.hints.splitRoutingDismissed);
-
         return normalized;
     }
 
     function readState() {
-        var stored = getStoredItem(storageKey);
-        if (!stored) {
-            return emptyState();
+        if (storageFailed) {
+            return normalizeState(memoryState);
         }
-
         try {
-            return normalizeState(JSON.parse(stored));
+            var stored = window.localStorage.getItem(storageKey);
+            return stored ? normalizeState(JSON.parse(stored)) : normalizeState(memoryState);
         } catch (error) {
-            return emptyState();
+            storageFailed = true;
+            return normalizeState(memoryState);
         }
     }
 
     function saveState(state) {
-        setStoredItem(storageKey, JSON.stringify(normalizeState(state)));
-    }
-
-    function cleanupLegacyState() {
-        legacyKeys.forEach(function(key) {
-            removeStoredItem(key);
-        });
-    }
-
-    function actionFromBody(body) {
-        if (!body) {
-            return '';
-        }
-
-        if (typeof body === 'string') {
-            try {
-                return new URLSearchParams(body).get('action') || '';
-            } catch (error) {
-                var match = body.match(/(?:^|&)action=([^&]+)/);
-                return match ? decodeURIComponent(match[1].replace(/\+/g, ' ')) : '';
-            }
-        }
-
-        if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
-            return body.get('action') || '';
-        }
-
-        if (typeof FormData !== 'undefined' && body instanceof FormData) {
-            return body.get('action') || '';
-        }
-
-        return '';
-    }
-
-    function thresholdFor(action) {
-        var thresholds = config.thresholds || {};
-        var threshold = parseInt(thresholds[action], 10);
-        return isFinite(threshold) && threshold > 0 ? threshold : 0;
+        memoryState = normalizeState(state);
+        try {
+            window.localStorage.setItem(storageKey, JSON.stringify(memoryState));
+        } catch (error) { storageFailed = true; }
     }
 
     function recordSuccessfulOperation(action, operationId) {
-        if (!isValidAction(action) || typeof operationId !== 'string' || !operationId || operationId.length > 100) {
-            return;
-        }
-
         var state = readState();
         var operationKey = action + ':' + operationId;
         if (state.seenOperations.indexOf(operationKey) !== -1) {
+            return false;
+        }
+        // Saturating counts retain the IDs needed to reach each threshold.
+        // Later traffic cannot evict those IDs and inflate a campaign count.
+        if (state.usage[action] < thresholdFor(action)) {
+            state.seenOperations.push(operationKey);
+            state.usage[action] += 1;
+            saveState(state);
+        }
+        return true;
+    }
+
+    function eligible(action, state) {
+        return thresholdFor(action) > 0 && state.usage[action] >= thresholdFor(action) && !state.shown[action] && !state.dismissed[action];
+    }
+
+    function canPresent() {
+        return !storageFailed && config.productUrl === 'https://yoohw.com/product/woocommerce-advanced-order-actions/';
+    }
+
+    function visibleContent(target) {
+        return target && target.isConnected && target.closest('.wcos-admin-backbone-modal__body') &&
+            !target.closest('footer, [hidden], [aria-hidden="true"], [aria-busy="true"]');
+    }
+
+    function createCard(message, className, dismiss) {
+        var card = document.createElement('aside');
+        card.className = 'wcos-modal-upsell ' + className;
+        var paragraph = document.createElement('p');
+        paragraph.textContent = message;
+        card.appendChild(paragraph);
+        var link = document.createElement('a');
+        link.href = config.productUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = config.ctaLabel || 'Explore Advanced Order Actions →';
+        card.appendChild(link);
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'button-link wcos-modal-upsell-dismiss';
+        button.textContent = config.dismissLabel || 'Dismiss';
+        button.addEventListener('click', function() {
+            dismiss();
+            var result = card.parentNode;
+            card.remove();
+            // Do not strand keyboard focus when the focused dismiss button goes away.
+            var method = result.querySelector('.wcos-split-method-option');
+            (method || result).focus();
+        });
+        card.appendChild(button);
+        return card;
+    }
+
+    function completed(event) {
+        var detail = event.detail || {};
+        var action = detail.action;
+        var result = event.target;
+        if (validActions.indexOf(action) === -1 || detail.status !== 'completed' ||
+            typeof detail.operationId !== 'string' || !/^[a-z0-9_-]{1,100}$/.test(detail.operationId) ||
+            !visibleContent(result) || !result.matches(resultSelectors[action]) || !result.firstElementChild) {
             return;
         }
-
-        state.seenOperations.push(operationKey);
-        state.seenOperations = state.seenOperations.slice(-seenLimit);
-        state.usage[action] = Math.min(normalizeCount(state.usage[action]) + 1, seenLimit);
-
-        var threshold = thresholdFor(action);
-        if (threshold > 0 && state.usage[action] >= threshold && !state.shown[action] && !state.dismissed[action]) {
-            state.pending[action] = true;
+        var root = result.closest('#wc-backbone-modal-dialog');
+        if (!root || root.querySelector('[aria-busy="true"]')) {
+            return;
         }
-
-        saveState(state);
-    }
-
-    function nextPendingAction(state) {
-        var i;
-        for (i = 0; i < validActions.length; i++) {
-            var action = validActions[i];
-            if (state.pending[action] && !state.shown[action] && !state.dismissed[action]) {
-                return action;
-            }
+        // This event comes only after the action client has rendered its verified
+        // result and cleared busy. It carries no order/customer/payment data.
+        if (!recordSuccessfulOperation(action, detail.operationId)) {
+            return;
         }
-        return '';
-    }
-
-    function markCampaignShown(state, action) {
-        if (!isValidAction(action)) {
-            return state;
+        var state = readState();
+        if (!canPresent() || !eligible(action, state) || !(config.actionTips || {})[action] || root.querySelector('.wcos-modal-upsell')) {
+            return;
         }
-
-        state.pending[action] = false;
+        var card = createCard(config.actionTips[action], 'wcos-completed-upsell', function() {
+            var latest = readState();
+            latest.dismissed[action] = true;
+            saveState(latest);
+        });
+        card.setAttribute('data-wcos-upsell-action', action);
+        result.appendChild(card);
+        // No page-load advertising: completion consumes this campaign once.
         state.shown[action] = true;
-        return state;
-    }
-
-    function dismissCampaign(action) {
-        if (!isValidAction(action)) {
-            return;
-        }
-
-        var state = readState();
-        state.dismissed[action] = true;
-        saveState(markCampaignShown(state, action));
-    }
-
-    function dismissSplitHint() {
-        var state = readState();
-        state.hints.splitRoutingDismissed = true;
         saveState(state);
     }
 
-    function renderPendingTip() {
-        if (!config.productUrl || !config.actionTips || $('.wcos-post-action-tip').length) {
+    function splitChooser(event) {
+        var body = event.target;
+        if (!canPresent() || !config.splitHint || !visibleContent(body) ||
+            !body.matches('.wcos-admin-backbone-modal__body') || !body.closest('.wcos-split-method-backbone-modal') ||
+            !body.querySelector('.wcos-split-method-options') || body.querySelector('.wcos-modal-upsell') ||
+            readState().hints.splitRoutingDismissed) {
             return;
         }
-
-        var state = readState();
-        var action = nextPendingAction(state);
-        if (!action || !config.actionTips[action]) {
-            return;
-        }
-
-        var $insertionPoint = $('#woocommerce-order-data').first();
-        if (!$insertionPoint.length) {
-            return;
-        }
-
-        var $notice = $('<div>', {
-            'class': 'notice notice-info wcos-post-action-tip',
-            'data-wcos-upsell-action': action
+        var card = createCard(config.splitHint, 'wcos-split-upgrade-hint', function() {
+            var state = readState();
+            state.hints.splitRoutingDismissed = true;
+            saveState(state);
         });
-        var $paragraph = $('<p>');
-        $paragraph.append(document.createTextNode(config.actionTips[action] + ' '));
-        $('<a>', {
-            href: config.productUrl,
-            target: '_blank',
-            rel: 'noopener noreferrer',
-            text: config.ctaLabel || 'Explore Advanced Order Actions'
-        }).appendTo($paragraph);
-        $notice.append($paragraph);
-
-        $('<button>', {
-            type: 'button',
-            'class': 'notice-dismiss',
-            'aria-label': config.dismissLabel || 'Dismiss'
-        }).append($('<span>', {
-            'class': 'screen-reader-text',
-            text: config.dismissLabel || 'Dismiss'
-        })).appendTo($notice);
-
-        $notice.on('click', '.notice-dismiss', function() {
-            dismissCampaign(action);
-            $notice.remove();
-        });
-
-        $insertionPoint.before($notice);
-        saveState(markCampaignShown(state, action));
+        var heading = document.createElement('strong');
+        heading.textContent = config.splitHintTitle || 'Need more advanced routing?';
+        card.insertBefore(heading, card.firstChild);
+        body.appendChild(card);
     }
 
-    function renderSplitHint() {
-        if (!config.productUrl || !config.splitHint || $('.wcos-split-upgrade-hint').length) {
-            return;
-        }
-
-        if (readState().hints.splitRoutingDismissed) {
-            return;
-        }
-
-        var $launcherArea = $('.wcos-split-launcher-description, .wcos-strategy-launcher-description').last();
-        if (!$launcherArea.length) {
-            $launcherArea = $('.wcos-split-launcher, .wcos-strategy-launcher').last();
-        }
-        if (!$launcherArea.length) {
-            return;
-        }
-
-        var $hint = $('<p>', { 'class': 'description wcos-split-upgrade-hint' });
-        $hint.append(document.createTextNode(config.splitHint + ' '));
-        $('<a>', {
-            href: config.productUrl,
-            target: '_blank',
-            rel: 'noopener noreferrer',
-            text: config.splitHintCta || 'See advanced split methods'
-        }).appendTo($hint);
-
-        $('<button>', {
-            type: 'button',
-            'class': 'button-link wcos-split-upgrade-hint-dismiss',
-            text: config.dismissLabel || 'Dismiss'
-        }).on('click', function() {
-            dismissSplitHint();
-            $hint.remove();
-        }).appendTo($hint);
-
-        $launcherArea.after($hint);
-    }
-
-    function observePayload(action, payload) {
-        if (!isValidAction(action) || !payload || payload.success !== true || !payload.data || typeof payload.data.operation_id !== 'string') {
-            return;
-        }
-
-        recordSuccessfulOperation(action, payload.data.operation_id);
-    }
-
-    function installFetchObserver() {
-        if (typeof window.fetch !== 'function' || window.fetch.__wcosPremiumUpsellObserved) {
-            return;
-        }
-
-        var originalFetch = window.fetch;
-        var observedFetch = function(input, init) {
-            var actionMap = config.executeActions || {};
-            var actionName = actionFromBody(init && init.body);
-            var action = actionMap[actionName];
-            var requestPromise = originalFetch.apply(this, arguments);
-
-            if (!isValidAction(action)) {
-                return requestPromise;
-            }
-
-            return requestPromise.then(function(response) {
-                if (response && typeof response.clone === 'function') {
-                    try {
-                        response.clone().json().then(function(payload) {
-                            observePayload(action, payload);
-                        }).catch(function() {});
-                    } catch (error) {}
-                }
-                return response;
-            });
-        };
-
-        observedFetch.__wcosPremiumUpsellObserved = true;
-        observedFetch.__wcosPremiumUpsellOriginal = originalFetch;
-        window.fetch = observedFetch;
-    }
-
-    cleanupLegacyState();
-
-    $(function() {
-        // Only state from an earlier page lifecycle can render here.
-        renderPendingTip();
-        renderSplitHint();
+    ['wcosPostActionTip', 'wcosPostSplitTip', 'wcosPostActionTipDismissedAt'].forEach(function(key) {
+        try { window.localStorage.removeItem(key); } catch (error) {}
     });
+    // If durable local frequency limits are unavailable, omit advertising.
+    saveState(readState());
 
-    if (window.wcosPremiumUpsellTestHooks && typeof window.wcosPremiumUpsellTestHooks === 'object') {
-        window.wcosPremiumUpsellTestHooks.readState = readState;
-        window.wcosPremiumUpsellTestHooks.recordSuccessfulOperation = recordSuccessfulOperation;
-        window.wcosPremiumUpsellTestHooks.nextPendingAction = nextPendingAction;
-        window.wcosPremiumUpsellTestHooks.markCampaignShown = markCampaignShown;
-        window.wcosPremiumUpsellTestHooks.dismissCampaign = dismissCampaign;
-        window.wcosPremiumUpsellTestHooks.dismissSplitHint = dismissSplitHint;
-        window.wcosPremiumUpsellTestHooks.observePayload = observePayload;
-    }
-
-    installFetchObserver();
-})(jQuery);
+    // Listener failures are isolated from every operational client and control.
+    document.addEventListener('wcos:operation-completed', function(event) {
+        try { completed(event); } catch (error) {}
+    });
+    document.addEventListener('wcos:split-method-chooser', function(event) {
+        try { splitChooser(event); } catch (error) {}
+    });
+})();

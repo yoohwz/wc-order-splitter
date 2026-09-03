@@ -54,6 +54,7 @@
     function openDuplicateModal() {
         var busy = false;
         var completed = false;
+        var completedPresentation = null;
         var state = null;
         var dialog = null;
         var closeButton = null;
@@ -135,6 +136,14 @@
             executeButton.disabled = busy || completed || !state || !confirmCheckbox.checked;
             cancelButton.disabled = busy;
             closeButton.disabled = busy;
+            if (!busy && completedPresentation) {
+                var presentation = completedPresentation;
+                completedPresentation = null;
+                // Optional presentation must never change the completed operation.
+                try {
+                    resultBox.dispatchEvent(new CustomEvent('wcos:operation-completed', { bubbles: true, detail: presentation }));
+                } catch (error) {}
+            }
         }
 
         function reviewDuplicate() {
@@ -191,6 +200,7 @@
             }
             resultBox.hidden = false;
             resultBox.focus();
+            completedPresentation = { action: 'duplicate', operationId: data.operation_id, status: data.status };
         }
 
         function executeDuplicate() {

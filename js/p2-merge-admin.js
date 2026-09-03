@@ -54,6 +54,7 @@
 	function openMergeModal() {
 		var busy = false;
 		var completed = false;
+		var completedPresentation = null;
 		var selectedTarget = '';
 		var reviewAuthority = null;
 		var confirmationAuthority = null;
@@ -173,6 +174,14 @@
 			executeButton.disabled = busy || completed || (!retryReady && (!reviewAuthority || !confirmCheckbox.checked));
 			cancelButton.disabled = busy;
 			closeButton.disabled = busy;
+			if (!busy && completedPresentation) {
+				var presentation = completedPresentation;
+				completedPresentation = null;
+				// Optional presentation must never change the completed operation.
+				try {
+					resultBox.dispatchEvent(new CustomEvent('wcos:operation-completed', { bubbles: true, detail: presentation }));
+				} catch (error) {}
+			}
 		}
 
 		function reviewMerge() {
@@ -231,6 +240,7 @@
 			}
 			resultBox.hidden = false;
 			resultBox.focus();
+			completedPresentation = { action: 'merge', operationId: data.operation_id, status: data.status };
 		}
 
 		function handleExecuteFailure(error) {

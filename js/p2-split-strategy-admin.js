@@ -92,6 +92,7 @@
             var selectedBucket = '';
             var busy = false;
             var completed = false;
+            var completedPresentation = null;
             var dialog = null;
             var form = null;
             var closeButton = null;
@@ -201,6 +202,14 @@
                 executeButton.disabled = busy || completed || !confirmationState || !confirmCheckbox.checked;
                 closeButton.disabled = busy;
                 cancelButton.disabled = busy;
+                if (!busy && completedPresentation) {
+                    var presentation = completedPresentation;
+                    completedPresentation = null;
+                    // Optional presentation must never change the completed operation.
+                    try {
+                        resultBox.dispatchEvent(new CustomEvent('wcos:operation-completed', { bubbles: true, detail: presentation }));
+                    } catch (error) {}
+                }
             }
 
             function bucketQuantity(items) {
@@ -374,6 +383,7 @@
                 resultBox.appendChild(reload);
                 resultBox.hidden = false;
                 resultBox.focus();
+                completedPresentation = { action: 'split', operationId: data.operation_id, status: data.status };
             }
 
             function executeStrategy() {
