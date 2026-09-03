@@ -28,12 +28,7 @@ test -f "$source_root/wc-order-splitter.php" || fail "missing plugin entrypoint"
 test -f "$source_root/readme.txt" || fail "missing readme.txt"
 test -f "$source_root/changelog.txt" || fail "missing changelog.txt"
 
-if test -e "$distribution_root" && find "$distribution_root" -mindepth 1 -print -quit | grep -q .; then
-  fail "distribution root must be absent or empty: $distribution_root"
-fi
-
-mkdir -p "$distribution_root"
-rsync -a "$source_root/" "$distribution_root/" --exclude-from="$source_root/.distignore"
+bash "$(dirname "${BASH_SOURCE[0]}")/stage-distribution.sh" "$source_root" "$distribution_root"
 
 plugin_version=$(sed -n 's/^ \* Version: //p' "$distribution_root/wc-order-splitter.php" | head -n 1)
 stable_tag=$(sed -n 's/^Stable tag: //p' "$distribution_root/readme.txt" | head -n 1)
@@ -193,6 +188,7 @@ distribution_symlink=$(find "$distribution_root" -type l -print -quit)
 if test -n "$distribution_symlink"; then
   fail "symbolic links entered the distribution tree"
 fi
+product_identity=$(python3 "$(dirname "${BASH_SOURCE[0]}")/product-tree.py" "$distribution_root")
 
 telemetry_host='yoexpress''.''top'
 if grep -R --line-number --fixed-strings "$telemetry_host" "$distribution_root"; then
@@ -221,3 +217,5 @@ while IFS= read -r -d '' php_file; do
 done < <(find "$distribution_root" -type f -name '*.php' -print0)
 
 echo "distribution-contract-ok version=$plugin_version root=$distribution_root"
+
+printf '%s\n' "$product_identity"
