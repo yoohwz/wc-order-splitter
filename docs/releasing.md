@@ -71,6 +71,15 @@ After Finalize/merge, use the existing WOS-REL-001 publication authority:
    Error blocks preparation. Warnings remain in the evidence. Resolve new Errors
    through an appropriately scoped task, never by silently changing certified
    product bytes or adding a broad ignore baseline.
+   Failed runs retain sanitized findings in `plugin-check-diagnostics-<run_id>`
+   (14 days), with exact Error counts/details in the log and step summary. This
+   diagnostic-only JSON is never an RC artifact and cannot authorize publishing;
+   raw checker output, credentials and runner environment are not uploaded.
+   After a correction is accepted/merged, dispatch a new Prepare run with the
+   same inputs, not another attempt of the failed run. Classify visible Errors
+   before resuming: product defects need a separate task/new product certificate;
+   suspected false positives need explicit Human/Architecture review; checker
+   integration defects need a separate bounded publisher correction.
 2. Run **Publish Order Splitter to WordPress.org**, `operation=publish`, using
    that `preparation_run_id`, candidate/version, and `dry_run=true`. Review the
    exact read-only SVN snapshot and final recheck. No tag, SVN or Release write

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Publisher contracts: temporary local SVN only; all GitHub calls are fakes."""
 import copy
+from contextlib import contextmanager, redirect_stdout
 import io
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
@@ -209,6 +211,142 @@ class Product(unittest.TestCase):
         self.assertNotIn('WPORG_SVN_PASSWORD', kwargs['env'])
         self.assertEqual(kwargs['input'], b'fake-fixture-password\n')
         self.assertNotIn('fake-fixture-password', (self.root / 'attempt.json').read_text())
+
+    @contextmanager
+    def preparation_fixture(self, report):
+        with tempfile.TemporaryDirectory(prefix='wcos-diagnostics-') as directory:
+            root = Path(directory)
+            work = root / 'wcos-release'
+            (work / 'rc-a').mkdir(parents=True)
+            shutil.copytree(self.staged, work / 'stage-a')
+            pkg.write_json(work / 'rc-a/release-manifest.json', self.manifest)
+            (work / 'rc-a' / self.manifest['package_name']).write_bytes(self.zip)
+            (work / 'plugin-check-raw.txt').write_text(report)
+            env = {'RUNNER_TEMP': directory, 'CANDIDATE_SHA': BASE, 'VERSION': '1.5.0',
+                   'PRODUCT_TREE_SHA': DIGEST, 'GITHUB_RUN_ID': '100',
+                   'GITHUB_OUTPUT': str(root / 'outputs'), 'GITHUB_STEP_SUMMARY': str(root / 'summary')}
+            with patch.dict(os.environ, env), patch.object(gh, 'API'), \
+                    patch.object(gh, 'control_context', return_value=BASE):
+                yield work, root / 'outputs', root / 'summary'
+
+    def test_11_error_persists_diagnostics_before_preparation_fails(self):
+        error = {'type': 'ERROR', 'code': 'blocked_code', 'file': 'inc/example.php',
+                 'line': 12, 'column': 3, 'message': 'Exact blocking message', 'docs': 'https://example.test/docs'}
+        with self.preparation_fixture(json.dumps([error])) as (work, outputs, summary), redirect_stdout(io.StringIO()) as log:
+            with self.assertRaisesRegex(ValueError, 'Errors block preparation; no ignore baseline'):
+                cli.finish_prepare()
+            diagnostic = pkg.read_json(work / 'plugin-check-diagnostics.json')
+            self.assertEqual(diagnostic['findings'], [error])
+            self.assertEqual((diagnostic['status'], diagnostic['error_count'], diagnostic['warning_count']), ('BLOCKED', 1, 0))
+            self.assertIn('1 ERROR(s), 0 WARNING(s)', log.getvalue())
+            for value in ('blocked_code', 'inc/example.php', '12', 'Exact blocking message'):
+                self.assertIn(value, log.getvalue())
+                self.assertIn(value, summary.read_text())
+            self.assertFalse((work / 'rc-a/plugin-check.json').exists())
+            self.assertFalse((work / 'rc-a/preparation-record.json').exists())
+            self.assertFalse(outputs.exists())
+            self.assertNotIn('RC_PREPARED', log.getvalue())
+            self.assertEqual(set(path.name for path in (work / 'rc-a').iterdir()),
+                             {'release-manifest.json', self.manifest['package_name']})
+
+    def test_12_all_errors_and_warnings_have_deterministic_evidence(self):
+        first = {'type': 'ERROR', 'code': 'first', 'file': 'a.php', 'line': 2, 'message': 'First error'}
+        second = {'type': 'ERROR', 'code': 'second', 'file': 'b.php', 'line': 9, 'message': 'Second error'}
+        warning = {'type': 'WARNING', 'code': 'notice', 'file': 'readme.txt', 'message': 'Still retained'}
+        results = []
+        for report in ([second, warning, first], [first, second, warning]):
+            with self.preparation_fixture(json.dumps(report)) as (work, outputs, summary), redirect_stdout(io.StringIO()) as log:
+                with self.assertRaisesRegex(ValueError, 'Errors block preparation'):
+                    cli.plugin_check_evidence()
+                raw = (work / 'plugin-check-diagnostics.json').read_bytes()
+                evidence = json.loads(raw)
+                self.assertEqual(evidence['error_count'], 2)
+                self.assertEqual(evidence['warning_count'], 1)
+                self.assertCountEqual(evidence['findings'], [first, second, warning])
+                self.assertEqual(log.getvalue().count('Plugin Check ERROR: '), 2)
+                self.assertIn('2 ERROR(s), 1 WARNING(s)', log.getvalue())
+                self.assertIn('First error', log.getvalue())
+                self.assertIn('Second error', log.getvalue())
+                self.assertFalse(outputs.exists())
+                results.append((raw, log.getvalue(), summary.read_bytes()))
+        self.assertEqual(results[0], results[1])
+
+    def test_13_clean_and_warning_reports_keep_successful_preparation(self):
+        warning = {'type': 'WARNING', 'code': 'notice', 'file': 'readme.txt', 'line': 0, 'message': 'Warning only'}
+        for report in ([], [warning]):
+            with self.subTest(report=report), self.preparation_fixture(json.dumps(report)) as (work, outputs, summary), \
+                    redirect_stdout(io.StringIO()) as log:
+                cli.plugin_check_evidence()
+                cli.finish_prepare()
+                self.assertEqual(pkg.read_json(work / 'rc-a/plugin-check.json'), report)
+                record = pkg.read_json(work / 'rc-a/preparation-record.json')
+                self.assertEqual(record['status'], 'RC_PREPARED')
+                self.assertEqual(record['artifact_name'], f'{pkg.SLUG}-1.5.0-{BASE}')
+                self.assertEqual(pkg.manifest_identity(record), pkg.manifest_identity(self.manifest))
+                self.assertIn('state=RC_PREPARED', outputs.read_text())
+                self.assertIn('artifact_name=' + record['artifact_name'], outputs.read_text())
+                diagnostic = pkg.read_json(work / 'plugin-check-diagnostics.json')
+                self.assertEqual((diagnostic['status'], diagnostic['error_count'], diagnostic['warning_count']),
+                                 ('PASSED', 0, len(report)))
+                self.assertEqual(set(path.name for path in (work / 'rc-a').iterdir()),
+                                 {'plugin-check.json', 'preparation-record.json', 'release-manifest.json', self.manifest['package_name']})
+
+    def test_14_malformed_ambiguous_and_missing_reports_fail_closed_without_raw_dump(self):
+        duplicate = '[{"type":"ERROR","type":"WARNING","code":"x","file":"x.php","message":"x"}]'
+        for raw in ('', '[bad secret=fixture-private]', '[]\n[]', '[]\nSuccess: Checks complete. No errors found.',
+                    '[{}]', duplicate, '[{"type":false}]'):
+            with self.subTest(raw=raw), self.preparation_fixture(raw) as (work, outputs, summary), redirect_stdout(io.StringIO()) as log:
+                with self.assertRaisesRegex(ValueError, 'report malformed or ambiguous'):
+                    cli.plugin_check_evidence()
+                evidence = pkg.read_json(work / 'plugin-check-diagnostics.json')
+                self.assertEqual(evidence['status'], 'INVALID_REPORT')
+                self.assertIsNone(evidence['error_count'])
+                self.assertEqual(evidence['findings'], [])
+                self.assertNotIn('fixture-private', (work / 'plugin-check-diagnostics.json').read_text() + log.getvalue() + summary.read_text())
+                self.assertFalse(outputs.exists())
+                self.assertFalse((work / 'rc-a/preparation-record.json').exists())
+        with self.preparation_fixture('unused') as (work, outputs, summary), redirect_stdout(io.StringIO()):
+            (work / 'plugin-check-raw.txt').unlink()
+            with self.assertRaisesRegex(ValueError, 'report malformed or ambiguous'):
+                cli.plugin_check_evidence()
+            self.assertEqual(pkg.read_json(work / 'plugin-check-diagnostics.json')['status'], 'INVALID_REPORT')
+
+    def test_15_diagnostics_allowlist_redacts_credentials_and_escapes_summary(self):
+        env = {'GH_TOKEN': 'fixture-env-token', 'WPORG_SVN_PASSWORD': 'fixture-env-password', 'UNRELATED_VALUE': 'fixture-env-unrelated'}
+        error = {'type': 'ERROR', 'code': 'unsafe_example', 'file': 'inc/example.php', 'line': '12', 'column': 3,
+                 'message': '\x1b[31mFound <script>bad</script>\n::warning:: GH_TOKEN=fixture-message-token '
+                            'Bearer fixture-bearer github_pat_fixturepat WPORG_SVN_PASSWORD="fixture-quoted-password"',
+                 'docs': 'https://fixture-user:fixture-url-password@example.test/docs?token=fixture-url-token',
+                 'environment': env, 'raw': 'fixture-unknown-field'}
+        with self.preparation_fixture(json.dumps([error])) as (work, outputs, summary), patch.dict(os.environ, env), \
+                redirect_stdout(io.StringIO()) as log:
+            with self.assertRaisesRegex(ValueError, 'Errors block preparation'):
+                cli.plugin_check_evidence()
+            raw = (work / 'plugin-check-diagnostics.json').read_text()
+            text = raw + log.getvalue() + summary.read_text()
+            for secret in (*env.values(), 'fixture-message-token', 'fixture-bearer', 'github_pat_fixturepat',
+                           'fixture-quoted-password', 'fixture-url-password', 'fixture-url-token', 'fixture-unknown-field'):
+                self.assertNotIn(secret, text)
+            finding = json.loads(raw)['findings'][0]
+            self.assertEqual(set(finding), {'type', 'code', 'file', 'line', 'column', 'message', 'docs'})
+            self.assertEqual(finding['type'], 'ERROR')
+            self.assertIn('[REDACTED]', text)
+            self.assertNotIn('\x1b', text)
+            self.assertNotIn('<script>', summary.read_text())
+            self.assertIn('&lt;script&gt;', summary.read_text())
+            self.assertFalse(any(line.startswith('::') for line in log.getvalue().splitlines()))
+
+    def test_16_evidence_command_exits_nonzero_after_persisting_errors(self):
+        error = {'type': 'ERROR', 'code': 'checker_failed', 'file': 'example.php', 'line': 4, 'message': 'Blocked'}
+        with self.preparation_fixture(json.dumps([error])) as (work, outputs, summary):
+            result = subprocess.run([sys.executable, str(ROOT / '.github/scripts/release_cli.py'), 'plugin-check-evidence'],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(b'1 ERROR(s)', result.stdout)
+            self.assertIn(b'Errors block preparation; no ignore baseline', result.stderr)
+            self.assertEqual(pkg.read_json(work / 'plugin-check-diagnostics.json')['findings'], [error])
+            self.assertFalse(outputs.exists())
+            self.assertFalse((work / 'rc-a/preparation-record.json').exists())
 
 
 class LocalSVN(Product):
@@ -503,6 +641,29 @@ class GithubContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'API digest mismatch'):
                 gh.artifact(api, run_data, 'prepared', Path(directory) / 'bad', {'manifest.json'})
 
+    def test_diagnostic_artifact_cannot_authenticate_as_prepared_candidate(self):
+        repository = {'full_name': pkg.REPOSITORY}
+        run_data = {'id': 100, 'repository': repository, 'head_repository': repository, 'path': gh.PREPARE,
+                    'event': 'workflow_dispatch', 'status': 'completed', 'conclusion': 'failure',
+                    'head_sha': BASE, 'head_branch': 'main', 'run_attempt': 1}
+        raw = archive({'plugin-check-diagnostics.json': pkg.encoded({'kind': 'PLUGIN_CHECK_DIAGNOSTICS', 'status': 'BLOCKED'})})
+        item = {'id': 1, 'name': 'plugin-check-diagnostics-100', 'expired': False, 'digest': 'sha256:' + pkg.sha(raw),
+                'workflow_run': {'id': 100, 'head_sha': BASE}}
+        for case, message in (('failed-run', 'run is not successful'), ('wrong-name', 'immutable artifact missing'),
+                              ('forged-name', 'unexpected artifact file set')):
+            api = FakeAPI({'actions/runs/100': copy.deepcopy(run_data), 'actions/runs/100/artifacts': [copy.deepcopy(item)],
+                           'actions/artifacts/1/zip': raw})
+            if case != 'failed-run':
+                api.values['actions/runs/100']['conclusion'] = 'success'
+            if case == 'forged-name':
+                api.values['actions/runs/100/artifacts'][0]['name'] = f'{pkg.SLUG}-1.5.0-{BASE}'
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(gh, 'ancestor', return_value=True), patch.object(gh, 'protected_main', return_value=BASE), \
+                    patch.object(gh, 'accepted_source'), patch.object(gh, 'certificate') as certificate, \
+                    self.assertRaisesRegex(ValueError, message):
+                gh.prepared(api, 100, BASE, '1.5.0', Path(directory) / 'candidate')
+            certificate.assert_not_called()
+
     def test_immutable_tag_mismatch_never_updates_or_deletes(self):
         manifest = {'candidate_sha': BASE, 'version': '1.5.0', 'product_tree_sha': DIGEST,
                     'package_sha256': 'a' * 64, 'release_cert_run_id': 1, 'preparation_run_id': 2}
@@ -578,7 +739,13 @@ class WorkflowContracts(unittest.TestCase):
         raw_prepare = json.dumps(prepare)
         self.assertNotIn('secrets.', raw_prepare)
         self.assertNotIn('environment', prepare['jobs']['prepare'])
-        self.assertEqual(raw_prepare.count('actions/upload-artifact@'), 1)
+        uploads = [step for step in prepare['jobs']['prepare']['steps'] if 'actions/upload-artifact@' in step.get('uses', '')]
+        self.assertEqual(len(uploads), 2)
+        canonical = [step for step in uploads if step['with']['name'] == '${{ steps.record.outputs.artifact_name }}']
+        self.assertEqual(len(canonical), 1)
+        self.assertEqual(canonical[0].get('if', 'success()'), 'success()')
+        self.assertEqual(canonical[0]['with']['path'], '${{ runner.temp }}/wcos-release/rc-a/*')
+        self.assertEqual(canonical[0]['with']['if-no-files-found'], 'error')
         secrets = []
         for job_name, job in publish['jobs'].items():
             for step in job['steps']:
@@ -609,6 +776,32 @@ class WorkflowContracts(unittest.TestCase):
         checkouts = [step for step in shared['runs']['steps'] if 'actions/checkout@' in step.get('uses', '')]
         self.assertEqual(checkouts[0]['with']['path'], 'candidate-data')
         self.assertIs(checkouts[0]['with']['persist-credentials'], False)
+
+    def test_failed_prepare_uploads_only_sanitized_diagnostics(self):
+        prepare = yaml(ROOT / '.github/workflows/release-prepare.yml')
+        steps = prepare['jobs']['prepare']['steps']
+        checker = next(step for step in steps if step.get('id') == 'plugin_check')
+        evidence = next(step for step in steps if step.get('run', '').endswith('release_cli.py plugin-check-evidence'))
+        record = next(step for step in steps if step.get('id') == 'record')
+        diagnostic = next(step for step in steps if step.get('with', {}).get('name') == 'plugin-check-diagnostics-${{ github.run_id }}')
+        self.assertEqual(evidence['if'], "${{ !cancelled() && (steps.plugin_check.outcome == 'success' || steps.plugin_check.outcome == 'failure') }}")
+        self.assertLess(steps.index(checker), steps.index(evidence))
+        self.assertLess(steps.index(evidence), steps.index(record))
+        self.assertNotIn('env', evidence)
+        self.assertNotIn('GH_TOKEN', prepare['env'])
+        self.assertEqual(record.get('if', 'success()'), 'success()')
+        self.assertTrue(all(not step.get('continue-on-error') for step in steps))
+        self.assertEqual(diagnostic['if'], 'failure()')
+        self.assertEqual(diagnostic['uses'], 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02')
+        self.assertEqual(diagnostic['with'], {
+            'name': 'plugin-check-diagnostics-${{ github.run_id }}',
+            'path': '${{ runner.temp }}/wcos-release/plugin-check-diagnostics.json',
+            'if-no-files-found': 'ignore', 'retention-days': 14, 'overwrite': False})
+        shell = (ROOT / '.github/scripts/release-plugin-check.sh').read_text()
+        self.assertIn('plugin-check.2.1.0.zip', shell)
+        self.assertIn('--format=strict-json --mode=update', shell)
+        self.assertIn('--fields=file,line,column,type,code,message,docs', shell)
+        self.assertNotRegex(shell, r'--(?:exclude|ignore|skip-checks)')
 
 
 if __name__ == '__main__':

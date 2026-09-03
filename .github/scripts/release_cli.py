@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Narrow workflow entry points; all executable control comes from protected main."""
+import html
 import json
 import os
 from pathlib import Path
@@ -57,17 +58,81 @@ def prepare():
     say('DETERMINISTIC_PACKAGE_VERIFIED', candidate_sha=candidate, product_tree_sha=digest, EXTERNAL_MUTATION='NONE')
 
 
-def plugin_check_report(raw):
+def parse_plugin_check(raw):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            pkg.require(key not in result, 'duplicate Plugin Check field')
+            result[key] = value
+        return result
+
     lines = re.sub(r'\x1b\[[0-9;]*m', '', raw).splitlines()
-    matches = [json.loads(line) for line in lines if line.startswith('[')]
+    matches = [json.loads(line, object_pairs_hook=unique) for line in lines if line.startswith('[')]
     clean = lines.count('Success: Checks complete. No errors found.')
     pkg.require(len(matches) == 1 and clean == 0 or not matches and clean == 1, 'Plugin Check report missing or ambiguous')
     report = matches[0] if matches else []
-    pkg.require(isinstance(report, list) and all(isinstance(item, dict) and 'type' in item and 'code' in item
-                and 'file' in item for item in report), 'invalid Plugin Check report')
+    pkg.require(isinstance(report, list) and all(isinstance(item, dict) and
+                all(isinstance(item.get(key), str) for key in ('type', 'code', 'file', 'message')) and
+                all(key not in item or isinstance(item[key], str) or type(item[key]) is int
+                    for key in ('line', 'column')) and
+                ('docs' not in item or isinstance(item['docs'], str)) for item in report), 'invalid Plugin Check report')
     pkg.require(all(item['type'].upper() in {'WARNING', 'ERROR'} for item in report), 'unexpected Plugin Check result type')
+    return report
+
+
+def diagnostic_text(value):
+    """Allowlisted report fields only; never inspect or serialize credential env."""
+    value = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', value)
+    value = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', value)
+    value = re.sub(r'\b(?:gh[pousr]_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+)\b', '[REDACTED]', value)
+    value = re.sub(r'(?i)\bBearer\s+[^\s,;<>]+', 'Bearer [REDACTED]', value)
+    value = re.sub(r'''(?ix)\b([a-z0-9_]*(?:token|password|secret|api_key|private_key))\s*[:=]\s*
+                      (?:"[^"]*"|'[^']*'|[^\s&,;<>]+)''', r'\1=[REDACTED]', value)
+    return re.sub(r'(?i)(https?://)[^/\s:@]+:[^/\s@]+@', r'\1[REDACTED]@', value)
+
+
+def plugin_check_diagnostics(path, report):
+    fields = ('type', 'code', 'file', 'line', 'column', 'message', 'docs')
+    findings = [] if report is None else [
+        {key: diagnostic_text(item[key]) if isinstance(item[key], str) else item[key]
+         for key in fields if key in item} for item in report]
+    findings.sort(key=pkg.encoded)
+    errors = [item for item in findings if item['type'].upper() == 'ERROR']
+    warnings = [item for item in findings if item['type'].upper() == 'WARNING']
+    evidence = {'schema_version': 1, 'kind': 'PLUGIN_CHECK_DIAGNOSTICS',
+                'status': 'INVALID_REPORT' if report is None else 'BLOCKED' if errors else 'PASSED',
+                'error_count': None if report is None else len(errors),
+                'warning_count': None if report is None else len(warnings), 'findings': findings}
+    pkg.write_json(path, evidence)
+    summary = ['Plugin Check report malformed or ambiguous; preparation blocked.'] if report is None else [
+        f'Plugin Check: {len(errors)} ERROR(s), {len(warnings)} WARNING(s).',
+        *('Plugin Check ERROR: ' + pkg.encoded(item).decode().strip() for item in errors),
+        f'All {len(findings)} findings retained in sanitized diagnostic JSON.']
+    text = '\n'.join(summary) + '\n'
+    # JSON escapes finding newlines; a finding cannot introduce an Actions command.
+    print(text, end='')
+    if os.environ.get('GITHUB_STEP_SUMMARY'):
+        with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as handle:
+            handle.write('## Plugin Check diagnostics\n\n<pre>' + html.escape(text) + '</pre>\n')
+
+
+def plugin_check_report(raw, diagnostic_path=None):
+    try:
+        report = parse_plugin_check(raw)
+    except (ValueError, TypeError):
+        if diagnostic_path is not None:
+            plugin_check_diagnostics(diagnostic_path, None)
+        raise ValueError('Plugin Check report malformed or ambiguous') from None
+    if diagnostic_path is not None:
+        plugin_check_diagnostics(diagnostic_path, report)
     pkg.require(not any(item['type'].upper() == 'ERROR' for item in report), 'Plugin Check Errors block preparation; no ignore baseline')
     return report
+
+
+def plugin_check_evidence():
+    _, _, work = settings()
+    raw = work / 'plugin-check-raw.txt'
+    plugin_check_report(raw.read_text() if raw.is_file() else '', work / 'plugin-check-diagnostics.json')
 
 
 def finish_prepare():
@@ -79,7 +144,7 @@ def finish_prepare():
                 manifest['product_tree_sha'] == os.environ['PRODUCT_TREE_SHA'], 'prepared identity changed')
     pkg.verify_tree(work / 'stage-a', manifest)
     pkg.validate_payload((work / 'rc-a' / manifest['package_name']).read_bytes(), manifest, work / 'validated-package')
-    report = plugin_check_report((work / 'plugin-check-raw.txt').read_text())
+    report = plugin_check_report((work / 'plugin-check-raw.txt').read_text(), work / 'plugin-check-diagnostics.json')
     pkg.write_json(work / 'rc-a/plugin-check.json', report)
     name = f'{pkg.SLUG}-{version}-{candidate}'
     record = {'schema_version': 1, 'repository': pkg.REPOSITORY, 'workflow_path': gh.PREPARE,
@@ -251,7 +316,8 @@ def release():
     say(gh.github_release(api, manifest, work / 'prepared', refreshed), identity=pkg.manifest_identity(manifest))
 
 
-COMMANDS = {'prepare': prepare, 'finish-prepare': finish_prepare, 'context': publication_context,
+COMMANDS = {'prepare': prepare, 'plugin-check-evidence': plugin_check_evidence,
+            'finish-prepare': finish_prepare, 'context': publication_context,
             'preflight': preflight, 'recheck': recheck, 'seal': seal, 'commit': commit,
             'verify': verify, 'recover': recover, 'release': release}
 
