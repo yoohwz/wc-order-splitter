@@ -20,7 +20,8 @@ assert set(ci['on']) == {'pull_request'}
 assert ci['on']['pull_request'] == {'branches': ['main']}
 assert set(release['on']) == {'workflow_dispatch'}
 assert set((ROOT / '.github/workflows').glob('*.yml')) == {
-    ROOT / '.github/workflows/ci.yml', ROOT / '.github/workflows/release-cert.yml'}
+    ROOT / '.github/workflows/ci.yml', ROOT / '.github/workflows/release-cert.yml',
+    ROOT / '.github/workflows/release-prepare.yml', ROOT / '.github/workflows/publish-wordpress-org.yml'}
 assert len((ROOT / '.github/workflows/ci.yml').read_bytes()) <= 20000
 for flow in (ci, release):
     assert flow['permissions'] == {'contents': 'read'}

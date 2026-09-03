@@ -1,0 +1,518 @@
+#!/usr/bin/env python3
+"""Publisher contracts: temporary local SVN only; all GitHub calls are fakes."""
+import copy
+import io
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+import tarfile
+import tempfile
+import unittest
+from unittest.mock import Mock, patch
+import urllib.error
+import urllib.request
+import zipfile
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT / '.github/scripts'))
+import release_package as pkg
+import release_github as gh
+import release_cli as cli
+import wporg_release as wp
+
+BASE = '4de67108045714415d5bc4708bd94e7ad871e9a1'
+CERT_HEAD = '350e81177085c753cfdabb16c7fbf5547f0266e9'
+DIGEST = '2e118657e4b44d7db7e536c8e1a3054e9f9af6bcd6112d45141a6b30f427f072'
+
+
+def run(*args):
+    return subprocess.check_output(list(map(str, args)), stderr=subprocess.PIPE).decode().strip()
+
+
+def yaml(path):
+    return json.loads(run('ruby', '-ryaml', '-rjson', '-e', 'puts JSON.generate(YAML.load_file(ARGV[0]))', path))
+
+
+def archive(values):
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, 'w') as handle:
+        for name, value in values.items():
+            handle.writestr(name, value)
+    return output.getvalue()
+
+
+class FakeAPI:
+    def __init__(self, values):
+        self.values, self.calls = values, []
+
+    def get(self, endpoint, **kwargs):
+        self.calls.append((endpoint, kwargs))
+        value = self.values[endpoint]
+        return copy.deepcopy(value)
+
+    def pages(self, endpoint, key=None):
+        return self.get(endpoint)
+
+
+class Product(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix='wcos-publisher-contract-')
+        cls.root = Path(cls.tmp.name)
+        cls.source = cls.root / 'base'
+        cls.source.mkdir()
+        raw = subprocess.check_output(['git', '-C', str(ROOT), 'archive', BASE])
+        with tarfile.open(fileobj=io.BytesIO(raw)) as handle:
+            handle.extractall(cls.source, filter='data')
+        cls.staged = cls.root / 'base-product'
+        cls.base_digest = pkg.stage(cls.source, cls.staged)
+        cls.manifest = pkg.build(cls.staged, cls.root / 'package', BASE, '1.5.0', DIGEST, 33727158970, 100)
+        cls.zip = (cls.root / 'package' / cls.manifest['package_name']).read_bytes()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_01_bootstrap_preserves_certified_product(self):
+        staged = self.root / 'head-product'
+        digest = pkg.stage(ROOT, staged)
+        self.assertEqual(self.base_digest, DIGEST)
+        self.assertEqual(digest, DIGEST)
+        self.assertEqual(pkg.files(staged), pkg.files(self.staged))
+        self.assertFalse((staged / '.github').exists())
+        self.assertFalse((staged / 'tests').exists())
+        self.assertFalse((staged / 'docs').exists())
+        print(f'publisher-product-invariance-ok base={BASE} source={DIGEST} final={digest}')
+
+    def test_02_deterministic_metadata_and_one_root(self):
+        os.utime(self.staged / 'readme.txt', (2000000000, 2000000000))
+        manifest = pkg.build(self.staged, self.root / 'package-b', BASE, '1.5.0', DIGEST, 33727158970, 100)
+        self.assertEqual(manifest, self.manifest)
+        self.assertEqual((self.root / 'package-b' / manifest['package_name']).read_bytes(), self.zip)
+        with zipfile.ZipFile(io.BytesIO(self.zip)) as handle:
+            self.assertEqual(handle.namelist(), sorted(handle.namelist()))
+            for item in handle.infolist():
+                self.assertTrue(item.filename.startswith('wc-order-splitter/'))
+                self.assertEqual(item.date_time, pkg.FIXED_TIME)
+                self.assertEqual(item.external_attr >> 16, stat.S_IFREG | 0o644)
+
+    def test_03_package_manifest_and_product_tamper(self):
+        payload = pkg.zip_data(self.zip, pkg.SLUG + '/')
+        for kind in ('missing', 'extra', 'changed'):
+            with self.subTest(kind=kind):
+                values = dict(payload)
+                if kind == 'missing':
+                    values.pop('readme.txt')
+                elif kind == 'extra':
+                    values['intruder.php'] = b'not allowed'
+                else:
+                    values['readme.txt'] += b'changed'
+                bad = archive({pkg.SLUG + '/' + key: value for key, value in values.items()})
+                manifest = copy.deepcopy(self.manifest)
+                manifest['package_sha256'] = pkg.sha(bad)
+                with self.assertRaisesRegex(ValueError, 'file set/content'):
+                    pkg.validate_payload(bad, manifest, self.root / ('bad-' + kind))
+        manifest = dict(self.manifest, product_tree_sha='f' * 64)
+        with self.assertRaisesRegex(ValueError, 'PRODUCT_TREE_SHA'):
+            pkg.validate_payload(self.zip, manifest, self.root / 'wrong-product')
+
+    def test_04_zip_traversal_alias_special_and_collision(self):
+        for name in ('../escape', '/absolute', 'wc-order-splitter/../escape', 'wc-order-splitter//alias',
+                     'wc-order-splitter/.hidden', 'wc-order-splitter/back\\slash', 'other/file'):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                pkg.zip_data(archive({name: b'data'}), pkg.SLUG + '/')
+        with self.assertRaises(ValueError):
+            pkg.zip_data(archive({'a.php': b'a', 'A.php': b'b'}))
+        raw = io.BytesIO()
+        with zipfile.ZipFile(raw, 'w') as handle:
+            info = zipfile.ZipInfo('link')
+            info.create_system = 3
+            info.external_attr = (stat.S_IFLNK | 0o777) << 16
+            handle.writestr(info, '/etc/passwd')
+        with self.assertRaisesRegex(ValueError, 'special ZIP'):
+            pkg.zip_data(raw.getvalue())
+
+    def test_05_candidate_tools_never_execute(self):
+        script = self.source / '.github/scripts/stage-distribution.sh'
+        original = script.read_bytes()
+        script.write_text('exit 97\n')
+        try:
+            self.assertEqual(pkg.stage(self.source, self.root / 'untrusted-helper'), DIGEST)
+        finally:
+            script.write_bytes(original)
+
+    def test_06_policy_fail_closed(self):
+        good = wp.policy()
+        cases = [('slug', 'thumbnail-manager'), ('svn_url', 'file:///tmp/repo'),
+                 ('svn_url', 'https://example.test/wc-order-splitter'), ('assets_mode', 'sync')]
+        for field, value in cases:
+            candidate = copy.deepcopy(good)
+            candidate[field] = value
+            pkg.write_json(self.root / 'policy.json', candidate)
+            with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                wp.policy(self.root / 'policy.json')
+        good['release_confirmation']['observed_at'] = '2026-09-03T00:00:00Z'
+        pkg.write_json(self.root / 'policy.json', good)
+        with self.assertRaisesRegex(ValueError, 'unknown confirmation'):
+            wp.policy(self.root / 'policy.json')
+
+    def test_07_input_metadata_and_manifest_mismatches(self):
+        for candidate, version, digest, run_id in ((BASE[:-1], '1.5.0', DIGEST, 1),
+                (BASE, '1.5.0;echo', DIGEST, 1), (BASE, '1.4.15', DIGEST, 1),
+                (BASE, '1.5.0', 'z' * 64, 1), (BASE, '1.5.0', DIGEST, '../bad')):
+            with self.assertRaises(ValueError):
+                pkg.inputs(candidate, version, digest, run_id)
+        with self.assertRaisesRegex(ValueError, 'Version / Stable'):
+            pkg.metadata(self.staged, '1.6.0')
+        for field, value in (('file_count', 1), ('public_baseline', 'other'), ('package_name', '../bad')):
+            with self.assertRaises(ValueError):
+                pkg.validate_manifest(dict(self.manifest, **{field: value}))
+
+    def test_08_public_confirmation_pending_and_expanded_zip(self):
+        downloader = Mock()
+        self.assertEqual(wp.public_state(self.manifest, self.root / 'public-no', confirmation='unknown', download=downloader),
+                         'WPORG_RELEASE_CONFIRMATION_PENDING')
+        downloader.assert_not_called()
+        responses = [pkg.encoded({'slug': pkg.SLUG, 'version': '1.4.11'})]
+        self.assertEqual(wp.public_state(self.manifest, self.root / 'public-old', confirmation='disabled', download=lambda _: responses.pop()),
+                         'WPORG_PROPAGATION_PENDING')
+        responses = [pkg.encoded({'slug': pkg.SLUG, 'version': '1.5.0'}), self.zip]
+        self.assertEqual(wp.public_state(self.manifest, self.root / 'public-ok', confirmation='unknown', verify_only=True,
+                                        download=lambda _: responses.pop(0)), 'WPORG_PUBLIC_RELEASE_VERIFIED')
+        responses = [pkg.encoded({'slug': pkg.SLUG, 'version': '1.5.0'}), archive({'wc-order-splitter/bad': b'bad'})]
+        with self.assertRaisesRegex(ValueError, 'file set/content'):
+            wp.public_state(self.manifest, self.root / 'public-bad', confirmation='disabled', download=lambda _: responses.pop(0))
+
+    def test_09_plugin_check_does_not_hide_errors(self):
+        warning = {'file': 'readme.txt', 'type': 'WARNING', 'code': 'example', 'message': 'message []'}
+        self.assertEqual(cli.plugin_check_report(json.dumps([warning])), [warning])
+        self.assertEqual(cli.plugin_check_report('Success: Checks complete. No errors found.'), [])
+        for raw in ('', '[]\n[]', json.dumps([dict(warning, type='ERROR')]), json.dumps([{'code': 'unknown'}])):
+            with self.assertRaises(ValueError):
+                cli.plugin_check_report(raw)
+
+    def test_10_ambiguous_commit_attempt_is_single_and_secret_is_stdin_only(self):
+        repository = wp.SVN(self.root / 'mock-only-never-connected')
+        env = {'WPORG_SVN_USERNAME': 'yoohw', 'WPORG_SVN_PASSWORD': 'fake-fixture-password'}
+        with patch.dict(os.environ, env), patch.object(repository, 'validate'), patch.object(repository, 'validate_delta'), \
+                patch.object(pkg, 'verify_tree'), patch.object(wp.subprocess, 'run', side_effect=subprocess.TimeoutExpired('svn', 120)) as command:
+            result = repository.atomic_commit(self.manifest, 200, self.root / 'attempt.json')
+        self.assertEqual(result['state'], 'SVN_COMMIT_OUTCOME_UNKNOWN')
+        self.assertEqual(command.call_count, 1)
+        args, kwargs = command.call_args
+        self.assertEqual(args[0][:2], ['svn', 'commit'])
+        self.assertNotIn('fake-fixture-password', ' '.join(args[0]))
+        self.assertNotIn('WPORG_SVN_PASSWORD', kwargs['env'])
+        self.assertEqual(kwargs['input'], b'fake-fixture-password\n')
+        self.assertNotIn('fake-fixture-password', (self.root / 'attempt.json').read_text())
+
+
+class LocalSVN(Product):
+    # Reuse only fixture data, not inherited test methods.
+    def setUp(self):
+        self.case = tempfile.TemporaryDirectory(prefix='wcos-svn-fixture-')
+        self.path = Path(self.case.name)
+        run('svnadmin', 'create', self.path / 'repository')
+        self.url = (self.path / 'repository').as_uri()
+        self.repo = wp.SVN(self.path / 'initial', self.url, fixture=True).checkout()
+        for name in ('trunk', 'assets', 'tags'):
+            (self.repo.working / name).mkdir()
+        (self.repo.working / 'trunk/readme.txt').write_text('public baseline 1.4.11')
+        (self.repo.working / 'assets/icon.svg').write_text('<svg/>')
+        self.repo.run('add', self.repo.working / 'trunk', self.repo.working / 'assets', self.repo.working / 'tags')
+        self.repo.run('commit', self.repo.working, '--username', 'yoohw', '-m', 'fixture baseline')
+        self.repo.run('update', self.repo.working)
+
+    def tearDown(self):
+        self.case.cleanup()
+
+    def fresh(self, name):
+        return wp.SVN(self.path / name, self.url, fixture=True).checkout()
+
+    def test_svn_atomic_exact_payload_and_authenticated_recovery(self):
+        before = self.repo.stage(self.staged, self.manifest, wp.policy())
+        approved = {'snapshot': before, 'identity': pkg.manifest_identity(self.manifest)}
+        pkg.verify_tree(self.repo.working / 'trunk', self.manifest)
+        pkg.verify_tree(self.repo.working / 'tags/1.5.0', self.manifest)
+        self.repo.run('commit', self.repo.working / 'trunk', self.repo.working / 'tags/1.5.0', '--username', 'yoohw',
+                      '-m', wp.commit_message(self.manifest, 200))
+        verified = self.fresh('verify').verify(self.manifest, approved, 200)
+        self.assertEqual(verified['state'], 'SVN_COMMITTED_VERIFIED')
+        self.assertEqual(verified['svn_revision'], 2)
+        with self.assertRaisesRegex(ValueError, 'log/revision'):
+            self.fresh('wrong-run').verify(self.manifest, approved, 201)
+        with self.assertRaisesRegex(ValueError, 'tag already exists'):
+            self.fresh('existing').stage(self.staged, self.manifest, wp.policy())
+
+    def test_svn_assets_and_trunk_drift_after_approval(self):
+        approved = self.repo.snapshot('1.5.0', wp.policy())
+        for name in ('assets/icon.svg', 'trunk/readme.txt'):
+            (self.repo.working / name).write_text('changed')
+            self.repo.run('commit', self.repo.working / name, '-m', 'external fixture drift')
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'snapshot drift'):
+                self.fresh('drift-' + name.split('/')[0]).compare(approved, '1.5.0', wp.policy())
+
+    def test_svn_tag_appearing_after_approval(self):
+        approved = self.repo.snapshot('1.5.0', wp.policy())
+        self.repo.run('copy', self.repo.working / 'trunk', self.repo.working / 'tags/1.5.0')
+        self.repo.run('commit', self.repo.working / 'tags/1.5.0', '-m', 'racing tag')
+        with self.assertRaisesRegex(ValueError, 'tag exists or appeared'):
+            self.fresh('after-tag').compare(approved, '1.5.0', wp.policy())
+
+    def test_svn_wrong_layout_url_and_extra_delta(self):
+        with self.assertRaisesRegex(ValueError, 'URL'):
+            wp.SVN(self.repo.working).validate()
+        (self.repo.working / 'unexpected').write_text('bad')
+        with self.assertRaisesRegex(ValueError, 'layout'):
+            self.repo.validate()
+        (self.repo.working / 'unexpected').unlink()
+        self.repo.stage(self.staged, self.manifest, wp.policy())
+        (self.repo.working / 'assets/icon.svg').write_text('not authorized')
+        with self.assertRaisesRegex(ValueError, 'outside trunk/new tag'):
+            self.repo.validate_delta('1.5.0')
+
+    def test_svn_forbids_externals_and_fixture_production_commit(self):
+        self.repo.run('propset', 'svn:externals', '^/other external', self.repo.working / 'trunk')
+        with self.assertRaisesRegex(ValueError, 'externals'):
+            self.repo.validate(clean=False)
+        with self.assertRaisesRegex(ValueError, 'fixture URL'):
+            self.repo.atomic_commit(self.manifest, 200, self.path / 'attempt.json')
+
+
+# unittest inheritance would otherwise run the Product tests twice in this class.
+for inherited in list(Product.__dict__):
+    if inherited.startswith('test_'):
+        setattr(LocalSVN, inherited, None)
+
+
+class GithubContracts(unittest.TestCase):
+    def test_api_binary_download_headers_and_error_classification(self):
+        with patch.dict(os.environ, {'GH_TOKEN': 'fixture-not-a-real-token'}):
+            api = gh.API()
+        response = Mock()
+        response.read.return_value = b'raw'
+        context = Mock()
+        context.__enter__ = Mock(return_value=response)
+        context.__exit__ = Mock(return_value=False)
+        api.opener.open = Mock(return_value=context)
+        for endpoint in ('actions/jobs/20/logs', 'actions/artifacts/1/zip', 'releases/assets/2'):
+            self.assertEqual(api.get(endpoint, binary=True), b'raw')
+            request = api.opener.open.call_args.args[0]
+            expected = 'application/octet-stream' if endpoint.startswith('releases/') else 'application/vnd.github+json'
+            self.assertEqual(request.get_header('Accept'), expected)
+        for code in (404, 403, 415, 500):
+            api.opener.open = Mock(side_effect=urllib.error.HTTPError('https://api.github.com/test', code, 'fixture', {}, None))
+            if code == 404:
+                self.assertIsNone(api.get('git/ref/tags/1.5.0', missing=True))
+            else:
+                with self.assertRaisesRegex(ValueError, str(code)):
+                    api.get('git/ref/tags/1.5.0', missing=True)
+            self.assertEqual(api.opener.open.call_count, 1)
+
+    def test_redirect_does_not_forward_authorization(self):
+        request = urllib.request.Request('https://api.github.com/test', headers={'Authorization': 'Bearer fixture'})
+        redirect = gh.SafeRedirect().redirect_request(request, None, 302, 'redirect', {}, 'https://example.test/download')
+        self.assertIsNone(redirect.get_header('Authorization'))
+        with self.assertRaisesRegex(ValueError, 'non-HTTPS'):
+            gh.SafeRedirect().redirect_request(request, None, 302, 'redirect', {}, 'http://example.test/download')
+
+    def certificate_api(self):
+        repository = {'full_name': pkg.REPOSITORY}
+        run = {'id': 33727158970, 'repository': repository, 'head_repository': repository, 'path': gh.CERT,
+               'event': 'workflow_dispatch', 'status': 'completed', 'conclusion': 'success', 'head_sha': CERT_HEAD,
+               'head_branch': 'release/order-splitter-1.5.0', 'run_attempt': 1}
+        job = {'id': 20, 'name': 'RELEASE_CERT', 'status': 'completed', 'conclusion': 'success',
+               'check_run_url': f'https://api.github.com/repos/{pkg.REPOSITORY}/check-runs/30'}
+        check = {'name': 'RELEASE_CERT', 'status': 'completed', 'conclusion': 'success',
+                 'app': {'slug': 'github-actions'}, 'head_sha': CERT_HEAD}
+        log = '\n'.join('2026-09-03T07:36:22.123Z ' + marker for marker in (
+            f'PRODUCT_TREE_SHA={DIGEST}', f'REPO_HEAD_SHA={CERT_HEAD}',
+            f'PUBLIC_BASELINE={pkg.BASELINE}; GENUINE_UPGRADE=passed',
+            'ARTIFACTS=0; no ZIP, tag, release, publication or deployment')).encode()
+        return FakeAPI({'actions/runs/33727158970': run, 'actions/runs/33727158970/attempts/1/jobs': [job],
+                        'check-runs/30': check, 'actions/runs/33727158970/artifacts': [], 'actions/jobs/20/logs': log})
+
+    def test_certificate_product_identity_not_candidate_sha_equality(self):
+        api = self.certificate_api()
+        with patch.object(gh, 'accepted_source') as accepted:
+            result = gh.certificate(api, 33727158970, DIGEST)
+        accepted.assert_called_once_with(api, CERT_HEAD, allow_merged_head=True)
+        self.assertNotEqual(CERT_HEAD, BASE)
+        self.assertEqual(result['product_tree_sha'], DIGEST)
+
+    def test_certificate_rejects_mismatches_duplicate_checks_and_artifacts(self):
+        for field, value in (('path', gh.PREPARE), ('event', 'push'), ('conclusion', 'failure'),
+                             ('repository', {'full_name': 'attacker/repository'})):
+            api = self.certificate_api()
+            api.values['actions/runs/33727158970'][field] = value
+            with self.subTest(field=field), patch.object(gh, 'accepted_source'), self.assertRaises(ValueError):
+                gh.certificate(api, 33727158970, DIGEST)
+        for mutation in ('duplicate', 'artifact', 'app', 'digest', 'baseline'):
+            api = self.certificate_api()
+            if mutation == 'duplicate':
+                api.values['actions/runs/33727158970/attempts/1/jobs'] *= 2
+            elif mutation == 'artifact':
+                api.values['actions/runs/33727158970/artifacts'] = [{'id': 1}]
+            elif mutation == 'app':
+                api.values['check-runs/30']['app']['slug'] = 'fake'
+            else:
+                api.values['actions/jobs/20/logs'] = api.values['actions/jobs/20/logs'].replace(
+                    DIGEST.encode() if mutation == 'digest' else pkg.BASELINE.encode(), b'wrong')
+            with self.subTest(mutation=mutation), patch.object(gh, 'accepted_source'), self.assertRaises(ValueError):
+                gh.certificate(api, 33727158970, DIGEST)
+
+    def test_unrelated_candidate_is_not_accepted(self):
+        api = FakeAPI({'branches/main': {'protected': True, 'commit': {'sha': BASE}},
+                       f'compare/{CERT_HEAD}...{BASE}': {'status': 'diverged'}, f'commits/{CERT_HEAD}/pulls': []})
+        with self.assertRaisesRegex(ValueError, 'accepted ancestor'):
+            gh.accepted_source(api, CERT_HEAD)
+
+    def test_squash_candidate_authenticates_native_ci_without_fake_head_equality(self):
+        pull = {'merged_at': '2026-09-03T07:47:46Z', 'base': {'ref': 'main', 'repo': {'full_name': pkg.REPOSITORY}},
+                'merge_commit_sha': BASE, 'head': {'sha': CERT_HEAD}}
+        api = FakeAPI({'branches/main': {'protected': True, 'commit': {'sha': BASE}},
+                       f'compare/{BASE}...{BASE}': {'status': 'identical'},
+                       f'commits/{BASE}/pulls': [pull], f'git/commits/{BASE}': {'tree': {'sha': 'a' * 40}},
+                       f'git/commits/{CERT_HEAD}': {'tree': {'sha': 'a' * 40}}})
+        with patch.object(gh, 'ci_check', return_value=33726798296) as check:
+            result = gh.accepted_source(api, BASE)
+        self.assertEqual(result['reviewed_head'], CERT_HEAD)
+        check.assert_called_once_with(api, CERT_HEAD)
+
+    def test_main_control_plane_guard(self):
+        env = {'GITHUB_REPOSITORY': pkg.REPOSITORY, 'GITHUB_REF': 'refs/heads/main', 'GITHUB_REF_PROTECTED': 'true',
+               'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_SHA': BASE,
+               'GITHUB_WORKFLOW_SHA': BASE, 'GITHUB_WORKFLOW_REF': f'{pkg.REPOSITORY}/{gh.PUBLISH}@refs/heads/main'}
+        with patch.dict(os.environ, env), patch.object(gh, 'protected_main', return_value=BASE), patch.object(gh, 'ancestor', return_value=True):
+            self.assertEqual(gh.control_context(FakeAPI({}), gh.PUBLISH), BASE)
+            for key, value in (('GITHUB_REF', 'refs/heads/untrusted'), ('GITHUB_RUN_ATTEMPT', '2'),
+                               ('GITHUB_WORKFLOW_SHA', 'f' * 40), ('GITHUB_REF_PROTECTED', 'false')):
+                with self.subTest(key=key), patch.dict(os.environ, {key: value}), self.assertRaises(ValueError):
+                    gh.control_context(FakeAPI({}), gh.PUBLISH)
+
+    def test_downloaded_artifact_digest_is_verified_not_merely_recorded(self):
+        raw = archive({'manifest.json': b'{}'})
+        run_data = {'id': 100, 'head_sha': BASE}
+        item = {'id': 1, 'name': 'prepared', 'expired': False, 'digest': 'sha256:' + pkg.sha(raw),
+                'workflow_run': {'id': 100, 'head_sha': BASE}}
+        api = FakeAPI({'actions/runs/100/artifacts': [item], 'actions/artifacts/1/zip': raw})
+        with tempfile.TemporaryDirectory() as directory:
+            gh.artifact(api, run_data, 'prepared', Path(directory) / 'valid', {'manifest.json'})
+            api.values['actions/artifacts/1/zip'] = archive({'manifest.json': b'changed'})
+            with self.assertRaisesRegex(ValueError, 'API digest mismatch'):
+                gh.artifact(api, run_data, 'prepared', Path(directory) / 'bad', {'manifest.json'})
+
+    def test_immutable_tag_mismatch_never_updates_or_deletes(self):
+        manifest = {'candidate_sha': BASE, 'version': '1.5.0', 'product_tree_sha': DIGEST,
+                    'package_sha256': 'a' * 64, 'release_cert_run_id': 1, 'preparation_run_id': 2}
+        ref = {'ref': 'refs/tags/1.5.0', 'object': {'type': 'tag', 'sha': 'b' * 40}}
+        obj = {'tag': '1.5.0', 'object': {'sha': CERT_HEAD, 'type': 'commit'}, 'message': 'different'}
+        api = FakeAPI({'git/ref/tags/1.5.0': ref, 'git/tags/' + 'b' * 40: obj})
+        with self.assertRaisesRegex(ValueError, 'tag identity mismatch'):
+            gh.git_tag(api, manifest, create=True)
+        self.assertTrue(all(not kwargs for _, kwargs in api.calls if _ != 'git/ref/tags/1.5.0'))
+        self.assertFalse(any(kwargs.get('method') in {'POST', 'PATCH', 'DELETE'} for _, kwargs in api.calls))
+
+    def test_release_cannot_precede_public_verification(self):
+        with self.assertRaisesRegex(ValueError, 'public verification required'):
+            gh.github_release(FakeAPI({}), {}, Path('/unused'), {'state': 'WPORG_PROPAGATION_PENDING'})
+
+    def test_release_creation_and_exact_reconciliation(self):
+        manifest = {'candidate_sha': BASE, 'version': '1.5.0', 'product_tree_sha': DIGEST,
+                    'package_sha256': 'a' * 64, 'release_cert_run_id': 1, 'preparation_run_id': 2,
+                    'package_name': 'wc-order-splitter-1.5.0.zip'}
+        class ReleaseAPI:
+            def __init__(self):
+                self.release, self.assets, self.calls = None, {}, []
+            def get(self, endpoint, **kwargs):
+                self.calls.append((endpoint, kwargs))
+                if endpoint == 'releases/tags/1.5.0':
+                    return copy.deepcopy(self.release)
+                if endpoint == 'releases':
+                    self.release = dict(kwargs['value'], id=1)
+                    return copy.deepcopy(self.release)
+                if endpoint == 'releases/1':
+                    if kwargs.get('method') == 'PATCH':
+                        self.release.update(kwargs['value'])
+                    return copy.deepcopy(self.release)
+                if endpoint.startswith('releases/1/assets?name='):
+                    self.assets[endpoint.split('=', 1)[1]] = kwargs['upload']
+                    return {}
+                if endpoint.startswith('releases/assets/'):
+                    return self.assets[endpoint.split('/')[-1]]
+                raise AssertionError(endpoint)
+            def pages(self, endpoint, key=None):
+                return [{'id': name, 'name': name} for name in self.assets]
+        with tempfile.TemporaryDirectory() as directory, patch.object(gh, 'git_tag'):
+            root = Path(directory)
+            (root / 'payload').mkdir()
+            (root / 'payload/changelog.txt').write_text('= 1.5.0 =\n\n* Public release notes.\n\n= 1.4.11 =\n* Older.\n')
+            (root / manifest['package_name']).write_bytes(b'authenticated fixture package')
+            pkg.write_json(root / 'release-manifest.json', manifest)
+            api = ReleaseAPI()
+            verification = {'state': 'WPORG_PUBLIC_RELEASE_VERIFIED', 'identity': pkg.manifest_identity(manifest)}
+            self.assertEqual(gh.github_release(api, manifest, root, verification), 'GITHUB_RELEASE_PUBLISHED')
+            self.assertFalse(api.release['draft'])
+            self.assertEqual(api.release['body'], '* Public release notes.\n')
+            self.assertEqual(set(api.assets), {manifest['package_name'], 'release-manifest.json'})
+            api.calls.clear()
+            gh.github_release(api, manifest, root, verification)
+            self.assertFalse(any(kwargs.get('method') for _, kwargs in api.calls))
+            api.assets[manifest['package_name']] = b'wrong package'
+            api.calls.clear()
+            with self.assertRaisesRegex(ValueError, 'asset content mismatch'):
+                gh.github_release(api, manifest, root, verification)
+            self.assertFalse(any(kwargs.get('method') for _, kwargs in api.calls))
+
+
+class WorkflowContracts(unittest.TestCase):
+    def test_manual_secret_and_mutation_boundaries(self):
+        prepare = yaml(ROOT / '.github/workflows/release-prepare.yml')
+        publish = yaml(ROOT / '.github/workflows/publish-wordpress-org.yml')
+        for flow in (prepare, publish):
+            self.assertEqual(set(flow['on']), {'workflow_dispatch'})
+            self.assertEqual(flow['permissions'], {'actions': 'read', 'checks': 'read', 'contents': 'read'})
+            self.assertIs(flow['concurrency']['cancel-in-progress'], False)
+        self.assertIs(publish['on']['workflow_dispatch']['inputs']['dry_run']['default'], True)
+        raw_prepare = json.dumps(prepare)
+        self.assertNotIn('secrets.', raw_prepare)
+        self.assertNotIn('environment', prepare['jobs']['prepare'])
+        self.assertEqual(raw_prepare.count('actions/upload-artifact@'), 1)
+        secrets = []
+        for job_name, job in publish['jobs'].items():
+            for step in job['steps']:
+                if 'secrets.' in json.dumps(step):
+                    secrets.append((job_name, step))
+            if job_name in {'preflight', 'dry-run', 'verify-only'}:
+                self.assertNotIn('environment', job)
+                self.assertNotIn('permissions', job)
+                self.assertNotRegex(json.dumps(job), r'release_cli.py (commit|seal|release)')
+            for step in job['steps']:
+                if 'actions/checkout@' in step.get('uses', ''):
+                    self.assertEqual(step['with']['ref'], '${{ github.sha }}')
+                    self.assertIs(step['with']['persist-credentials'], False)
+        self.assertEqual(len(secrets), 1)
+        self.assertEqual(secrets[0][0], 'production')
+        self.assertEqual(secrets[0][1]['run'], 'python3 control/.github/scripts/release_cli.py commit')
+        production = publish['jobs']['production']
+        self.assertEqual(production['environment'], 'wordpress-org-production')
+        self.assertEqual(production['if'], "inputs.operation == 'publish' && !inputs.dry_run")
+        self.assertNotIn('GH_TOKEN', secrets[0][1]['env'])
+        release = publish['jobs']['github-release']
+        self.assertIn('!inputs.dry_run', release['if'])
+        self.assertIn('WPORG_PUBLIC_RELEASE_VERIFIED', release['if'])
+        self.assertIn("needs.verify-only.result == 'success'", release['if'])
+        self.assertEqual(release['environment'], 'wordpress-org-production')
+        shared = yaml(ROOT / '.github/actions/publisher-context/action.yml')
+        self.assertNotIn('secrets.', json.dumps(shared))
+        checkouts = [step for step in shared['runs']['steps'] if 'actions/checkout@' in step.get('uses', '')]
+        self.assertEqual(checkouts[0]['with']['path'], 'candidate-data')
+        self.assertIs(checkouts[0]['with']['persist-credentials'], False)
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

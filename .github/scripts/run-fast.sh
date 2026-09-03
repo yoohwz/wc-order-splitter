@@ -14,6 +14,7 @@ python3 tests/ci/profile-contract.py
 python3 tests/ci/product-tree-contract.py
 python3 tests/ci/integration-suite-contract.py
 python3 tests/ci/workflow-contract.py
+python3 tests/ci/publisher-contract.py
 bash tests/ci/distribution-contract.sh
 distribution=$(mktemp -d "${TMPDIR:-/tmp}/wcos-product.XXXXXX")
 trap 'rm -rf "$distribution"' EXIT

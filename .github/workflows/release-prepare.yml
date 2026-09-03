@@ -1,0 +1,98 @@
+name: Prepare WordPress.org Release Candidate
+
+'on':
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Accepted protected-main candidate (full 40-character SHA)
+        required: true
+        type: string
+      version:
+        description: Exact numeric Version and Stable tag
+        required: true
+        type: string
+      product_tree_sha:
+        description: Certified PRODUCT_TREE_SHA
+        required: true
+        type: string
+      release_cert_run_id:
+        description: Successful WOS RELEASE_CERT run ID
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+
+concurrency:
+  group: wcos-release-prepare-${{ inputs.candidate_sha }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+  CANDIDATE_DIR: ${{ github.workspace }}/candidate-data
+  VERSION: ${{ inputs.version }}
+  PRODUCT_TREE_SHA: ${{ inputs.product_tree_sha }}
+  RELEASE_CERT_RUN_ID: ${{ inputs.release_cert_run_id }}
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  prepare:
+    name: Prepare immutable release candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Assert trusted protected-main control plane
+        run: |
+          test "$GITHUB_REPOSITORY" = yoohwz/wc-order-splitter
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_REF_PROTECTED" = true
+          test "$GITHUB_WORKFLOW_REF" = yoohwz/wc-order-splitter/.github/workflows/release-prepare.yml@refs/heads/main
+          test "$GITHUB_WORKFLOW_SHA" = "$GITHUB_SHA"
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]
+          [[ "$PRODUCT_TREE_SHA" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$RELEASE_CERT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+      - name: Checkout trusted control plane
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - name: Checkout candidate as data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          path: candidate-data
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install trusted preparation dependencies
+        working-directory: control
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes rsync php-cli
+          npm ci --ignore-scripts --no-audit --no-fund
+      - name: Authenticate certificate and build twice
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 control/.github/scripts/release_cli.py prepare
+      - name: Plugin Check on exact staged payload without production secrets
+        run: bash control/.github/scripts/release-plugin-check.sh
+      - name: Revalidate payload and record immutable candidate
+        id: record
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 control/.github/scripts/release_cli.py finish-prepare
+      - name: Upload exactly one immutable preparation artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.record.outputs.artifact_name }}
+          path: ${{ runner.temp }}/wcos-release/rc-a/*
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false
