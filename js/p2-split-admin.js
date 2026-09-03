@@ -129,6 +129,7 @@
     function openQuantityDialog(trigger) {
         var busy = false;
         var completed = false;
+        var completedPresentation = null;
         var state = null;
         var activeChildren = 1;
         var maxChildren = 10;
@@ -547,6 +548,14 @@
                 editButton.disabled = busy || completed;
             }
             updateChildToolbar();
+            if (!busy && completedPresentation) {
+                var presentation = completedPresentation;
+                completedPresentation = null;
+                // Optional presentation must never change the completed operation.
+                try {
+                    resultBox.dispatchEvent(new CustomEvent('wcos:operation-completed', { bubbles: true, detail: presentation }));
+                } catch (error) {}
+            }
         }
 
         function reviewPlan() {
@@ -629,6 +638,7 @@
             resultBox.appendChild(reload);
             resultBox.hidden = false;
             resultBox.focus();
+            completedPresentation = { action: 'split', operationId: data.operation_id, status: data.status };
         }
 
         function executePlan() {
@@ -790,6 +800,11 @@
                 cancel.className = 'button button-large modal-close';
                 cancel.textContent = 'Cancel';
                 footer.appendChild(cancel);
+            },
+            onReady: function (root, handle) {
+                try {
+                    handle.body.dispatchEvent(new CustomEvent('wcos:split-method-chooser', { bubbles: true }));
+                } catch (error) {}
             }
         });
     }

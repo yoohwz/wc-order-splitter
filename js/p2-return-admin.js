@@ -54,6 +54,7 @@
 	function openReturnModal() {
 		var phase = 'initial';
 		var busy = false;
+		var completedPresentation = null;
 		var reviewAuthority = null;
 		var confirmationAuthority = null;
 		var retryReady = false;
@@ -175,6 +176,14 @@
 		function setBusy(nextBusy) {
 			busy = !!nextBusy;
 			updateControls();
+			if (!busy && completedPresentation) {
+				var presentation = completedPresentation;
+				completedPresentation = null;
+				// Optional presentation must never change the completed operation.
+				try {
+					resultBox.dispatchEvent(new CustomEvent('wcos:operation-completed', { bubbles: true, detail: presentation }));
+				} catch (error) {}
+			}
 			if (busy && !focusableElements().length) {
 				focusDialogFallback();
 			}
@@ -348,6 +357,7 @@
 			}
 			resultBox.hidden = false;
 			resultBox.focus();
+			completedPresentation = { action: 'return', operationId: data.operation_id, status: data.status };
 		}
 
 		function executeReturn() {

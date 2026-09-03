@@ -46,10 +46,9 @@ wcos_upsell_assert(false !== strpos($boundary, "current_user_can('manage_woocomm
 wcos_upsell_assert(false !== strpos($boundary, "'split' => 3"), 'Split threshold must be 3.');
 wcos_upsell_assert(false !== strpos($boundary, "'duplicate' => 2"), 'Duplicate threshold must be 2.');
 wcos_upsell_assert(false !== strpos($boundary, "'merge' => 2"), 'Merge threshold must be 2.');
-wcos_upsell_assert(false !== strpos($boundary, "'wcos_split_execute' => 'split'"), 'Manual Split execute mapping missing.');
-wcos_upsell_assert(false !== strpos($boundary, "'wcos_split_strategy_execute' => 'split'"), 'Strategy Split execute mapping missing.');
-wcos_upsell_assert(false !== strpos($boundary, "'wcos_duplicate_execute' => 'duplicate'"), 'Duplicate execute mapping missing.');
-wcos_upsell_assert(false !== strpos($boundary, "'wcos_merge_execute' => 'merge'"), 'Merge execute mapping missing.');
+wcos_upsell_assert(false !== strpos($boundary, "'return' => 2"), 'Return threshold must be 2.');
+wcos_upsell_assert(false === strpos($boundary, 'executeActions'), 'Presentation must not observe transport actions.');
+wcos_upsell_assert(false !== strpos($boundary, 'Action Logs and guarded rollback for supported Split, Merge, Return and Duplicate workflows.'), 'Return positioning must remain qualified.');
 wcos_upsell_assert(false !== strpos($boundary, 'Vendor and bundle routing require compatible marketplace or bundle integrations.'), 'Contextual vendor and bundle claim must state its integration dependency.');
 
 wcos_upsell_assert(false !== strpos($settings, "\$sub_sub_tabs['premium'] = esc_html__('Upgrade'"), 'Historical premium section key must render Upgrade.');
@@ -62,17 +61,30 @@ wcos_upsell_assert(false !== strpos($settings, 'require a compatible Stock Manag
 wcos_upsell_assert(false !== strpos($bootstrap, "include_once \$root . 'backend/class-wcos-premium-upsell.php';"), 'Presentation boundary is not loaded.');
 wcos_upsell_assert(false !== strpos($bootstrap, 'WCOS_Premium_Upsell::bootstrap();'), 'Presentation boundary is not bootstrapped.');
 
-wcos_upsell_assert(false !== strpos($client, 'payload.success !== true'), 'Success-only guard missing.');
+wcos_upsell_assert(false !== strpos($client, "detail.status !== 'completed'"), 'Verified terminal-success guard missing.');
 wcos_upsell_assert(false !== strpos($client, 'seenOperations'), 'Operation replay deduplication state missing.');
-wcos_upsell_assert(false !== strpos($client, 'renderPendingTip();'), 'Later-page pending promotion render missing.');
+wcos_upsell_assert(false === strpos($client, 'renderPendingTip'), 'Later-page advertising must not duplicate completion campaigns.');
 wcos_upsell_assert(false !== strpos($client, 'hints: { splitRoutingDismissed: false }'), 'Split hint must have distinct browser-local dismissal state.');
-wcos_upsell_assert(false !== strpos($client, "'class': 'button-link wcos-split-upgrade-hint-dismiss'"), 'Split hint dismiss control missing.');
-wcos_upsell_assert(false !== strpos($client, 'dismissSplitHint();'), 'Split hint dismiss control must persist dismissal.');
-wcos_upsell_assert(false !== strpos($client, 'response.clone().json()'), 'Fetch observation must clone rather than consume the mutation response.');
+wcos_upsell_assert(false !== strpos($client, 'button-link wcos-modal-upsell-dismiss'), 'Modal hint dismiss control missing.');
+wcos_upsell_assert(false !== strpos($client, 'state.hints.splitRoutingDismissed = true;'), 'Split hint dismiss control must persist dismissal.');
+wcos_upsell_assert(false === strpos($client, 'window.fetch'), 'Promotion must not observe, wrap or issue fetch requests.');
+wcos_upsell_assert(false !== strpos($client, "document.addEventListener('wcos:operation-completed'"), 'Completion presentation listener missing.');
+wcos_upsell_assert(false !== strpos($client, "document.addEventListener('wcos:split-method-chooser'"), 'Method chooser presentation listener missing.');
+wcos_upsell_assert(false === strpos($client, '.wcos-split-launcher'), 'Obsolete external Split hint must not duplicate chooser card.');
 wcos_upsell_assert(false === strpos($client, 'navigator.sendBeacon'), 'Telemetry via sendBeacon is forbidden.');
 wcos_upsell_assert(false === strpos($client, 'XMLHttpRequest'), 'Upsell client must not create XHR telemetry.');
 wcos_upsell_assert(false === strpos($client, 'utm_'), 'Tracking parameters are forbidden.');
 wcos_upsell_assert(false === strpos($client, 'ref='), 'Referral parameters are forbidden.');
+
+foreach (array('split' => 'split', 'split-strategy' => 'split', 'duplicate' => 'duplicate', 'merge' => 'merge', 'return' => 'return') as $file_action => $campaign) {
+	$action_client = wcos_upsell_read($root . '/js/p2-' . $file_action . '-admin.js');
+	wcos_upsell_assert(1 === substr_count($action_client, "new CustomEvent('wcos:operation-completed'"), 'Exactly one bounded completion notification is required per client.');
+	wcos_upsell_assert(false !== strpos($action_client, "completedPresentation = { action: '" . $campaign . "', operationId: data.operation_id, status: data.status };"), 'Notification must contain only action, operation ID and server status.');
+	wcos_upsell_assert(false !== strpos($action_client, 'if (!busy && completedPresentation)'), 'Completion notification must wait for busy cleanup.');
+	wcos_upsell_assert(false === strpos($action_client, 'productUrl'), 'Commercial content must stay out of the action client.');
+}
+$bulk_client = wcos_upsell_read($root . '/js/p2-bulk-return-admin.js');
+wcos_upsell_assert(false === strpos($bulk_client, 'wcos:operation-completed'), 'Bulk Return must not join the Edit Order campaign.');
 
 require_once $root . '/inc/backend/class-wcos-premium-upsell.php';
 $upsell = WCOS_Premium_Upsell::bootstrap();
