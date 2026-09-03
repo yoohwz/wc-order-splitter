@@ -301,9 +301,26 @@ final class WCOS_Compat_Upgrade_Acceptance_Smoke {
 		$duplicate_target = wc_get_order(absint($duplicate_result['target']['id']));
 		self::assert($duplicate_target instanceof WC_Order && 'pending' === $duplicate_target->get_status(), 'Duplicate did not retain the intentional pending future-creation policy.');
 		self::assert('' === (string) $duplicate_target->get_transaction_id() && !$duplicate_target->get_date_paid(), 'Duplicate copied historical payment authority.');
-		self::assert($duplicate_before === self::order_state(wc_get_order($duplicate_source->get_id())), 'Duplicate rewrote the pre-existing source.');
+		self::verify_duplicate_source($duplicate_before, wc_get_order($duplicate_source->get_id()), $duplicate_review['operation_id'], $duplicate_target->get_id());
 		$duplicate_replay = $duplicate_controller->execute_request(array_merge($duplicate_request, array('operation_id' => $duplicate_review['operation_id'], 'confirmation_token' => $duplicate_review['confirmation_token'])));
 		self::assert(absint($duplicate_result['target']['id']) === absint($duplicate_replay['target']['id']), 'Duplicate response-loss replay created another target.');
+	}
+
+	private static function verify_duplicate_source(array $before, WC_Order $source, $operation_id, $target_id) {
+		$journal = WCOS_Operation_Journal::get($source, $operation_id);
+		self::assert(is_array($journal) && 'duplicate' === $journal['type'] && 'completed' === $journal['status']
+			&& $operation_id === $journal['operation_id'] && $source->get_id() === (int) $journal['source_order_id']
+			&& $target_id === (int) $journal['context']['target_order_id'], 'Duplicate did not persist its completed source/target journal.');
+		$summary = $source->get_meta(WCOS_Operation_Journal::SUMMARY_META_KEY, true);
+		self::assert(is_array($summary) && 1 === count($summary) && $operation_id === $summary[0]['operation_id']
+			&& 'duplicate' === $summary[0]['type'] && 'completed' === $summary[0]['status']
+			&& $journal['fingerprint'] === $summary[0]['fingerprint'], 'Duplicate source summary does not match its durable operation.');
+		$after = self::order_state($source);
+		// The fixture had no journal before Execute. Allow only this authenticated new summary.
+		$after['meta'] = array_values(array_filter($after['meta'], static function($entry) {
+			return WCOS_Operation_Journal::SUMMARY_META_KEY !== $entry['key'];
+		}));
+		self::assert($before === $after, 'Duplicate rewrote the pre-existing source.');
 	}
 
 	private static function exercise_mixed_bulk_review() {
