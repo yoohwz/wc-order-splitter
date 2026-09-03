@@ -294,8 +294,10 @@ class Product(unittest.TestCase):
 
     def test_14_malformed_ambiguous_and_missing_reports_fail_closed_without_raw_dump(self):
         duplicate = '[{"type":"ERROR","type":"WARNING","code":"x","file":"x.php","message":"x"}]'
+        error = json.dumps([{'type': 'ERROR', 'code': 'indented', 'file': 'x.php', 'message': 'Must not be ignored'}])
         for raw in ('', '[bad secret=fixture-private]', '[]\n[]', '[]\nSuccess: Checks complete. No errors found.',
-                    '[{}]', duplicate, '[{"type":false}]'):
+                    '[{}]', duplicate, '[{"type":false}]', '[]\n ' + error,
+                    'Success: Checks complete. No errors found.\n\t' + error, error + '\n  []'):
             with self.subTest(raw=raw), self.preparation_fixture(raw) as (work, outputs, summary), redirect_stdout(io.StringIO()) as log:
                 with self.assertRaisesRegex(ValueError, 'report malformed or ambiguous'):
                     cli.plugin_check_evidence()

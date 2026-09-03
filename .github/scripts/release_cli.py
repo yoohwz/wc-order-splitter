@@ -66,7 +66,7 @@ def parse_plugin_check(raw):
             result[key] = value
         return result
 
-    lines = re.sub(r'\x1b\[[0-9;]*m', '', raw).splitlines()
+    lines = [line.strip() for line in re.sub(r'\x1b\[[0-9;]*m', '', raw).splitlines()]
     matches = [json.loads(line, object_pairs_hook=unique) for line in lines if line.startswith('[')]
     clean = lines.count('Success: Checks complete. No errors found.')
     pkg.require(len(matches) == 1 and clean == 0 or not matches and clean == 1, 'Plugin Check report missing or ambiguous')
