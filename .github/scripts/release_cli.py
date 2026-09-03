@@ -83,11 +83,12 @@ def parse_plugin_check(raw):
 def diagnostic_text(value):
     """Allowlisted report fields only; never inspect or serialize credential env."""
     value = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', value)
+    value = re.sub(r'[\r\n\t]', ' ', value)
     value = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', value)
     value = re.sub(r'\b(?:gh[pousr]_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+)\b', '[REDACTED]', value)
-    value = re.sub(r'(?i)\bBearer\s+[^\s,;<>]+', 'Bearer [REDACTED]', value)
-    value = re.sub(r'''(?ix)\b([a-z0-9_]*(?:token|password|secret|api_key|private_key))\s*[:=]\s*
-                      (?:"[^"]*"|'[^']*'|[^\s&,;<>]+)''', r'\1=[REDACTED]', value)
+    value = re.sub(r'(?i)\b(Bearer|Basic)\s+[^\s,;<>]+', r'\1 [REDACTED]', value)
+    value = re.sub(r'''(?ix)(["']?\b(?:[a-z0-9_]*(?:token|password|secret|api_key|private_key)|authorization)["']?\s*[:=]\s*)
+                      (?:"[^"]*"|'[^']*'|[^\s&,;<>]+)''', r'\1[REDACTED]', value)
     return re.sub(r'(?i)(https?://)[^/\s:@]+:[^/\s@]+@', r'\1[REDACTED]@', value)
 
 

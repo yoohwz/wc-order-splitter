@@ -316,7 +316,10 @@ class Product(unittest.TestCase):
         env = {'GH_TOKEN': 'fixture-env-token', 'WPORG_SVN_PASSWORD': 'fixture-env-password', 'UNRELATED_VALUE': 'fixture-env-unrelated'}
         error = {'type': 'ERROR', 'code': 'unsafe_example', 'file': 'inc/example.php', 'line': '12', 'column': 3,
                  'message': '\x1b[31mFound <script>bad</script>\n::warning:: GH_TOKEN=fixture-message-token '
-                            'Bearer fixture-bearer github_pat_fixturepat WPORG_SVN_PASSWORD="fixture-quoted-password"',
+                            'Bearer fixture-bearer github_pat_fixturepat WPORG_SVN_PASSWORD="fixture-quoted-password" '
+                            'metadata {"CUSTOM_SECRET":"fixture-json-secret"} Basic fixture-basic '
+                            "'GH_TOKEN' = 'fixture-singlequote-token' Authorization: Basic Zml4dHVyZTpzZWNyZXQ= "
+                            'Authorization: fixture-authorization Bearer\nfixture-newline-token api_key:\tfixture-tab-secret',
                  'docs': 'https://fixture-user:fixture-url-password@example.test/docs?token=fixture-url-token',
                  'environment': env, 'raw': 'fixture-unknown-field'}
         with self.preparation_fixture(json.dumps([error])) as (work, outputs, summary), patch.dict(os.environ, env), \
@@ -328,6 +331,10 @@ class Product(unittest.TestCase):
             for secret in (*env.values(), 'fixture-message-token', 'fixture-bearer', 'github_pat_fixturepat',
                            'fixture-quoted-password', 'fixture-url-password', 'fixture-url-token', 'fixture-unknown-field'):
                 self.assertNotIn(secret, text)
+            for secret in ('fixture-json-secret', 'fixture-basic', 'fixture-authorization', 'fixture-newline-token', 'fixture-tab-secret'):
+                self.assertNotIn(secret, text)
+            self.assertNotIn('fixture-singlequote-token', text)
+            self.assertNotIn('Zml4dHVyZTpzZWNyZXQ=', text)
             finding = json.loads(raw)['findings'][0]
             self.assertEqual(set(finding), {'type', 'code', 'file', 'line', 'column', 'message', 'docs'})
             self.assertEqual(finding['type'], 'ERROR')
