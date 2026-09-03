@@ -2,15 +2,25 @@
 
 == Changelog ==
 
-= 1.5.0 (Aug 26, 2026) =
-* New: Added hardened Manual Quantity, Category, and Stock-status Split; single-order Duplicate; single-source Merge; single Return; and resumable Bulk Return for supported WooCommerce orders.
-* Security & Safety: Removed the obsolete automatic external subscription request and introduced code-owned feature gates, server-side Review -> Confirm -> Execute authority, capability and nonce checks, source-state verification, and fail-closed rejection of unsupported or changed state.
-* Integrity: Preserved historical quantities, monetary values, discounts, configured line identity, and per-rate taxes without current-catalog repricing or tax recalculation; all transferred or copied lines use fresh order-item objects.
-* Stock: Kept order mutations physically stock-neutral where required, conserved `_reduced_stock` ownership through Split, Merge, and Return, and prevented Duplicate from inheriting stock-reduction ownership.
-* Recovery: Added operation-scoped leases, durable journals, immutable fingerprints, idempotent replay, recovery, compensation, and manual-reconciliation blockers for interrupted or conflicting operations.
-* Compatibility: Added WooCommerce 11.0.1 validation across legacy, HPOS-only, and HPOS compatibility/synchronization storage, with PHP 7.4/8.1/8.3 and WordPress 7.1 compatibility evidence.
-* UI/UX: Added shared accessible WooCommerce Backbone modals, server-built Split bucket review, Merge target search, single Return, resumable Bulk Return, focus management, and native order-relation links.
-* Developer: Consolidated production mutations behind one gateway and domain engine, removed legacy mutation execution paths, and hardened deterministic distribution validation and package contents.
+= 1.5.0 =
+* New / Workflows: Added reviewed Manual Quantity, Category, and Stock Status Split, single-order Duplicate, single-source Merge, Return, and resumable Bulk Return for supported orders.
+* Split Compatibility: Preserved the reviewed source status on new children and respected the configured shipping behavior: source-only shipping or original shipping rows copied to each child while retained on the source. Fees and coupon records stay source-owned; supported historical discounts remain intact.
+* Split Compatibility: Allowed unaffected lines to split around refund-affected lines, with refund records retained on the source and ambiguous references rejected. Independently eligible current and legacy split children can be split again with correct parent links.
+* Quantities: Enforced each line's WooCommerce quantity step, including supported fractional steps, whole-line moves, and exact remaining quantities. Fractional operations require compatible quantity and stock handling.
+* Return Compatibility: Added verified Return for eligible split relationships created by Free 1.4.11. The original is resolved by the plugin, and retired child history is retained without restoring obsolete execution paths.
+* Bulk Return: Review now discloses Eligible and Skipped rows for selections of up to 20 orders. Only Eligible rows run, one per request; runtime non-success stops later work, and interrupted batches retain completed progress.
+* Merge Compatibility: Supported ordinary unpaid, non-refunded pairs while retaining target status, customer context, and charges. Source shipping, fees, and coupon records remain archived on the retired source. Product lines combine only on exact commercial identity or become new target items.
+* Merge Integrity: Allowed a source without financial history to merge into an eligible non-terminal payment/refund-bearing target only when every source line has zero total and zero tax total. These lines remain separate; existing target payments, refunds, items, charges, payable total, and tax stay unchanged. Financial sources and non-zero settled transfers remain unsupported.
+* Duplicate: Created fresh Pending payment orders from supported historical items and charges without copying source transaction IDs, paid state, or stock-reduction responsibility.
+* Security & Safety: Removed the obsolete automatic external subscription request. Added server-side review, explicit confirmation, per-order permission checks, and protection against changed orders and conflicting actions. Unsupported or ambiguous data stops the operation.
+* Money & Tax: Preserved historical line values, discounts, configured-product identity, rounding, and per-rate taxes without current-price, promotion, or tax recalculation. Order items are never reassigned between orders.
+* Stock: Kept Split, Merge, and Return physically stock-neutral while transferring stock-reduction responsibility explicitly. Duplicate does not inherit it; supported variation, parent-managed, backorder, and fractional cases retain their own safeguards.
+* Recovery: Added operation-specific locking, durable progress, duplicate-execution protection, and resumable recovery after interrupted writes or lost responses. Unsafe recovery requires manual reconciliation; completed actions are not silently repeated.
+* Upgrade Preservation: Validated upgrades from Free 1.4.11 with existing orders, settings, split relationships, payment/refund history, and stock records. Supported outcomes continue through the current reviewed workflows.
+* UI & Access: Improved WooCommerce order-action dialogs, keyboard focus, Split group review, Merge target search, return progress, and order-relation links. Administrator and Shop Manager work by default with required per-order permissions; the legacy Shop Manager permission option is retired.
+* Advanced Order Actions: Added optional, contextual discovery of the separate standalone Premium product for routing, automation, previews, queues, Bulk Duplicate, guarded rollback, and shipping/email controls. Free workflows remain available without Premium licensing.
+* Platform Compatibility: Validated WooCommerce 11.0.1 with legacy storage, HPOS-only, and HPOS compatibility/sync mode; PHP 7.4, 8.1, and 8.3. WordPress tested up to 7.1; minimum requirements remain WordPress 6.5 and PHP 7.4.
+* Developer: Unified order changes behind the current mutation gateway, removed legacy direct mutation handlers, protected operational metadata, and kept unsupported integrations fail-closed. The retired global email-recipient filter is not restored.
 
 = 1.4.11 (Jun 13, 2026) =
 * Fix: Hardened AJAX capability checks for split and bulk return actions.

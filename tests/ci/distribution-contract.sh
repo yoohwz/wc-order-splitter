@@ -3,6 +3,7 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
+python3 "$repo_root/tests/ci/release-copy-contract.py" --self-test
 wcos_tmp_base=${TMPDIR:-/tmp}
 fixture_root=$(mktemp -d "$wcos_tmp_base/wcos-distribution-contract.XXXXXX")
 
