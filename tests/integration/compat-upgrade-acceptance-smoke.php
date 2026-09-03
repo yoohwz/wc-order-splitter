@@ -2,7 +2,7 @@
 
 if (!defined('ABSPATH')) { exit(1); }
 
-define('WCOS_COMPAT_007_LEDGER_LIBRARY_ONLY', true);
+if (!defined('WCOS_COMPAT_007_LEDGER_LIBRARY_ONLY')) { define('WCOS_COMPAT_007_LEDGER_LIBRARY_ONLY', true); }
 require_once WP_PLUGIN_DIR . '/wc-order-splitter/tests/integration/compat-upgrade-fixture-ledger.php';
 
 /** WOS-COMPAT-007 genuine 1.4.11 -> current-candidate integrated upgrade acceptance. */
@@ -40,6 +40,7 @@ final class WCOS_Compat_Upgrade_Acceptance_Smoke {
 		try {
 			self::authenticate_upgrade($candidate_sha, $storage);
 			self::verify_upgrade_time_integrity();
+			self::verify_integrity_drift_detection();
 			self::verify_settings_and_access();
 			self::exercise_split_and_duplicate();
 			self::exercise_mixed_bulk_review();
@@ -86,6 +87,7 @@ final class WCOS_Compat_Upgrade_Acceptance_Smoke {
 	}
 
 	private static function verify_upgrade_time_integrity() {
+		self::assert(isset(self::$fixture['order_ids']['legacy_source'], self::$fixture['order_ids']['legacy_child'], self::$fixture['order_ids']['tax_history']), 'The complete historical upgrade snapshot is missing.');
 		foreach (self::$fixture['order_ids'] as $key => $order_id) {
 			$order = wc_get_order(absint($order_id));
 			self::assert($order instanceof WC_Order, 'A pre-upgrade order disappeared: ' . $key);
@@ -109,6 +111,73 @@ final class WCOS_Compat_Upgrade_Acceptance_Smoke {
 		self::assert(in_array($legacy_child->get_id(), array_map('absint', explode(',', (string) $legacy_source->get_meta('yoos_splitted_order', true))), true), 'The genuine legacy child relation changed.');
 		self::assert('' === (string) $legacy_child->get_meta(WCOS_Split_Order_Service::RELATION_PARENT_META, true), 'Upgrade rewrote legacy lineage as hardened history.');
 		self::assert(!class_exists('WooCommerce_Order_Splitter_Split_Order_Set_Email_Filters', false), 'The retired global email-recipient option regained runtime authority.');
+	}
+
+	private static function expect_integrity_drift(callable $change, callable $restore, $key, $label) {
+		try {
+			$change();
+			$rejected = false;
+			try { self::verify_upgrade_time_integrity(); }
+			catch (RuntimeException $exception) {
+				if ('Upgrade changed pre-existing order state before mutation: ' . $key !== $exception->getMessage()) { throw $exception; }
+				$rejected = true;
+			}
+			self::assert($rejected, 'The upgrade snapshot accepted injected drift: ' . $label);
+		} finally {
+			$restore();
+		}
+		self::verify_upgrade_time_integrity();
+		echo 'compat-upgrade-integrity-drift-rejected case=' . $label . "\n";
+	}
+
+	private static function verify_integrity_drift_detection() {
+		// Mutate only disposable fixture rows, then restore and re-read before operations.
+		$refund = wc_get_order(absint(self::$fixture['refund_id']));
+		self::assert($refund instanceof WC_Order_Refund, 'The historical refund is unavailable.');
+		$amount = $refund->get_amount('edit');
+		self::expect_integrity_drift(
+			static function() use ($refund) { $refund->set_amount('2.01'); $refund->save(); },
+			static function() use ($refund, $amount) { $refund->set_amount($amount); $refund->save(); },
+			'financial_target', 'refund-amount'
+		);
+		$refund_items = $refund->get_items('line_item');
+		$refund_line = reset($refund_items);
+		self::assert($refund_line instanceof WC_Order_Item_Product, 'The historical refund line is unavailable.');
+		$reference = $refund_line->get_meta('_refunded_item_id', true);
+		self::assert(absint($reference) > 0, 'The historical refund reference is unavailable.');
+		self::expect_integrity_drift(
+			static function() use ($refund_line) { $refund_line->update_meta_data('_refunded_item_id', 0); $refund_line->save(); },
+			static function() use ($refund_line, $reference) { $refund_line->update_meta_data('_refunded_item_id', $reference); $refund_line->save(); },
+			'financial_target', 'refund-line-reference'
+		);
+		foreach (array('legacy_source', 'legacy_child') as $key) {
+			$order = wc_get_order(absint(self::$fixture['order_ids'][$key]));
+			$total = $order->get_total('edit');
+			self::expect_integrity_drift(
+				static function() use ($order) { $order->set_total('999.99'); $order->save(); },
+				static function() use ($order, $total) { $order->set_total($total); $order->save(); },
+				$key, $key . '-total'
+			);
+		}
+		$tax_order = wc_get_order(absint(self::$fixture['order_ids']['tax_history']));
+		$rows = array_values($tax_order->get_items('tax'));
+		self::assert(2 === count($rows) && 0 < (float) $tax_order->get_total_tax('edit'), 'The historical two-rate tax fixture is empty.');
+		$first = $rows[0]->get_tax_total('edit');
+		$second = $rows[1]->get_tax_total('edit');
+		self::expect_integrity_drift(
+			static function() use ($rows) { $rows[0]->set_tax_total('1.21'); $rows[0]->save(); $rows[1]->set_tax_total('0.59'); $rows[1]->save(); },
+			static function() use ($rows, $first, $second) { $rows[0]->set_tax_total($first); $rows[0]->save(); $rows[1]->set_tax_total($second); $rows[1]->save(); },
+			'tax_history', 'per-rate-tax-rows'
+		);
+		$lines = array_values($tax_order->get_items('line_item'));
+		$line = $lines[0];
+		$taxes = $line->get_taxes('edit');
+		self::assert(2 === count($taxes['total']), 'The historical line tax distribution is empty.');
+		self::expect_integrity_drift(
+			static function() use ($line, $taxes) { $taxes['total'] = array(781001 => '1.01', 781002 => '0.49'); $line->set_taxes($taxes); $line->save(); },
+			static function() use ($line, $taxes) { $line->set_taxes($taxes); $line->save(); },
+			'tax_history', 'per-rate-line-tax'
+		);
 	}
 
 	private static function verify_settings_and_access() {
@@ -281,6 +350,7 @@ final class WCOS_Compat_Upgrade_Acceptance_Smoke {
 			'total' => (string) $financial_target->get_total(),
 			'total_tax' => (string) $financial_target->get_total_tax(),
 			'refund_ids' => self::refund_ids($financial_target),
+			'refund_states' => self::refund_states($financial_target),
 		);
 		list($financial_review, $financial_confirmation, $financial_result) = self::execute_merge($financial_source, $financial_target);
 		self::assert('completed' === $financial_result['status'] && !empty($financial_review['summary']['target_financial_history_retained']), 'Financial-target neutral Merge did not complete with explicit retained authority.');
@@ -292,6 +362,7 @@ final class WCOS_Compat_Upgrade_Acceptance_Smoke {
 			'total' => (string) $financial_target->get_total(),
 			'total_tax' => (string) $financial_target->get_total_tax(),
 			'refund_ids' => self::refund_ids($financial_target),
+			'refund_states' => self::refund_states($financial_target),
 		);
 		self::assert($financial_before === $financial_after, 'Financial-target Merge changed payment/refund/status/payable authority.');
 
@@ -381,7 +452,7 @@ final class WCOS_Compat_Upgrade_Acceptance_Smoke {
 		return $ids;
 	}
 
-	private static function item_meta(WC_Order_Item $item) {
+	private static function item_meta(WC_Data $item) {
 		$meta = array();
 		foreach ($item->get_meta_data() as $entry) { $data = $entry->get_data(); $meta[] = array('key' => (string) $data['key'], 'value' => $data['value']); }
 		return $meta;
@@ -409,15 +480,33 @@ final class WCOS_Compat_Upgrade_Acceptance_Smoke {
 		return $ids;
 	}
 
-	private static function order_state(WC_Order $order) {
+	private static function refund_states(WC_Order $order) {
+		$states = array();
+		foreach ($order->get_refunds() as $refund) { $states[$refund->get_id()] = self::order_state($refund); }
+		ksort($states, SORT_NUMERIC);
+		return $states;
+	}
+
+	private static function order_state(WC_Abstract_Order $order) {
 		$items = array();
 		foreach (array('line_item', 'shipping', 'fee', 'coupon', 'tax') as $type) { foreach ($order->get_items($type) as $item) { $items[] = self::item_state($item); } }
 		usort($items, static function($left, $right) { return $left['id'] <=> $right['id']; });
+		if ($order instanceof WC_Order_Refund) {
+			return array(
+				'id' => absint($order->get_id()), 'parent_id' => absint($order->get_parent_id('edit')),
+				'currency' => (string) $order->get_currency('edit'), 'status' => (string) $order->get_status('edit'),
+				'amount' => (string) $order->get_amount('edit'), 'reason' => (string) $order->get_reason('edit'),
+				'refunded_by' => absint($order->get_refunded_by('edit')), 'refunded_payment' => (bool) $order->get_refunded_payment('edit'),
+				'total' => (string) $order->get_total('edit'), 'total_tax' => (string) $order->get_total_tax('edit'),
+				'shipping_total' => (string) $order->get_shipping_total('edit'), 'shipping_tax' => (string) $order->get_shipping_tax('edit'),
+				'cart_tax' => (string) $order->get_cart_tax('edit'), 'meta' => self::item_meta($order), 'items' => $items,
+			);
+		}
 		return array(
 			'id' => absint($order->get_id()), 'status' => (string) $order->get_status(), 'currency' => (string) $order->get_currency(), 'prices_include_tax' => (bool) $order->get_prices_include_tax(),
 			'payment_method' => (string) $order->get_payment_method(), 'transaction_id' => (string) $order->get_transaction_id(), 'date_paid' => $order->get_date_paid() ? (int) $order->get_date_paid()->getTimestamp() : null,
 			'total' => (string) $order->get_total(), 'total_tax' => (string) $order->get_total_tax(), 'discount_total' => (string) $order->get_discount_total(), 'discount_tax' => (string) $order->get_discount_tax(),
-			'shipping_total' => (string) $order->get_shipping_total(), 'shipping_tax' => (string) $order->get_shipping_tax(), 'cart_tax' => (string) $order->get_cart_tax(), 'refund_ids' => self::refund_ids($order), 'items' => $items,
+			'shipping_total' => (string) $order->get_shipping_total(), 'shipping_tax' => (string) $order->get_shipping_tax(), 'cart_tax' => (string) $order->get_cart_tax(), 'refund_ids' => self::refund_ids($order), 'refund_states' => self::refund_states($order), 'meta' => self::item_meta($order), 'items' => $items,
 		);
 	}
 
@@ -494,6 +583,8 @@ final class WCOS_Compat_Upgrade_Acceptance_Smoke {
 		if (!$condition) { throw new RuntimeException($message); }
 	}
 }
+
+if (defined('WCOS_COMPAT_007_ACCEPTANCE_LIBRARY_ONLY')) { return; }
 
 $arguments = isset($args) && is_array($args) ? array_values($args) : array();
 WCOS_Compat_Upgrade_Acceptance_Smoke::run(

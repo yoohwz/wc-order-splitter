@@ -7,7 +7,7 @@ const WCOS_COMPAT_007_BASELINE_TREE = '75140a414cd637d134f860d8a70e7f92cbe4853c'
 const WCOS_COMPAT_007_FIXTURE_OPTION = 'wcos_compat_007_upgrade_fixture';
 const WCOS_COMPAT_007_MISSING_OPTION = '__wcos_compat_007_missing_option__';
 
-define('WCOS_COMPAT_007_LEDGER_LIBRARY_ONLY', true);
+if (!defined('WCOS_COMPAT_007_LEDGER_LIBRARY_ONLY')) { define('WCOS_COMPAT_007_LEDGER_LIBRARY_ONLY', true); }
 require_once WP_PLUGIN_DIR . '/wc-order-splitter/tests/integration/compat-upgrade-fixture-ledger.php';
 
 $wcos_compat_007_seed_arguments = isset($args) && is_array($args) ? array_values($args) : array();
@@ -26,7 +26,7 @@ function wcos_compat_007_seed_option_state($name) {
 	);
 }
 
-function wcos_compat_007_seed_meta(WC_Order_Item $item) {
+function wcos_compat_007_seed_meta(WC_Data $item) {
 	$meta = array();
 	foreach ($item->get_meta_data() as $entry) {
 		$data = $entry->get_data();
@@ -84,7 +84,7 @@ function wcos_compat_007_seed_item_state(WC_Order_Item $item) {
 	return $state;
 }
 
-function wcos_compat_007_seed_order_state(WC_Order $order) {
+function wcos_compat_007_seed_order_state(WC_Abstract_Order $order) {
 	$items = array();
 	foreach (array('line_item', 'shipping', 'fee', 'coupon', 'tax') as $type) {
 		foreach ($order->get_items($type) as $item) {
@@ -92,6 +92,20 @@ function wcos_compat_007_seed_order_state(WC_Order $order) {
 		}
 	}
 	usort($items, static function($left, $right) { return $left['id'] <=> $right['id']; });
+	if ($order instanceof WC_Order_Refund) {
+		return array(
+			'id' => absint($order->get_id()), 'parent_id' => absint($order->get_parent_id('edit')),
+			'currency' => (string) $order->get_currency('edit'), 'status' => (string) $order->get_status('edit'),
+			'amount' => (string) $order->get_amount('edit'), 'reason' => (string) $order->get_reason('edit'),
+			'refunded_by' => absint($order->get_refunded_by('edit')), 'refunded_payment' => (bool) $order->get_refunded_payment('edit'),
+			'total' => (string) $order->get_total('edit'), 'total_tax' => (string) $order->get_total_tax('edit'),
+			'shipping_total' => (string) $order->get_shipping_total('edit'), 'shipping_tax' => (string) $order->get_shipping_tax('edit'),
+			'cart_tax' => (string) $order->get_cart_tax('edit'), 'meta' => wcos_compat_007_seed_meta($order), 'items' => $items,
+		);
+	}
+	$refund_states = array();
+	foreach ($order->get_refunds() as $refund) { $refund_states[$refund->get_id()] = wcos_compat_007_seed_order_state($refund); }
+	ksort($refund_states, SORT_NUMERIC);
 	$refund_ids = array_map(static function($refund) { return absint($refund->get_id()); }, $order->get_refunds());
 	sort($refund_ids, SORT_NUMERIC);
 	return array(
@@ -110,6 +124,8 @@ function wcos_compat_007_seed_order_state(WC_Order $order) {
 		'shipping_tax' => (string) $order->get_shipping_tax(),
 		'cart_tax' => (string) $order->get_cart_tax(),
 		'refund_ids' => $refund_ids,
+		'refund_states' => $refund_states,
+		'meta' => wcos_compat_007_seed_meta($order),
 		'items' => $items,
 	);
 }
@@ -198,6 +214,8 @@ function wcos_compat_007_seed_coupon(WC_Order $order) {
 	$order->add_item($item);
 	$order->save();
 }
+
+if (defined('WCOS_COMPAT_007_SEED_LIBRARY_ONLY')) { return; }
 
 $baseline_plugin = 'wcos-legacy-1-4-11/wc-order-splitter.php';
 wcos_compat_007_seed_assert(is_plugin_active($baseline_plugin), 'The exact 1.4.11 in-place upgrade plugin is not active.');
@@ -336,6 +354,42 @@ $orders['financial_history_source']->set_transaction_id('baseline-financial-sour
 $orders['financial_history_source']->set_date_paid(strtotime('2026-01-17 00:00:00 UTC'));
 $orders['financial_history_source']->calculate_totals(false);
 $orders['financial_history_source']->save();
+// Persist historical two-rate tax data without consulting current tax tables.
+$orders['tax_history'] = wcos_compat_007_seed_order('tax-history');
+$tax_line_id = wcos_compat_007_seed_line($orders['tax_history'], $products['commercial'], 2, '12.00', '10.00', 'historical-tax');
+$tax_line = $orders['tax_history']->get_item($tax_line_id);
+$tax_line->set_taxes(array('subtotal' => array(781001 => '1.20', 781002 => '0.60'), 'total' => array(781001 => '1.00', 781002 => '0.50')));
+$tax_line->save();
+wcos_compat_007_seed_shipping($orders['tax_history'], 'tax-history', '3.00');
+foreach ($orders['tax_history']->get_items('shipping') as $shipping) {
+	$shipping->set_taxes(array('total' => array(781001 => '0.30', 781002 => '0.15')));
+	$shipping->save();
+}
+wcos_compat_007_seed_fee($orders['tax_history'], 'Baseline taxed fee', '2.00');
+foreach ($orders['tax_history']->get_items('fee') as $fee) {
+	$fee->set_taxes(array('total' => array(781001 => '0.20', 781002 => '0.10')));
+	$fee->save();
+}
+foreach (array(781001 => array('1.20', '0.30'), 781002 => array('0.60', '0.15')) as $rate_id => $amounts) {
+	$tax = new WC_Order_Item_Tax();
+	$tax->set_rate_id($rate_id);
+	$tax->set_label('Baseline historical rate ' . $rate_id);
+	$tax->set_tax_total($amounts[0]);
+	$tax->set_shipping_tax_total($amounts[1]);
+	$orders['tax_history']->add_item($tax);
+}
+$orders['tax_history']->set_cart_tax('1.80');
+$orders['tax_history']->set_shipping_tax('0.45');
+$orders['tax_history']->calculate_totals(false);
+$orders['tax_history']->save();
+
+// The actual public-handler Split family needs the same complete before/after proof.
+$legacy = get_option('wcos_compat_003_genuine_1_4_11_fixture', array());
+foreach (array('legacy_source' => 'source_id', 'legacy_child' => 'child_id') as $key => $field) {
+	if (empty($legacy[$field])) { continue; } // Early/middle/late setup-fault runs do not create a family.
+	$orders[$key] = wc_get_order(absint($legacy[$field]));
+	wcos_compat_007_seed_assert($orders[$key] instanceof WC_Order, 'The genuine legacy family is unavailable before upgrade.');
+}
 if ('late' === $wcos_compat_007_seed_fault) { throw new RuntimeException('Injected WOS-COMPAT-007 late seed failure.'); }
 
 $order_states = array();
