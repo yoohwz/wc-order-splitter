@@ -40,6 +40,24 @@ with tempfile.TemporaryDirectory() as tmp:
     for suite in ('core', 'crash_pre', 'response_loss', 'lease_loss', 'stock_guard_before', 'stock_guard_after', 'drift_stock', 'checkpoint_drift'):
         assert '"' + suite + '"' in calls, suite
     assert len(re.findall(r'"forward_[a-z_]+"', calls)) == 5
+
+    # The integrated upgrade owns the same legacy fixture option as the retained
+    # Return suite. Run it only for release, before seeding that suite's fixture.
+    import json
+    bash = tmp / 'bash'
+    bash.write_text('#!/usr/bin/env python3\nimport json,os,sys\nwith open(os.environ["CALL_LOG"], "a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\n')
+    bash.chmod(0o755)
+    upgrade = 'tests/runtime/run-compat-upgrade-fixture.sh'
+    prepare = 'tests/runtime/prepare-legacy-upgrade.sh'
+    for profile in ('STANDARD', 'CRITICAL', 'RELEASE_CERT'):
+        for storage in ('legacy', 'hpos', 'hpos-sync'):
+            (tmp / 'calls').write_text('')
+            subprocess.run(['/bin/bash', str(ROOT / '.github/scripts/run-runtime.sh'), profile, storage], env=env, check=True)
+            routed = [json.loads(line) for line in (tmp / 'calls').read_text().splitlines()]
+            upgrade_calls = [call for call in routed if call[0] == upgrade]
+            assert upgrade_calls == ([[upgrade, storage]] if profile == 'RELEASE_CERT' else []), (profile, storage)
+            if profile == 'RELEASE_CERT':
+                assert routed.index([upgrade, storage]) < routed.index([prepare])
 runtime = '\n'.join(p.read_text() for p in (ROOT / 'tests/runtime').glob('*.sh'))
 for kind, _, path in rows:
     if kind == 'support':

@@ -14,6 +14,9 @@ case "$STORAGE" in
 esac
 npx wp-env run cli wp option update woocommerce_custom_orders_table_enabled "$enabled"
 npx wp-env run cli wp option update woocommerce_custom_orders_table_data_sync_enabled "$sync"
+if [[ "$profile" == RELEASE_CERT ]]; then
+  bash tests/runtime/run-compat-upgrade-fixture.sh "$STORAGE"
+fi
 if [[ "$profile" != STANDARD ]]; then
   bash tests/runtime/prepare-legacy-upgrade.sh
 fi
