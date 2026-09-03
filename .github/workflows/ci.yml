@@ -43,7 +43,10 @@ jobs:
       - name: Validate workflow syntax
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck=''
       - name: Fast contracts and distributable identity
-        run: bash .github/scripts/run-fast.sh
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes subversion
+          bash .github/scripts/run-fast.sh
       - name: Record PR traceability
         env:
           REPO_HEAD_SHA: ${{ github.event.pull_request.head.sha }}

@@ -1,0 +1,35 @@
+name: Authenticated WOS publication context
+description: Trusted main guard and candidate/artifact authentication without an SVN credential
+runs:
+  using: composite
+  steps:
+    - name: Guard trusted main and data inputs
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$GITHUB_REPOSITORY" = yoohwz/wc-order-splitter
+        test "$GITHUB_REF" = refs/heads/main
+        test "$GITHUB_REF_PROTECTED" = true
+        test "$GITHUB_WORKFLOW_REF" = yoohwz/wc-order-splitter/.github/workflows/publish-wordpress-org.yml@refs/heads/main
+        test "$GITHUB_WORKFLOW_SHA" = "$GITHUB_SHA"
+        test "$GITHUB_RUN_ATTEMPT" = 1
+        test -z "${WPORG_SVN_PASSWORD:-}"
+        [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+        [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]
+        [[ "$PREPARATION_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+    - name: Checkout candidate as non-executable data
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        ref: ${{ env.CANDIDATE_SHA }}
+        path: candidate-data
+        persist-credentials: false
+    - name: Ensure SVN and canonical staging tools
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install --yes subversion rsync
+    - name: Authenticate prepared product and independent candidate tree
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 control/.github/scripts/release_cli.py context

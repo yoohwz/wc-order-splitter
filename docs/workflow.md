@@ -100,6 +100,12 @@ preserve its genuine upgrade fixtures and certify the frozen product tree once.
 
 ## Operator handoff
 
+Release-only preparation, Human-gated WordPress.org publication and read-only
+recovery are documented in [releasing.md](releasing.md). These manual workflows
+do not add normal PR merge requirements or replace RELEASE_CERT. Publisher
+bootstrap changes excluded control-plane files only; publication still requires
+its own owner authority and the production Environment gate.
+
 End meaningful task-state responses with one navigation footer. It grants no
 authority. Use `Human / ChatGPT / Finalize <TASK_ID>` only after evidence and
 required review are ready; otherwise identify the actual next action or blocker.

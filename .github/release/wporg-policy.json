@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "slug": "wc-order-splitter",
+  "svn_url": "https://plugins.svn.wordpress.org/wc-order-splitter",
+  "assets_mode": "unchanged",
+  "release_confirmation": {
+    "mode": "unknown",
+    "observed_at": null,
+    "source": "Not yet verified for Order Splitter; fail safe until a WordPress.org committer records Release Management state."
+  }
+}

@@ -1,0 +1,217 @@
+name: Publish Order Splitter to WordPress.org
+
+'on':
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Publish or continue read-only SVN/public verification
+        required: true
+        default: publish
+        type: choice
+        options: [publish, verify-only]
+      preparation_run_id:
+        description: Successful immutable preparation run
+        required: true
+        type: string
+      candidate_sha:
+        description: Exact prepared candidate SHA
+        required: true
+        type: string
+      version:
+        description: Exact prepared version
+        required: true
+        type: string
+      original_publish_run_id:
+        description: Required for verify-only, including lost commit-response recovery
+        required: false
+        default: ''
+        type: string
+      dry_run:
+        description: No external mutation; disable only under explicit release authority
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+
+concurrency:
+  group: wordpress-org-wc-order-splitter
+  cancel-in-progress: false
+
+env:
+  OPERATION: ${{ inputs.operation }}
+  DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+  CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+  CANDIDATE_DIR: ${{ github.workspace }}/candidate-data
+  VERSION: ${{ inputs.version }}
+  PREPARATION_RUN_ID: ${{ inputs.preparation_run_id }}
+  ORIGINAL_PUBLISH_RUN_ID: ${{ inputs.original_publish_run_id }}
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  preflight:
+    name: Read-only publication preflight
+    if: inputs.operation == 'publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted publisher control plane
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: ./control/.github/actions/publisher-context
+      - name: Read-only SVN snapshot and local staging
+        run: python3 control/.github/scripts/release_cli.py preflight
+      - name: Persist exact Human approval target
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wporg-preflight-${{ github.run_id }}
+          path: ${{ runner.temp }}/wcos-release/preflight-record.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false
+
+  dry-run:
+    name: Dry-run final remote recheck
+    needs: preflight
+    if: inputs.operation == 'publish' && inputs.dry_run
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted publisher control plane
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: ./control/.github/actions/publisher-context
+      - name: Final recheck and local SVN staging only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 control/.github/scripts/release_cli.py recheck
+
+  production:
+    name: Human-gated atomic publication
+    needs: preflight
+    if: inputs.operation == 'publish' && !inputs.dry_run
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: wordpress-org-production
+    permissions:
+      actions: read
+      checks: read
+      contents: write
+    env:
+      PUBLISH_ENVIRONMENT: wordpress-org-production
+    outputs:
+      state: ${{ steps.verify.outputs.state }}
+    steps:
+      - name: Checkout trusted publisher control plane
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: ./control/.github/actions/publisher-context
+      - name: Final remote recheck after Human approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 control/.github/scripts/release_cli.py recheck
+      - name: Seal immutable annotated Git tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 control/.github/scripts/release_cli.py seal
+      - name: Single atomic SVN commit attempt
+        id: commit
+        env:
+          WPORG_SVN_USERNAME: ${{ vars.WPORG_SVN_USERNAME }}
+          WPORG_SVN_PASSWORD: ${{ secrets.WPORG_SVN_PASSWORD }}
+        run: python3 control/.github/scripts/release_cli.py commit
+      - name: Authenticate SVN before confirmation or public propagation
+        id: verify
+        if: ${{ !cancelled() && steps.commit.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 control/.github/scripts/release_cli.py verify
+      - name: Persist publication evidence even if propagation fails
+        if: ${{ always() && steps.verify.outcome != 'skipped' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wporg-publication-${{ github.run_id }}
+          path: ${{ runner.temp }}/wcos-release/publication-record.json
+          if-no-files-found: warn
+          retention-days: 90
+          overwrite: false
+      - name: Persist ambiguous commit attempt for read-only recovery
+        if: ${{ always() && steps.commit.outcome != 'skipped' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wporg-attempt-${{ github.run_id }}
+          path: ${{ runner.temp }}/wcos-release/commit-attempt.json
+          if-no-files-found: warn
+          retention-days: 90
+          overwrite: false
+
+  verify-only:
+    name: Read-only SVN and public recovery
+    if: inputs.operation == 'verify-only'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      state: ${{ steps.verify.outputs.state }}
+    steps:
+      - name: Checkout trusted publisher control plane
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: ./control/.github/actions/publisher-context
+      - name: Authenticate original publication and public payload without SVN credentials
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 control/.github/scripts/release_cli.py recover
+      - name: Persist verified or pending public state
+        if: ${{ always() && steps.verify.outcome != 'skipped' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wporg-publication-${{ github.run_id }}
+          path: ${{ runner.temp }}/wcos-release/publication-record.json
+          if-no-files-found: warn
+          retention-days: 90
+          overwrite: false
+
+  github-release:
+    name: GitHub Release only after verified WordPress.org publication
+    needs: [production, verify-only]
+    if: >-
+      ${{ always() && !inputs.dry_run &&
+          ((needs.production.result == 'success' && needs.production.outputs.state == 'WPORG_PUBLIC_RELEASE_VERIFIED') ||
+           (needs.verify-only.result == 'success' && needs.verify-only.outputs.state == 'WPORG_PUBLIC_RELEASE_VERIFIED')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: wordpress-org-production
+    permissions:
+      actions: read
+      checks: read
+      contents: write
+    env:
+      PUBLISH_ENVIRONMENT: wordpress-org-production
+    steps:
+      - name: Checkout trusted publisher control plane
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: ./control/.github/actions/publisher-context
+      - name: Reverify remote identity then create or reconcile exact GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 control/.github/scripts/release_cli.py release
