@@ -15,10 +15,10 @@ while IFS='|' read -r kind profiles path; do
       forward_after_both_relations_before_verification forward_after_verification_before_commit \
       forward_after_commit_before_complete response_loss lease_loss stock_guard_before \
       stock_guard_after drift_stock checkpoint_drift; do
-      npx wp-env run cli wp eval-file "wp-content/plugins/wc-order-splitter/$path" "$suite"
+      npx wp-env run cli wp eval-file "wp-content/plugins/wc-order-splitter/$path" "$suite" </dev/null
     done
   else
-    npx wp-env run cli wp eval-file "wp-content/plugins/wc-order-splitter/$path"
+    npx wp-env run cli wp eval-file "wp-content/plugins/wc-order-splitter/$path" </dev/null
   fi
 done < "$repo_root/tests/ci/integration-suites.tsv"
 [[ "$selected" -gt 0 ]]
