@@ -82,7 +82,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python3 control/.github/scripts/release_cli.py prepare
       - name: Plugin Check on exact staged payload without production secrets
+        id: plugin_check
         run: bash control/.github/scripts/release-plugin-check.sh
+      - name: Preserve sanitized Plugin Check evidence before enforcing Errors
+        if: ${{ !cancelled() && (steps.plugin_check.outcome == 'success' || steps.plugin_check.outcome == 'failure') }}
+        run: python3 control/.github/scripts/release_cli.py plugin-check-evidence
       - name: Revalidate payload and record immutable candidate
         id: record
         env:
@@ -95,4 +99,13 @@ jobs:
           path: ${{ runner.temp }}/wcos-release/rc-a/*
           if-no-files-found: error
           retention-days: 90
+          overwrite: false
+      - name: Upload diagnostic-only Plugin Check evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: plugin-check-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/wcos-release/plugin-check-diagnostics.json
+          if-no-files-found: ignore
+          retention-days: 14
           overwrite: false
