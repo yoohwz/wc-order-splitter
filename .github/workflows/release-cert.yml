@@ -1,0 +1,116 @@
+name: Release certification
+
+'on':
+  workflow_dispatch:
+    inputs:
+      product_tree_sha:
+        description: Frozen candidate PRODUCT_TREE_SHA (SHA-256); release certification authority required
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  identity:
+    name: Frozen product identity and distribution
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.identity.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+      - name: Validate staged product against the frozen digest
+        id: identity
+        env:
+          EXPECTED_PRODUCT_TREE_SHA: ${{ inputs.product_tree_sha }}
+        run: |
+          bash .github/scripts/validate-distribution-contract.sh "$PWD" "$RUNNER_TEMP/release-product"
+          digest=$(python3 .github/scripts/product-tree.py "$RUNNER_TEMP/release-product")
+          test "$digest" = "PRODUCT_TREE_SHA=$EXPECTED_PRODUCT_TREE_SHA"
+          echo "digest=$EXPECTED_PRODUCT_TREE_SHA" >> "$GITHUB_OUTPUT"
+          echo "$digest"
+          echo "REPO_HEAD_SHA=$GITHUB_SHA"
+          echo 'PUBLIC_BASELINE=1.4.11/e1d8aeb8eff38f4ce69dad1a08993e17521c6359'
+      - name: Distribution regressions and release inventory
+        run: |
+          bash tests/ci/distribution-contract.sh
+          python3 tests/ci/product-tree-contract.py
+          python3 tests/ci/integration-suite-contract.py
+
+  php:
+    name: Release PHP ${{ matrix.php }}
+    needs: identity
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.1', '8.3']
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+      - run: bash .github/scripts/run-static.sh
+
+  integration:
+    name: Release WooCommerce 11.0.1 / PHP 8.3 / ${{ matrix.storage }}
+    needs: identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        storage: [legacy, hpos, hpos-sync]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm ci --no-audit --no-fund
+      - name: Full release union, genuine upgrade and concurrent workers
+        env:
+          STORAGE: ${{ matrix.storage }}
+        run: bash .github/scripts/run-runtime.sh RELEASE_CERT "$STORAGE"
+
+  certificate:
+    name: RELEASE_CERT
+    if: always()
+    needs: [identity, php, integration]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Record product certificate after all evidence succeeds
+        env:
+          IDENTITY_RESULT: ${{ needs.identity.result }}
+          PHP_RESULT: ${{ needs.php.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+          PRODUCT_TREE_SHA: ${{ needs.identity.outputs.digest }}
+        run: |
+          test "$IDENTITY_RESULT" = success
+          test "$PHP_RESULT" = success
+          test "$INTEGRATION_RESULT" = success
+          {
+            echo "PRODUCT_TREE_SHA=$PRODUCT_TREE_SHA"
+            echo "REPO_HEAD_SHA=$GITHUB_SHA"
+            echo 'PHP_MATRIX=7.4,8.1,8.3; WOOCOMMERCE=11.0.1; RUNTIME_PHP=8.3'
+            echo 'STORAGE=legacy,hpos,hpos-sync; SUITES=complete release manifest and concurrency'
+            echo 'PUBLIC_BASELINE=1.4.11/e1d8aeb8eff38f4ce69dad1a08993e17521c6359; GENUINE_UPGRADE=passed'
+            echo 'ARTIFACTS=0; no ZIP, tag, release, publication or deployment'
+          } | tee -a "$GITHUB_STEP_SUMMARY"

@@ -1,64 +1,35 @@
 # Repository Execution Contract
 
-## Mission
+Maintain a WordPress.org-compatible WooCommerce order-splitting plugin without
+violating stock, financial, tax, privacy or order-item ownership invariants.
 
-Maintain a WordPress.org-compatible WooCommerce order-splitting plugin without violating stock, financial, tax, privacy, or order-item ownership invariants.
+## Authority and execution
 
-## Source authority
+Current code/tests, `inc/domain/`, WooCommerce public CRUD/data-store APIs and
+`docs/order-mutation-v2-contract.md` own product architecture. There is one
+mutation engine. WordPress.org guidelines and Plugin Check remain distribution
+requirements. Public product claims require implementation evidence.
 
-1. Current repository code and tests.
-2. `inc/domain/` as the single replacement mutation-engine source of truth.
-3. WooCommerce public CRUD and order data-store APIs.
-4. WordPress.org Plugin Guidelines and Plugin Check.
-5. The contracts in `docs/order-mutation-v2-contract.md`.
-6. The engineering authority contract in `docs/engineering-review-authority.md`.
-7. The direct-workflow contract in `docs/codex-direct-workflow.md` when `TRIVIAL / CODEX_DIRECT` is explicitly invoked.
-8. Public product copy only after implementation evidence exists.
+`docs/workflow.md` is the sole active engineering workflow contract. Resolve the
+canonical GitHub Issue, comments, current PR/branch/head and CI before acting on
+`Run`, `Continue`, `Review`, `Fix`, `Verify` or `Status`. The Issue supplies bounded
+scope and acceptance criteria. Do not reconstruct unavailable task authority.
 
-`inc/mutation-v2/`, duplicate implementations, marketing copy, historical changelog statements, and legacy behavior are not architecture authority.
+Use `ChatGPT Create -> Codex Run -> ChatGPT Finalize`. Codex implements and gathers
+proportional evidence; a fresh source-read-only Independent Codex Reviewer reviews
+CRITICAL work and safety-control changes. ChatGPT owns Acceptance. The owner must
+explicitly authorize merge of the current accepted head. Use native Required CI,
+resolve review threads and let GitHub enforce its unchanged ruleset at squash
+merge. No Issue/comment parsing or second merge-policy engine belongs in CI.
 
-## Short-command task resolution
+Keep PRs draft while implementation, CI or required review is incomplete. Run
+bounded corrections on the same task/PR. Never weaken product tests, production
+gates or repository protection to make governance pass. Stop for architecture or
+scope review if those boundaries would need to change. Merge permission does not
+authorize release, package, tag, publication or deployment.
 
-Operator prompts may use the repository short-command protocol in `docs/codex-short-command-protocol.md`.
-
-Examples:
-
-- `Create WOS-MERGE-009`
-- `Chạy WOS-MERGE-009`
-- `Finalize WOS-MERGE-009`
-- `Tiếp tục WOS-MERGE-009`
-- `Review WOS-MERGE-009`
-- `Sửa WOS-MERGE-009`
-- `Verify WOS-MERGE-009`
-- `Status WOS-MERGE-009`
-- `Direct Make the admin card spacing more compact`
-- `Quick Adjust the admin button colors`
-
-A short existing-task command is only a task/action selector. Before substantive work, Codex must resolve the canonical GitHub Issue, its comments, associated PR/branch, exact SHAs, CI/check state, and latest explicit governance checkpoint. The Issue/PR contract supplies scope, invariants, tests, stop conditions, and completion signals; the short prompt does not duplicate or override them. `Direct <request>` / `Quick <request>` is the sole bootstrap exception and must persist/authenticate its own bounded canonical Issue plus `DIRECT_HUMAN_AUTHORIZED` before the first source edit under `docs/codex-direct-workflow.md`.
-
-The preferred normal lifecycle remains `ChatGPT Create -> Codex Run -> ChatGPT Finalize`, governed by `docs/compressed-engineering-workflow.md`. After canonical `POST_MERGE_ACCEPTED` for WOS-GOV-009, assurance and CI are separate dimensions: LOW uses persisted Executor evidence without Independent Review by default; MEDIUM requires Independent Review on explicit semantic triggers or ambiguity; HIGH always requires Independent Review; deterministic DIRECT omits ChatGPT Create/Acceptance and Independent Review. These rules are prospective. WOS-GOV-009 itself and untransitioned active tasks use their source-bound prior workflow.
-
-Review-required work uses `PRECHECK -> fresh Independent PRE_REVIEW -> FINAL`. Ordinary normal pushes provide unbound discovery PRECHECK only. Before review, Codex must dispatch a task-bound PRECHECK whose non-protected job names bind exact task, `CI profile floor`, stage, and whose owner-authored Task Capsule separately binds exact `Assurance floor` plus `Independent review floor`; no PRECHECK run may publish protected `Required CI`. Each exact-head `PRE_REVIEW_CLEAN` or `PRE_REVIEW_CHANGES_REQUIRED` cycle must be automatically persisted as a new structured GitHub record and re-read/authenticated. A changed head reruns task-bound PRECHECK and complete review. An unchanged clean review may be mechanically promoted after green FINAL to `TECHNICAL_ACCEPTED` only by binding that Independent Review authority ID, exact head/tree, final run/profile, and artifacts=0; the Executor cannot manufacture the underlying conclusion.
-
-Chat/session-only review text is evidence only. If a required Independent Review or mechanical promotion record cannot be persisted and re-read with authenticated exact-head provenance, stop `TECHNICAL_REVIEW_PERSISTENCE_REQUIRED: <TASK_ID> / exact head <SHA>` and do not route to Acceptance or `Finalize`.
-
-If the active Codex surface cannot establish fresh separate reviewer provenance for required review, stop `INDEPENDENT_REVIEW_DISPATCH_REQUIRED` rather than allowing the Executor to self-review. Automatic correction/re-review remains capped by `TECHNICAL_ESCALATION_REQUIRED`.
-
-Deterministic DIRECT remains limited to paired numeric `border-radius` declaration edits in existing Git-tracked regular-text mode-`100644` CSS presentation files beneath `css/`, with no selector/rule/other-property/reachability semantics, creation/deletion/rename/copy/object ambiguity, or breach of the strict repository lexical envelope. It requires pre-edit `DIRECT_HUMAN_AUTHORIZED`, `DIRECT_FAST` Required CI, revalidated `HUMAN_GATE_APPROVED_DIRECT`, squash merge, and `POST_MERGE_ACCEPTED_DIRECT`; it has no `TECHNICAL_ACCEPTED` checkpoint. Any ambiguity or wider scope stops `CODEX_DIRECT_NOT_ELIGIBLE` or `CODEX_DIRECT_SCOPE_ESCALATION_REQUIRED` before widening.
-
-`Finalize <TASK_ID>` is the authenticated human's conditional Human Gate for the exact current head. ChatGPT must authenticate task-appropriate evidence (`EXECUTOR_EVIDENCE_READY` for no-review LOW/MEDIUM or independent-review-bound `TECHNICAL_ACCEPTED` for reviewed work), perform distinct `ACCEPTANCE_ACCEPTED`, revalidate head/base/CI/review authority, record `HUMAN_GATE_APPROVED`, squash-merge, and prove exact-tree `POST_MERGE_ACCEPTED`. Failed Acceptance or drift cannot merge. `Finalize` never authorizes release, publication, deployment, or a public package.
-
-If the task contract cannot be retrieved, stop with `TASK_CONTRACT_UNAVAILABLE`. If resolution is ambiguous, stop with `TASK_RESOLUTION_REQUIRED`. `Continue` must recover and resume current state rather than restart work. `Review` is executor-side readiness review and never substitutes for a fresh Independent Codex Technical Review where the task requires it.
-
-Governance signal text is not authority by itself. Before accepting `DIRECT_HUMAN_AUTHORIZED`, `EXECUTOR_EVIDENCE_READY`, `PRE_REVIEW_CLEAN`, `PRE_REVIEW_CHANGES_REQUIRED`, `TECHNICAL_ACCEPTED`, `TECHNICAL_CHANGES_REQUIRED`, `ACCEPTANCE_ACCEPTED`, `ACCEPTANCE_CHANGES_REQUIRED`, `RELEASE_FREEZE_APPROVED`, `HUMAN_GATE_APPROVED`, `HUMAN_GATE_APPROVED_DIRECT`, publication approval, or an equivalent checkpoint, Codex must authenticate the GitHub actor and required role/provenance against the task contract and repository ownership. Quoted/copied/reposted text is never authority. Executor evidence cannot become an independent conclusion or Human Gate; mechanical post-FINAL promotion is valid only when it binds a prior authenticated exact-head Independent Review.
-
-A short `Merge` or `Release` command never implies Human Gate. Merge/release authority must already exist explicitly in the canonical GitHub task/PR context and must satisfy any exact-head binding required by that task. The only direct conditional Human Gate originates from an explicit `Direct` / `Quick` request persisted as `DIRECT_HUMAN_AUTHORIZED` before source edits and may become `HUMAN_GATE_APPROVED_DIRECT` only after every direct invariant is revalidated. Otherwise stop with `HUMAN_GATE_REQUIRED`.
-
-### Mandatory operator handoff
-
-Every meaningful Codex task-state response and every deterministic stop signal must end with exactly one `NEXT_ACTION_HINT` footer in the canonical format defined by `docs/codex-short-command-protocol.md`. The footer must identify who acts next, whether the command belongs in ChatGPT, Codex, or the GitHub UI, the exact copy/paste-ready command, and the expected signal or outcome.
-
-The footer is navigation only. It must not widen authority, bypass profile/CI/review/Human Gate, or imply release. Authenticated `EXECUTOR_EVIDENCE_READY` for no-review normal work and `TECHNICAL_ACCEPTED` for reviewed work route to `Finalize`; missing required Independent Review routes to a fresh reviewer; persistence failure blocks Finalize. Eligible DIRECT continues internally through unchanged-authority `HUMAN_GATE_APPROVED_DIRECT` and never routes to Finalize. Older/source-bound tasks retain their explicit workflow.
+End meaningful task-state responses with exactly one NEXT_ACTION_HINT footer as
+defined in `docs/workflow.md`.
 
 ## Production gate authority
 
@@ -99,7 +70,7 @@ P1 may contain internal adapter/service/planner scaffolding used to prove domain
 
 ### Every change
 
-- PHP-touching and HIGH/RELEASE certification succeeds on PHP 7.4 and the current supported PHP versions; non-PHP LOW/DIRECT runs the exact focused static profile.
+- CRITICAL and RELEASE_CERT run the supported PHP 7.4/8.1/8.3 matrix; STANDARD uses PHP 8.3 and FAST uses focused static checks.
 - Existing domain and integration contracts remain green.
 - No removed external endpoint or data collection returns.
 - Plugin version and `Stable tag` stay aligned for release changes.
@@ -128,16 +99,17 @@ P1 may contain internal adapter/service/planner scaffolding used to prove domain
 - Persisted invariants are verified after database re-read.
 - A future Category/Stock-status production adapter must bind frozen planner evidence and confirmation authority, establish request-local `WCOS_Stock_Side_Effect_Guard` scope, and must not recompute live classification during Execute.
 
-## Commands
+## Local validation
 
-```bash
-find . -type f -name '*.php' -print0 | xargs -0 -n1 php -l
+Run focused evidence from the active plugin worktree. Canonical PR CI runs the
+selected FAST, STANDARD or CRITICAL profile; RELEASE_CERT is release-only.
+Do not create an installable ZIP without explicit package/release authority.
+
+```sh
 php tests/unit/run.php
+bash .github/scripts/run-fast.sh
+bash .github/scripts/run-static.sh
 ```
-
-WooCommerce/WordPress integration contracts run through `.github/workflows/ci.yml`. MEDIUM uses affected-domain HPOS by default; HIGH final profiles use affected domains and sentinels across storage-sensitive modes; `RELEASE_CERT` retains the exhaustive legacy/HPOS/HPOS-sync baseline union. Local success is necessary but not sufficient.
-
-Normal Local implementation evidence is scope-focused: use the exact active plugin worktree and pushed task HEAD, run relevant PHP/unit checks, add focused WooCommerce integration evidence when it establishes task-specific behavior, and use hands-on browser/UI evidence only for behavior CI cannot establish. The full legacy/HPOS/HPOS-sync regression matrix belongs to canonical PR CI unless a task explicitly requires Local reproduction of a storage defect or broader Local evidence. Normal development does not create an installable ZIP; package artifacts require explicit task or release authority.
 
 ## Local-runtime worktree contract
 
@@ -150,17 +122,11 @@ When a task brief designates Local-runtime mode:
 - Before changing worktree topology or switching the active Local-runtime branch, prove every affected worktree is clean and safe to switch. If that cannot be proven, stop with `LOCAL_RUNTIME_WORKTREE_SYNC_REQUIRED` without discarding uncommitted state.
 - Canonical GitHub CI remains the merge authority.
 
-## Review rules
+## Review invariants
 
-- Review the complete diff, not only the newest commit.
-- Keep Codex Executor, fresh Independent Codex Reviewer where required, and ChatGPT Acceptance Reviewer distinct under `docs/engineering-review-authority.md`.
-- LOW/no-trigger MEDIUM Executor evidence is never `TECHNICAL_ACCEPTED`. A mechanical post-FINAL Technical Acceptance must bind prior exact-head `PRE_REVIEW_CLEAN`; ChatGPT cannot substitute Acceptance for required technical review.
-- The Independent Reviewer must persist a new immutable structured GitHub PRE_REVIEW/legacy Technical Review record for every exact-head cycle; metadata writes do not relax source read-only behavior.
-- Automatic technical correction/re-review orchestration is limited to three head-changing cycles per engineering loop; then stop with `TECHNICAL_ESCALATION_REQUIRED`.
-- No assurance profile waives protected FINAL `Required CI`, task-appropriate exact-head evidence, explicit Human Gate, post-merge proof, or release/publication authority. LOW/MEDIUM/HIGH cannot waive ChatGPT Acceptance. Only deterministic DIRECT omits it under `docs/codex-direct-workflow.md`.
-- Treat money, tax, stock, refunds, and relation metadata as one transaction boundary.
-- Reject hidden fallback behavior. Unsupported input must return a stable error and leave orders unchanged.
-- Keep pull requests draft while required checks are absent, queued, or failing.
-- Preserve the task-bound code-owned gate map; do not revert already accepted production gates or enable unfinished workflows/strategies as a side effect of unrelated work.
-- Do not merge a new production mutation controller, strategy transport, or gate-changing diff without independent technical review and explicit Human Gate.
-- Do not publish a WordPress.org ZIP unless the package/release workflow is green for the exact `main` state being released.
+- Review the complete diff and evidence; Executor self-review cannot replace required Independent Review.
+- Treat money, tax, stock, refunds and relation metadata as one transaction boundary.
+- Reject hidden fallbacks: unsupported input returns a stable error and leaves orders unchanged.
+- Preserve the task-bound production gate map and all critical product suites.
+- Never merge a production write surface or gate enablement without independent review and explicit Human permission.
+- Release certification binds PRODUCT_TREE_SHA; excluded repository drift alone cannot invalidate the product certificate.

@@ -1,53 +1,24 @@
 #!/usr/bin/env bash
-
 set -euo pipefail
-
 profile=${1:-}
-stage=${2:-}
-list_only=${3:-}
+case "$profile" in STANDARD|CRITICAL|RELEASE_CERT) ;; *) echo 'unsupported integration profile' >&2; exit 1 ;; esac
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
-manifest="$repo_root/tests/ci/integration-suites.tsv"
-
-case "$profile/$stage" in
-  MEDIUM_DOMAIN/FINAL) wanted='medium,sentinel' ;;
-  HIGH_DEEP/PRECHECK) wanted='precheck,sentinel' ;;
-  HIGH_DEEP/FINAL) wanted='deep,sentinel' ;;
-  HIGH_FINANCIAL/PRECHECK) wanted='precheck,precheck-financial,sentinel' ;;
-  HIGH_FINANCIAL/FINAL) wanted='deep,financial,sentinel' ;;
-  RELEASE_CERT/PRECHECK) wanted='precheck,precheck-financial,sentinel' ;;
-  *)
-    echo "integration-profile-error: unsupported profile/stage $profile/$stage" >&2
-    exit 1
-    ;;
-esac
-
 selected=0
-while IFS='|' read -r kind tags path; do
-  [[ -n "$kind" && "$kind" != \#* ]] || continue
-  [[ "$kind" == eval ]] || continue
-  matched=false
-  old_ifs=$IFS
-  IFS=','
-  for tag in $wanted; do
-    case ",$tags," in
-      *",$tag,"*) matched=true; break ;;
-    esac
-  done
-  IFS=$old_ifs
-  [[ "$matched" == true ]] || continue
+while IFS='|' read -r kind profiles path; do
+  [[ "$kind" == eval && ",$profiles," == *",$profile,"* ]] || continue
   selected=$((selected + 1))
-  if [[ "$list_only" == --list ]]; then
+  if [[ ${2:-} == --list ]]; then
     printf '%s\n' "$path"
+  elif [[ "$path" == tests/integration/merge-service-adapter-smoke.php ]]; then
+    # Separate processes preserve bounded memory and cover every crash/replay window.
+    for suite in core crash_pre forward_before_forward_relations forward_after_one_reciprocal_relation \
+      forward_after_both_relations_before_verification forward_after_verification_before_commit \
+      forward_after_commit_before_complete response_loss lease_loss stock_guard_before \
+      stock_guard_after drift_stock checkpoint_drift; do
+      npx wp-env run cli wp eval-file "wp-content/plugins/wc-order-splitter/$path" "$suite"
+    done
   else
     npx wp-env run cli wp eval-file "wp-content/plugins/wc-order-splitter/$path"
   fi
-done < "$manifest"
-
-[[ "$selected" -gt 0 ]] || {
-  echo "integration-profile-error: no suites selected for $profile/$stage" >&2
-  exit 1
-}
-
-if [[ "$list_only" != --list ]]; then
-  echo "integration-profile-ok profile=$profile stage=$stage selected=$selected"
-fi
+done < "$repo_root/tests/ci/integration-suites.tsv"
+[[ "$selected" -gt 0 ]]
