@@ -224,6 +224,7 @@ class Product(unittest.TestCase):
             (work / 'plugin-check-raw.txt').write_text(report)
             env = {'RUNNER_TEMP': directory, 'CANDIDATE_SHA': BASE, 'VERSION': '1.5.0',
                    'PRODUCT_TREE_SHA': DIGEST, 'GITHUB_RUN_ID': '100',
+                   'PYTHONDONTWRITEBYTECODE': '1',
                    'GITHUB_OUTPUT': str(root / 'outputs'), 'GITHUB_STEP_SUMMARY': str(root / 'summary')}
             with patch.dict(os.environ, env), patch.object(gh, 'API'), \
                     patch.object(gh, 'control_context', return_value=BASE):
