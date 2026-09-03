@@ -1,6 +1,11 @@
 # kind|profiles|path; RELEASE_CERT includes every entry.
 support|RELEASE_CERT|tests/integration/compat-legacy-1-4-11-create.php
 support|RELEASE_CERT|tests/integration/compat-legacy-1-4-11-seal.php
+support|RELEASE_CERT|tests/integration/compat-upgrade-1-4-11-seed.php
+support|RELEASE_CERT|tests/integration/compat-upgrade-acceptance-smoke.php
+support|RELEASE_CERT|tests/integration/compat-upgrade-copy-stage.php
+support|RELEASE_CERT|tests/integration/compat-upgrade-fixture-cleanup.php
+support|RELEASE_CERT|tests/integration/compat-upgrade-fixture-ledger.php
 support|RELEASE_CERT|tests/integration/early-translation-monitor.php
 eval|RELEASE_CERT,CRITICAL|tests/integration/operation-control-smoke.php
 eval|RELEASE_CERT,CRITICAL|tests/integration/lease-operation-binding-smoke.php

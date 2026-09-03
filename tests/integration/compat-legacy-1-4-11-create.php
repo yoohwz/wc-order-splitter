@@ -7,6 +7,13 @@ const WCOS_COMPAT_003_BASELINE_TREE = '75140a414cd637d134f860d8a70e7f92cbe4853c'
 const WCOS_COMPAT_003_FIXTURE_OPTION = 'wcos_compat_003_genuine_1_4_11_fixture';
 const WCOS_COMPAT_003_MISSING_OPTION = '__wcos_compat_003_missing_option__';
 
+$wcos_compat_003_arguments = isset($args) && is_array($args) ? array_values($args) : array();
+define('WCOS_COMPAT_007_LEGACY_FIXTURE_MODE', isset($wcos_compat_003_arguments[0]) && 'wos-compat-007' === (string) $wcos_compat_003_arguments[0]);
+if (WCOS_COMPAT_007_LEGACY_FIXTURE_MODE) {
+	define('WCOS_COMPAT_007_LEDGER_LIBRARY_ONLY', true);
+	require_once WP_PLUGIN_DIR . '/wc-order-splitter/tests/integration/compat-upgrade-fixture-ledger.php';
+}
+
 function wcos_compat_003_baseline_assert($condition, $message) {
 	if (!$condition) { throw new RuntimeException($message); }
 }
@@ -18,6 +25,7 @@ function wcos_compat_003_baseline_product($name, $price) {
 	$product->set_price($price);
 	$product->set_manage_stock(false);
 	wcos_compat_003_baseline_assert($product->save() > 0, 'The exact 1.4.11 fixture product could not be saved.');
+	if (WCOS_COMPAT_007_LEGACY_FIXTURE_MODE) { wcos_compat_007_ledger_remember('product', $product->get_id()); }
 	return $product;
 }
 
@@ -69,10 +77,12 @@ $product = wcos_compat_003_baseline_product('Exact 1.4.11 moved product', '10.00
 $keep = wcos_compat_003_baseline_product('Exact 1.4.11 retained product', '2.00');
 $source = wc_create_order();
 wcos_compat_003_baseline_assert($source instanceof WC_Order, 'The exact 1.4.11 source order could not be created.');
+if (WCOS_COMPAT_007_LEGACY_FIXTURE_MODE) { wcos_compat_007_ledger_remember('order', $source->get_id()); }
 $source->set_status('pending');
 $source->set_currency(get_woocommerce_currency());
 $source->set_prices_include_tax(wc_prices_include_tax());
 $source->set_payment_method('cod');
+if (WCOS_COMPAT_007_LEGACY_FIXTURE_MODE) { $source->update_meta_data('_wcos_compat_007_fixture', 'legacy-split-source'); }
 $source->save();
 $moved_item_id = wcos_compat_003_baseline_line($source, $product, 3, '30.00', '27.00', 'genuine-upgrade');
 $keep_item_id = wcos_compat_003_baseline_line($source, $keep, 1, '2.00', '2.00', 'genuine-retained');
