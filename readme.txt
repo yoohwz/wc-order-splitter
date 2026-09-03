@@ -9,163 +9,112 @@ Stable tag: 1.5.0
 License: GPLv3 or later
 License URI: https://www.gnu.org/licenses/gpl-3.0.html
 
-Safely split, duplicate, merge, and return supported WooCommerce orders with server-side review, HPOS support, idempotent retries, and preserved historical values.
+Split WooCommerce orders by quantity, category, or stock status. Duplicate, merge, return split orders, and manage fulfillment with HPOS support.
 
 == Description ==
 
-Order Splitter for WooCommerce provides hardened administrative tools for splitting, duplicating, merging, and returning supported WooCommerce orders.
+Order Splitter for WooCommerce helps store teams organize fulfillment without rebuilding orders by hand. Separate items into linked orders, duplicate an order, combine product lines, or return eligible split orders to their original.
 
-= Complete order workflow toolkit in 1.5.0 =
+Free provides complete supported on-demand order operations in the WooCommerce admin. These workflows need no Premium license.
 
-Split supports three methods: manual quantities, current product categories, and current product stock status. Category and Stock-status Split first show server-built buckets. You choose the one bucket that stays on the source order; the other reviewed buckets move as complete product lines to new Pending payment child orders. Confirmed classification remains frozen for execution instead of being silently recalculated from later catalog changes.
+= What you can do =
 
-Duplicate creates one fresh Pending payment order from supported historical source state. Merge moves a supported source order into a selected target by creating fresh target line items and retiring the source through WooCommerce-supported non-force trash/archive behavior.
+* Split an order by selected quantities, product category, or stock status.
+* Duplicate one order into a new Pending payment order.
+* Merge a supported source order into a selected target order.
+* Return an eligible split order to its original, or review up to 20 selected orders with Bulk Return.
+* Follow original and child order links from the WooCommerce order screens.
 
-Return sends an eligible hardened Split child back to its server-resolved original order. Bulk Return offers the same protected flow for up to twenty selected eligible children from the WooCommerce Orders list, advances at most one child per request, and can resume from durable progress after the modal is closed or a response is lost.
+= Split methods =
 
-= Safety and historical integrity =
+**Manual Quantity:** Move selected quantities or whole lines. Quantities must match each line's WooCommerce quantity step; fractional quantities require compatible quantity and stock handling.
 
-Production mutations use server-side Review -> Confirm -> Execute authority, capability and nonce checks, order-scoped confirmation, source-state verification, operation leases, durable journals, recovery, compensation, and idempotent replay. Unsupported or changed order state fails closed before mutation whenever the plugin cannot prove the operation's invariants.
+**Category:** Group lines by current product categories. Choose one group to keep on the source; the others become child orders.
 
-The plugin preserves accepted historical quantities, monetary values, discounts, and per-rate tax context rather than repricing from the current catalog or recalculating current tax. New orders receive fresh WooCommerce order-item objects; persisted items are never re-parented between orders.
+**Stock Status:** Group lines by current product stock status and keep one group on the source. Both grouped methods move whole lines using the classification you confirmed.
 
-Split and Return are designed to be physically stock-neutral while explicitly conserving WooCommerce `_reduced_stock` and order-level stock-reduction ownership. Duplicate does not inherit stock-reduction ownership. Merge keeps physical inventory neutral while transferring operational stock ownership to the active target exactly once.
+New Split children preserve the source status approved during review. Eligible current and older split children can be split again. Fees and coupon records stay on the source; supported discounted line values are preserved. Only unaffected lines may move around refunded lines. Refund records stay on the source; unclear refund relationships block the action.
 
-[Premium version](https://yoohw.com/product/woocommerce-advanced-order-actions/) | [Documentation](https://docs.yoohw.com/category/woocommerce-advanced-order-actions/) | [Support](https://yoohw.com/support/) | [Demo](https://sandbox.yoohw.com/demo/wcaoa_demo.html)
+Shipping follows the Split setting: source-only, or retained on the source and copied to each child using the original shipping rows. It is not automatically recalculated.
 
-== Current functionality ==
+= More order actions =
 
-In 1.5.0:
+**Duplicate:** Create a Pending payment order with supported historical items, charges, addresses, and payment-method details. Payment transactions, paid state, and stock-reduction records are not copied. Refunded or inconsistent sources may be rejected.
 
-* Manual Quantity, Category, and Stock-status Split are available on supported WooCommerce orders.
-* Hardened single-order Duplicate is available on supported WooCommerce orders.
-* Hardened single-source Merge is available for supported source/target pairs.
-* Single Return is available for eligible children created by hardened Split.
-* Bulk Return is available from the WooCommerce Orders list for up to twenty eligible children per reviewed batch.
-* Server-side Review, Confirm, and Execute authority revalidates participating orders before production mutation.
-* Split child orders and Duplicate targets are created as Pending payment and do not inherit the source payment transaction ID.
-* Historical line amounts, discounts, and per-rate taxes are preserved at the operation's captured price precision.
-* Operation IDs, durable journals, leases, confirmation tokens, source-state verification, recovery, and idempotent replay protect against duplicate execution.
-* Existing split-order relationship labels remain available.
-* WooCommerce legacy order storage, HPOS-only storage, and HPOS compatibility/synchronization mode are supported by the production acceptance matrix.
+**Merge:** Move supported product lines into a target while keeping its status, customer details, and charges. Lines combine only on exact commercial identity; otherwise new lines are created. Source shipping, fees, and coupon records stay with the archived source. Payment/refund history is never transferred. See the FAQ for paid/refund targets.
 
-== Split safety policy ==
+**Return:** Move an eligible split child's items back to its verified original order, including supported Free 1.4.11 relationships. The retired child retains its history. This is an admin undo-split action, not a customer return or refund portal.
 
-All Split methods fail closed instead of guessing how unsupported third-party business rules should be redistributed.
+**Bulk Return:** Review up to 20 selected orders as Eligible or Skipped, with exclusions explained. Only Eligible rows execute. A runtime failure stops later Eligible rows; saved progress supports resume without repeating completed returns.
 
-Manual Quantity Split lets an authorized administrator review and allocate supported line quantities to child orders. Shipping and positive fees remain on the source. The workflow rejects ambiguous state such as coupons, refunds or partial refunds, negative fees, nested Split relationships, unclassified private line-item metadata, and unsupported stock integrations.
+= Review, safety, and compatibility =
 
-Category and Stock-status Split move whole product lines according to server-built buckets. One reviewed bucket stays on the source and every other bucket becomes a child order. Category classification rejects catalog state it cannot prove, including deleted products or unrelated leaf-category ambiguity. Stock-status classification uses the reviewed server state. Confirmed plans use frozen server authority for execution.
+Review changes, confirm, then execute. Permissions and eligibility are checked on the server. Changed orders or unsupported data stop the action rather than trigger guesswork.
 
-Historical line taxes are allocated without recalculating current rates. Manual allocations must be exact multiples of each line's current WooCommerce admin quantity step. Fractional steps are accepted only when the active WooCommerce quantity integration also preserves fractional stock amounts.
+Supported operations preserve historical amounts and taxes, not today's prices or rates. Split, Merge, and Return preserve physical inventory and assign stock-reduction responsibility to the appropriate orders. Duplicate does not inherit stock reduction. Recovery and retry checks prevent duplicate work; some failures require manual reconciliation.
 
-== Duplicate safety policy ==
+Administrator and Shop Manager are supported by default, subject to WooCommerce permissions on every participating order. The old Shop Manager permission setting is retired.
 
-Duplicate creates one fresh Pending payment order from the reviewed historical source state.
+Supports legacy order storage, High-Performance Order Storage (HPOS), and HPOS compatibility/sync mode. Back up and test product, tax, shipping, and inventory integrations on staging before upgrading.
 
-Supported historical line, shipping, fee, tax, coupon, payment-method context, addresses, and business item metadata are copied through fresh WooCommerce order-item objects. The source transaction ID, paid state, order-level stock-reduced state, line `_reduced_stock`, and arbitrary custom order-level metadata are not copied.
+= Upgrade to Advanced Order Actions =
 
-Duplicate fails closed for refunds, unresolved manual-reconciliation state, unclassified private line-item metadata, unsupported fractional state, or internally inconsistent historical totals and taxes. Deleted catalog products remain supported only when their persisted historical order-line state can be proven.
+For automation and more operational controls, [WooCommerce Advanced Order Actions](https://yoohw.com/product/woocommerce-advanced-order-actions/) is a separate standalone Premium plugin offering:
 
-== Merge safety policy ==
+* Additional routing by product group, tag, attribute, and conditions; vendor and bundle routing require compatible integrations.
+* Split/merge automation rules, previews, queues, and retries for eligible jobs.
+* Bulk Duplicate, Action Logs, and guarded rollback for supported operations.
+* Deeper shipping and customer/admin email controls.
 
-Merge moves one supported source order into a selected target direction. It creates fresh target product-line items, does not re-parent or coalesce source lines, preserves historical money and per-rate tax state, and does not reprice or recalculate tax from the current catalog.
-
-The source is retired with non-force trash/archive semantics while the target remains active. Existing target-owned shipping remains on the target. Physical stock stays neutral and `_reduced_stock` operational ownership transfers exactly once under the durable source-keyed journal and recovery contract.
-
-Unsupported pairs fail closed before mutation. Paid or transaction-bearing orders, refunds, coupons, fees, source-owned shipping, incompatible status, currency or customer context, and sources without product lines are not supported.
-
-== Return safety policy ==
-
-Return is available only for a child whose original can be authenticated from hardened Split lineage. The browser cannot choose or replace the original order. Review shows the server-resolved original and bounded historical summary before confirmation.
-
-Successful Return preserves the child's commercial history while retiring it through non-force trash/archive behavior and restoring the original as the active operational owner. Historical money and per-rate tax authority are preserved, physical stock remains unchanged, and stock-reduction ownership is explicitly transferred. Invalid lineage, participant drift, stale confirmation, conflicting operations, and unresolved manual reconciliation fail closed.
-
-Bulk Return applies the same single-order Return authority to a reviewed selection. Duplicate selections are canonicalized, an ineligible participant blocks confirmation of the batch, each request advances at most one child, and the batch stops after the first non-success instead of silently continuing. Durable progress allows safe resume without reminting child operations or repeating completed commercial writes.
-
-== High-Performance Order Storage (HPOS) ==
-
-The plugin uses WooCommerce CRUD APIs and declares HPOS compatibility. Split, Duplicate, Merge, Return, and Bulk Return are validated in CI against legacy order storage, HPOS-only storage, and HPOS compatibility/synchronization mode.
+Premium replaces and deactivates Free when activated; it is not a Free add-on or license unlock. Free does not manage Premium licensing, entitlement, checkout, downloads, or installation. Contextual product suggestions do not restrict Free actions.
 
 == Installation ==
 
-1. Upload the `wc-order-splitter` folder to `/wp-content/plugins/`, or install the plugin from the WordPress plugin directory.
-2. Activate the plugin from Plugins in the WordPress admin.
-3. Make sure WooCommerce is installed and active.
-4. Go to WooCommerce > Settings > Orders to review Order Splitter settings.
-5. Open a supported WooCommerce order and choose Split, Duplicate, Merge, or Return to review and confirm the operation.
-6. To return multiple eligible Split children, select them in the WooCommerce Orders list and choose Return to original order from Bulk actions.
+1. Install and activate WooCommerce.
+2. Install Order Splitter for WooCommerce from Plugins > Add New, or upload the `wc-order-splitter` folder to `/wp-content/plugins/`, then activate it.
+3. Review allowed Split statuses, shipping, and order labels in WooCommerce > Settings > Orders.
+4. Open an eligible order, choose an action, review the result, and confirm before executing.
+5. For Bulk Return, select orders in WooCommerce > Orders and choose Return to original order from Bulk actions.
 
 == Frequently Asked Questions ==
 
-= Which mutation workflows are enabled in 1.5.0? =
+= Can I separate in-stock and backordered items? =
 
-Manual Quantity, Category, and Stock-status Split; single-order Duplicate; single-source Merge; single Return; and Bulk Return are enabled for supported orders.
+Stock Status groups whole lines by reviewed catalog stock status. It does not calculate how many units of a line can ship now. Review the groups before confirming.
 
-= Does Split change physical product stock? =
+= Can I split orders with coupons, fees, or partial refunds? =
 
-The Split request is an order-only mutation and is designed not to write physical product stock. It redistributes WooCommerce stock-reduction markers between the source and child orders so later cancellation and restock behavior remains consistent.
+Yes, where review confirms eligibility. Charges and coupon records stay on the source. Unaffected lines may move around refunded lines; ambiguous refund references or unsupported product metadata prevent execution.
 
-= How do Category and Stock-status Split work? =
+= Can I merge paid or refunded orders? =
 
-The server reviews the order and presents deterministic category or stock-status buckets. You choose one bucket to keep on the source; all other buckets move as whole product lines to child orders. Confirmation freezes the server-reviewed classification for execution.
+Ordinary unpaid, non-refunded pairs are supported when review succeeds. A non-terminal target with payment/refund history may accept a source without financial history only when every source line has both a total and a tax total of exactly zero. Lines are added separately; target payment/refund records, existing items, payable total, and tax stay unchanged. Financial sources and non-zero settled-value transfers are rejected.
 
-= What does Duplicate copy? =
+= Can I return split orders created before upgrading? =
 
-Duplicate copies supported historical line, shipping, fee, tax, coupon, payment-method context, addresses, and business item metadata into fresh WooCommerce order-item objects. It does not copy the source transaction ID, paid state, order-level stock-reduction state, line `_reduced_stock`, or arbitrary custom order-level metadata.
+Eligible Free 1.4.11 relationships can return after review. The plugin verifies the original; you cannot choose another destination. Ambiguous relationships, payment/refund evidence, or unsupported order data may prevent Return.
 
-= How does Merge handle the source and target orders? =
+= What if an action is interrupted? =
 
-The edited order is the source and the selected order is the target. The target remains active with its existing target-owned shipping preserved. Fresh target product-line items retain supported historical source values, while the source is retired through WooCommerce non-force trash/archive behavior. Unsupported source-owned shipping and participant state are rejected rather than transferred.
+Reopen the action and follow recovery instructions. A valid retry resumes or returns the existing result. Bulk Return keeps Eligible/Skipped rows and completed progress. Review failures before continuing; do not create new operations to bypass them.
 
-= Which orders can be returned? =
+= Does Free automate orders or require Premium? =
 
-Return requires an eligible child created by a hardened Split operation. The plugin resolves the original order from authenticated server-side lineage; administrators cannot select a different destination. Review must succeed before confirmation and execution.
-
-= How does Bulk Return behave if a request is interrupted? =
-
-Bulk Return stores durable batch progress and advances at most one child per request. Reopening or retrying resumes the same confirmed batch. Completed rows are not repeated, and the batch stops after the first non-success so remaining rows are clearly marked as not run.
-
-= Why can a request be rejected before execution? =
-
-The workflows intentionally fail closed when they cannot prove conservation, participant-state integrity, lineage, or compatibility. Each operation has its own supported envelope and rejects ambiguous or changed state before mutation.
-
-= What happens if I retry an interrupted operation? =
-
-The workflows use server-generated operation IDs, durable journals, operation leases, confirmation authority, and idempotent target discovery. A valid retry resumes or returns the original result instead of creating duplicate orders or repeating a completed mutation.
-
-= Are existing split-order relationships preserved? =
-
-Yes. Existing relationship metadata and admin labels remain available.
-
-= Does this release send site or administrator details to the removed external subscription endpoint? =
-
-No. The automatic external subscription request was removed and remains absent.
-
-= Where are older changelog entries? =
-
-Older public release notes are available in `changelog.txt`.
+No. Staff start Free actions without Premium. Advanced Order Actions is optional for automation and extra controls; it replaces Free.
 
 == Changelog ==
 
-= 1.5.0 (Aug 26, 2026) =
-* New: Added hardened Manual Quantity, Category, and Stock-status Split; single-order Duplicate; single-source Merge; single Return; and resumable Bulk Return for supported WooCommerce orders.
-* Security & Safety: Removed the obsolete automatic external subscription request and introduced code-owned feature gates, server-side Review -> Confirm -> Execute authority, capability and nonce checks, source-state verification, and fail-closed rejection of unsupported or changed state.
-* Integrity: Preserved historical quantities, monetary values, discounts, configured line identity, and per-rate taxes without current-catalog repricing or tax recalculation; all transferred or copied lines use fresh order-item objects.
-* Stock: Kept order mutations physically stock-neutral where required, conserved `_reduced_stock` ownership through Split, Merge, and Return, and prevented Duplicate from inheriting stock-reduction ownership.
-* Recovery: Added operation-scoped leases, durable journals, immutable fingerprints, idempotent replay, recovery, compensation, and manual-reconciliation blockers for interrupted or conflicting operations.
-* Compatibility: Added WooCommerce 11.0.1 validation across legacy, HPOS-only, and HPOS compatibility/synchronization storage, with PHP 7.4/8.1/8.3 and WordPress 7.1 compatibility evidence.
-* UI/UX: Added shared accessible WooCommerce Backbone modals, server-built Split bucket review, Merge target search, single Return, resumable Bulk Return, focus management, and native order-relation links.
-* Developer: Consolidated production mutations behind one gateway and domain engine, removed legacy mutation execution paths, and hardened deterministic distribution validation and package contents.
+= 1.5.0 =
+* New: Reviewed quantity, category, and stock-status Split; Duplicate, Merge, Return, and resumable Bulk Return.
+* Compatibility: Preserved supported Split statuses, shipping settings, fees/coupons, unaffected refund lines, repeat splitting, and eligible 1.4.11 Return relationships.
+* Integrity: Expanded supported Merge cases while protecting historical prices, taxes, stock, payments, and refunds.
+* Safety: Added confirmation, interrupted-operation recovery, and duplicate-execution protection; removed the obsolete automatic external subscription request.
+* UI: Improved order-action dialogs, relationship links, Shop Manager access, and optional Advanced Order Actions discovery.
+* Compatibility: Validated legacy/HPOS/sync storage, WooCommerce 11.0.1, and PHP 7.4, 8.1, and 8.3; WordPress tested up to 7.1.
 
-= 1.4.11 (Jun 13, 2026) =
-* Fix: Hardened AJAX capability checks for split and bulk return actions.
-* Fix: Validated split quantities against each original line item.
-* Improve: Declared WooCommerce HPOS compatibility and updated order edit redirects.
-* Improve: Scoped admin assets to WooCommerce order and settings screens.
-* Improve: Added throttled inline post-action tips after split, duplicate, merge, and return workflows.
+Full public release history is available in `changelog.txt`.
 
 == Upgrade Notice ==
 
 = 1.5.0 =
-Adds hardened Split, Duplicate, Merge, Return, and Bulk Return workflows with server-side review, historical value preservation, durable recovery, and legacy/HPOS storage validation.
+Back up and test on staging before upgrading from 1.4.11. Adds reviewed order operations and recovery while preserving supported historical values and split relationships. Duplicate creates Pending payment orders; unsupported or ambiguous cases stop for review.

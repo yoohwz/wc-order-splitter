@@ -50,7 +50,7 @@ readme_public_versions=$(printf '%s\n' "$readme_changelog" | sed -n -E 's/^= ([0
 file_public_versions=$(sed -n -E 's/^= ([0-9]+\.[0-9]+\.[0-9]+)( \([^)]*\))? =$/\1/p' "$distribution_root/changelog.txt")
 
 test "$(printf '%s\n' "$readme_public_versions" | sed -n '1p')" = '1.5.0' || fail "readme public changelog must start with 1.5.0"
-test "$(printf '%s\n' "$readme_public_versions" | sed -n '2p')" = '1.4.11' || fail "readme public changelog must place 1.4.11 immediately after 1.5.0"
+test "$readme_public_versions" = '1.5.0' || fail "readme public changelog must contain only 1.5.0"
 test "$(printf '%s\n' "$file_public_versions" | sed -n '1p')" = '1.5.0' || fail "changelog.txt must start with public release 1.5.0"
 test "$(printf '%s\n' "$file_public_versions" | sed -n '2p')" = '1.4.11' || fail "changelog.txt must place 1.4.11 immediately after 1.5.0"
 
@@ -66,6 +66,8 @@ for stale_claim in \
     fail "stale disabled-feature claim entered public release copy: $stale_claim"
   fi
 done
+
+python3 "$(dirname "${BASH_SOURCE[0]}")/../../tests/ci/release-copy-contract.py" "$distribution_root"
 
 grep -Fq 'return WCOS_Feature_Gates::any_enabled();' "$distribution_root/inc/cores/safety.php" || fail "safety guard no longer follows feature gates"
 grep -Fq 'self::SPLIT => true' "$distribution_root/inc/domain/class-wcos-feature-gates.php" || fail "Split gate drifted"
