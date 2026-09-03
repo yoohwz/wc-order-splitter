@@ -338,6 +338,7 @@ function verifyFinalBindingScheduling(workflow) {
 }
 
 (async () => {
+  await require('./terminal-merge-readiness-contract')(fixture, input);
   let result = await simulation();
   assert.equal(result.result.candidate, candidate);
   assert.equal(result.collected, 2);

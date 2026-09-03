@@ -201,7 +201,8 @@ function adverseCheckpoint(record, input, base, tree) {
   }
 }
 
-function verifySnapshot(s, input) {
+function verifySnapshot(s, input, phase = 'running') {
+  need(phase === 'running' || phase === 'completed', 'native verification phase');
   equal(input.repo, REPO, 'repository');
   need(ID.test(input.pr) && ID.test(input.issue) && /^WOS-[A-Z0-9-]+$/.test(input.task), 'task identifiers');
   need(SHA.test(input.head), 'expected head');
@@ -301,7 +302,8 @@ function verifySnapshot(s, input) {
   equal(s.bridge.head_sha, input.head, 'native run head');
   equal(s.bridge.head_branch, s.pr.head.ref, 'native run branch');
   equal(s.bridge.run_attempt, 1, 'bridge requires fresh ready event, not rerun');
-  equal(s.bridge.status, 'in_progress', 'native job must be running');
+  equal(s.bridge.status, phase === 'running' ? 'in_progress' : 'completed', 'native run phase');
+  if (phase === 'completed') equal(s.bridge.conclusion, 'success', 'completed native run');
   const associated = records => need(records?.some(pr => String(pr.number) === input.pr &&
     pr.head.sha === input.head && pr.base.sha === s.pr.base.sha), 'native PR association');
   associated(s.bridge.pull_requests);
@@ -313,8 +315,8 @@ function verifySnapshot(s, input) {
   equal(s.bridgeCheck.head_sha, input.head, 'native check PR head');
   equal(s.bridgeCheck.app?.id, APP, 'native check app');
   equal(s.bridgeCheck.check_suite?.id, s.bridgeSuite.id, 'native check suite');
-  equal(s.bridgeCheck.status, 'in_progress', 'native check must run, not skip');
-  equal(s.bridgeCheck.conclusion, null, 'native check not pre-completed');
+  equal(s.bridgeCheck.status, phase === 'running' ? 'in_progress' : 'completed', 'native check phase');
+  equal(s.bridgeCheck.conclusion, phase === 'running' ? null : 'success', 'native check conclusion');
   equal(s.bridgeArtifacts.total_count, 0, 'bridge artifacts');
   for (const record of [...s.comments, ...s.reviews]) {
     const adverse = adverseCheckpoint(record, input, s.pr.base.sha, s.head.tree.sha);
@@ -337,7 +339,7 @@ async function verifyNative(input, collect) {
   const attestation = verifySnapshot(await collect(), input);
   equal(verifySnapshot(await collect(), input), attestation, 'authority drift before native completion');
   // The current job cannot already be successful/clean while it is running.
-  // Finalize must authenticate its completed result and live clean state.
+  // Finalize must authenticate its completed result and live ruleset readiness.
   return attestation;
 }
 
@@ -401,7 +403,8 @@ function resolveLive(context) {
   return { route: 'governed', input };
 }
 
-function collectLive(input) {
+function collectLive(input, phase = 'running') {
+  need(phase === 'running' || phase === 'completed', 'native collection phase');
   const repository = liveApi(`repos/${REPO}`);
   const pr = liveApi(`repos/${REPO}/pulls/${input.pr}`);
   const rules = liveApi(`repos/${REPO}/rulesets/${RULESET}`);
@@ -442,12 +445,13 @@ function collectLive(input) {
   const bridge = liveApi(`repos/${REPO}/actions/runs/${input.context.run}`);
   const bridgeJobs = paginate(`repos/${REPO}/actions/runs/${bridge.id}/attempts/1/jobs?per_page=100`, 'jobs');
   const native = bridgeJobs.filter(job => job.name === 'Required CI');
-  need(native.length === 1 && native[0].run_id === bridge.id && native[0].status === 'in_progress', 'one executing native protected job');
+  need(native.length === 1 && native[0].run_id === bridge.id &&
+    native[0].status === (phase === 'running' ? 'in_progress' : 'completed'), 'one native protected job in selected phase');
   return { repository, pr, gate, evidence, acceptance, final, jobs, head, review, reviewVerified, threads, classification,
     issue: liveApi(`repos/${REPO}/issues/${input.issue}`), main: liveApi(`repos/${REPO}/git/ref/heads/main`),
     candidate: liveApi(`repos/${REPO}/git/commits/${pr.merge_commit_sha}`), rules,
     finalArtifacts: liveApi(`repos/${REPO}/actions/runs/${finalId}/artifacts`), finalCheck: liveApi(`repos/${REPO}/check-runs/${required[0].id}`),
-    bridge, bridgeArtifacts: liveApi(`repos/${REPO}/actions/runs/${bridge.id}/artifacts`),
+    bridge, bridgeJobs, bridgeArtifacts: liveApi(`repos/${REPO}/actions/runs/${bridge.id}/artifacts`),
     bridgeSuite: liveApi(`repos/${REPO}/check-suites/${bridge.check_suite_id}`),
     bridgeCheck: liveApi(`repos/${REPO}/check-runs/${native[0].id}`),
     readyEvents: paginate(`repos/${REPO}/issues/${input.pr}/timeline?per_page=100`).filter(event => event.event === 'ready_for_review'),
@@ -467,8 +471,9 @@ if (require.main === module) {
     input.preReview = review === 'none' ? '' : review;
     const result = await verifyNative(input, () => collectLive(input));
     console.log(`native-merge-authority-verified ${JSON.stringify(result)}`);
-    console.log('artifacts=0; Finalize must verify completed native check and GitHub clean before merge');
+    console.log('artifacts=0; Finalize must verify completed native check and ruleset-aware terminal readiness before merge');
   })().catch(error => { console.error(error.message); process.exitCode = 1; });
 }
 
-module.exports = { verifySnapshot, verifyNative, nativeContext, resolveTask, directScope, selectGate, checkResult, recordFields, issueField, verifyRules };
+module.exports = { verifySnapshot, verifyNative, nativeContext, resolveTask, directScope, selectGate, checkResult, recordFields, issueField, verifyRules,
+  collectLive, liveApi, paginate, rawField };
