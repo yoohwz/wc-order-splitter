@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import release_package as pkg
@@ -30,7 +31,10 @@ class API:
         self.opener = urllib.request.build_opener(SafeRedirect())
 
     def request(self, path, method='GET', value=None, binary=False, missing=False, upload=None):
-        pkg.require(path.startswith(f'repos/{pkg.REPOSITORY}/') and '..' not in path, 'unsafe GitHub API path')
+        # Compare uses SHA...SHA; only decoded dot path segments are traversal.
+        segments = urllib.parse.unquote(urllib.parse.urlsplit(path).path).split('/')
+        pkg.require(path.startswith(f'repos/{pkg.REPOSITORY}/') and
+                    all(segment not in {'.', '..'} for segment in segments), 'unsafe GitHub API path')
         host = 'https://uploads.github.com/' if upload is not None else 'https://api.github.com/'
         headers = {'Authorization': f'Bearer {self.token}', 'User-Agent': 'WOS-release-control',
                    'Accept': 'application/octet-stream' if binary and '/releases/assets/' in path else 'application/vnd.github+json',
