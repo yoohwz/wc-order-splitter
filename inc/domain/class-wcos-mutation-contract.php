@@ -1,8 +1,6 @@
 <?php
 
-if (!defined('ABSPATH') && 'cli' !== PHP_SAPI) {
-	exit;
-}
+defined('ABSPATH') || exit;
 
 /**
  * Validates aggregate invariants before a mutation is considered complete.

@@ -131,7 +131,8 @@ final class WCOS_Merge_Canonical_Reader {
 		$query_vars['return'] = 'ids';
 		$query_vars['paginate'] = false;
 		$query_vars['no_found_rows'] = true;
-		$query_vars['suppress_filters'] = true;
+		// Canonical persisted Merge authority must bypass result-changing presentation/query filters.
+		$query_vars['suppress_filters'] = true; // phpcs:ignore WordPressVIPMinimum.Performance.WPQueryParams.SuppressFilters_suppress_filters
 		$query_vars['cache_results'] = false;
 		$ids = self::without_order_query_filters(static function() use ($data_store, $query_vars) {
 			return $data_store->query($query_vars);

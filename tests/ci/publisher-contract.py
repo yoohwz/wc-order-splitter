@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / '.github/scripts'))
 import release_package as pkg
 import release_github as gh
 import release_cli as cli
+import release_plugin_check_policy as check_policy
 import wporg_release as wp
 
 BASE = '4de67108045714415d5bc4708bd94e7ad871e9a1'
@@ -79,16 +80,24 @@ class Product(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def test_01_bootstrap_preserves_certified_product(self):
+    def test_01_historical_certificate_cannot_certify_changed_product(self):
         staged = self.root / 'head-product'
         digest = pkg.stage(ROOT, staged)
         self.assertEqual(self.base_digest, DIGEST)
-        self.assertEqual(digest, DIGEST)
-        self.assertEqual(pkg.files(staged), pkg.files(self.staged))
+        pkg.verify_tree(self.staged, self.manifest)
+        pkg.metadata(staged, '1.5.0')
+        self.assertEqual(digest, pkg.product.product_tree(staged))
+        # The old bootstrap identity is historical. Any product edit needs a
+        # new certificate; never relabel the old manifest as current evidence.
+        if digest == DIGEST:
+            pkg.verify_tree(staged, self.manifest)
+        else:
+            with self.assertRaisesRegex(ValueError, 'file set/content mismatch'):
+                pkg.verify_tree(staged, self.manifest)
         self.assertFalse((staged / '.github').exists())
         self.assertFalse((staged / 'tests').exists())
         self.assertFalse((staged / 'docs').exists())
-        print(f'publisher-product-invariance-ok base={BASE} source={DIGEST} final={digest}')
+        print(f'publisher-certificate-binding-ok historical={DIGEST} current={digest}')
 
     def test_02_deterministic_metadata_and_one_root(self):
         os.utime(self.staged / 'readme.txt', (2000000000, 2000000000))
@@ -234,10 +243,10 @@ class Product(unittest.TestCase):
         error = {'type': 'ERROR', 'code': 'blocked_code', 'file': 'inc/example.php',
                  'line': 12, 'column': 3, 'message': 'Exact blocking message', 'docs': 'https://example.test/docs'}
         with self.preparation_fixture(json.dumps([error])) as (work, outputs, summary), redirect_stdout(io.StringIO()) as log:
-            with self.assertRaisesRegex(ValueError, 'Errors block preparation; no ignore baseline'):
+            with self.assertRaisesRegex(ValueError, 'Errors block preparation; exact WOS policy only'):
                 cli.finish_prepare()
             diagnostic = pkg.read_json(work / 'plugin-check-diagnostics.json')
-            self.assertEqual(diagnostic['findings'], [error])
+            self.assertEqual(diagnostic['findings'], [dict(error, policy_classification='blocking')])
             self.assertEqual((diagnostic['status'], diagnostic['error_count'], diagnostic['warning_count']), ('BLOCKED', 1, 0))
             self.assertIn('1 ERROR(s), 0 WARNING(s)', log.getvalue())
             for value in ('blocked_code', 'inc/example.php', '12', 'Exact blocking message'):
@@ -263,7 +272,8 @@ class Product(unittest.TestCase):
                 evidence = json.loads(raw)
                 self.assertEqual(evidence['error_count'], 2)
                 self.assertEqual(evidence['warning_count'], 1)
-                self.assertCountEqual(evidence['findings'], [first, second, warning])
+                self.assertCountEqual(evidence['findings'], [dict(first, policy_classification='blocking'),
+                    dict(second, policy_classification='blocking'), dict(warning, policy_classification='warning')])
                 self.assertEqual(log.getvalue().count('Plugin Check ERROR: '), 2)
                 self.assertIn('2 ERROR(s), 1 WARNING(s)', log.getvalue())
                 self.assertIn('First error', log.getvalue())
@@ -304,6 +314,8 @@ class Product(unittest.TestCase):
                 evidence = pkg.read_json(work / 'plugin-check-diagnostics.json')
                 self.assertEqual(evidence['status'], 'INVALID_REPORT')
                 self.assertIsNone(evidence['error_count'])
+                for key in ('raw_error_count', 'policy_accepted_error_count', 'blocking_error_count', 'warning_count'):
+                    self.assertIsNone(evidence[key])
                 self.assertEqual(evidence['findings'], [])
                 self.assertNotIn('fixture-private', (work / 'plugin-check-diagnostics.json').read_text() + log.getvalue() + summary.read_text())
                 self.assertFalse(outputs.exists())
@@ -339,7 +351,8 @@ class Product(unittest.TestCase):
             self.assertNotIn('fixture-singlequote-token', text)
             self.assertNotIn('Zml4dHVyZTpzZWNyZXQ=', text)
             finding = json.loads(raw)['findings'][0]
-            self.assertEqual(set(finding), {'type', 'code', 'file', 'line', 'column', 'message', 'docs'})
+            self.assertEqual(set(finding), {'type', 'code', 'file', 'line', 'column', 'message', 'docs', 'policy_classification'})
+            self.assertEqual(finding['policy_classification'], 'blocking')
             self.assertEqual(finding['type'], 'ERROR')
             self.assertIn('[REDACTED]', text)
             self.assertNotIn('\x1b', text)
@@ -357,9 +370,116 @@ class Product(unittest.TestCase):
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.assertEqual(result.returncode, 1)
             self.assertIn(b'1 ERROR(s)', result.stdout)
-            self.assertIn(b'Errors block preparation; no ignore baseline', result.stderr)
-            self.assertEqual(pkg.read_json(work / 'plugin-check-diagnostics.json')['findings'], [error])
+            self.assertIn(b'Errors block preparation; exact WOS policy only', result.stderr)
+            self.assertEqual(pkg.read_json(work / 'plugin-check-diagnostics.json')['findings'],
+                             [dict(error, policy_classification='blocking')])
             self.assertFalse(outputs.exists())
+
+    def test_17_exact_exception_policy_retains_raw_errors_and_prepares(self):
+        accepted = {'type': 'ERROR', 'code': check_policy.ACCEPTED_ERROR_CODE, 'file': 'inc/future-domain.php',
+                    'line': 98765, 'message': 'Future internal exception remains visible'}
+        warning = {'type': 'WARNING', 'code': 'notice', 'file': 'readme.txt', 'message': 'Visible warning'}
+        report = [accepted, warning]
+        original = copy.deepcopy(report)
+        with self.preparation_fixture(json.dumps(report)) as (work, outputs, summary), redirect_stdout(io.StringIO()) as log:
+            cli.plugin_check_evidence()
+            cli.finish_prepare()
+            evidence = pkg.read_json(work / 'plugin-check-diagnostics.json')
+            self.assertEqual(evidence['schema_version'], 2)
+            self.assertEqual(evidence['status'], 'PASSED_WITH_POLICY_EXCEPTIONS')
+            self.assertEqual(evidence['policy'], {'id': check_policy.POLICY_ID,
+                                                  'policy_accepted_codes': [check_policy.ACCEPTED_ERROR_CODE]})
+            self.assertEqual([evidence[key] for key in ('error_count', 'raw_error_count', 'policy_accepted_error_count',
+                                                       'blocking_error_count', 'warning_count')], [1, 1, 1, 0, 1])
+            self.assertCountEqual(evidence['findings'], [dict(accepted, policy_classification='policy_accepted'),
+                                                        dict(warning, policy_classification='warning')])
+            self.assertEqual(pkg.read_json(work / 'rc-a/plugin-check.json'), original)
+            self.assertIn('raw ERROR=1; policy_accepted ERROR=1; blocking ERROR=0', log.getvalue())
+            self.assertIn('Future internal exception remains visible', summary.read_text())
+            self.assertIn('state=RC_PREPARED', outputs.read_text())
+        self.assertEqual(report, original)
+
+    def test_18_every_other_error_blocks_even_beside_accepted_exceptions(self):
+        accepted = {'type': 'ERROR', 'code': check_policy.ACCEPTED_ERROR_CODE, 'file': 'inc/future.php', 'message': 'Internal'}
+        codes = ('WordPress.Security.EscapeOutput.OutputNotEscaped', 'WordPress.Security.EscapeOutput',
+                 'WordPress.Security.EscapeOutput.ExceptionNotEscaped.Other', check_policy.ACCEPTED_ERROR_CODE.lower(),
+                 ' ' + check_policy.ACCEPTED_ERROR_CODE, check_policy.ACCEPTED_ERROR_CODE + ' ',
+                 'prefix.' + check_policy.ACCEPTED_ERROR_CODE, 'missing_direct_file_access_protection',
+                 'WordPressVIPMinimum.Performance.WPQueryParams.SuppressFilters_suppress_filters', 'future_unknown_error')
+        for code in codes:
+            # Upstream data cannot assert its own policy classification.
+            other = dict(accepted, code=code, policy_classification='policy_accepted')
+            report = [accepted, other]
+            with self.subTest(code=code), self.preparation_fixture(json.dumps(report)) as (work, outputs, summary), \
+                    redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(ValueError, 'blocking Errors'):
+                    cli.finish_prepare()
+                evidence = pkg.read_json(work / 'plugin-check-diagnostics.json')
+                self.assertEqual([evidence[key] for key in ('raw_error_count', 'policy_accepted_error_count',
+                                                           'blocking_error_count')], [2, 1, 1])
+                self.assertEqual(evidence['status'], 'BLOCKED')
+                self.assertFalse((work / 'rc-a/preparation-record.json').exists())
+                self.assertFalse(outputs.exists())
+
+    def test_19_diagnostics_cannot_normalize_a_code_into_policy_acceptance(self):
+        error = {'type': 'ERROR', 'code': check_policy.ACCEPTED_ERROR_CODE + '\x00', 'file': 'x.php', 'message': 'Unaccepted'}
+        with self.preparation_fixture(json.dumps([error])) as (work, outputs, summary), redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(ValueError, 'blocking Errors'):
+                cli.plugin_check_evidence()
+            evidence = pkg.read_json(work / 'plugin-check-diagnostics.json')
+            self.assertEqual(evidence['policy_accepted_error_count'], 0)
+            self.assertEqual(evidence['blocking_error_count'], 1)
+            self.assertEqual(evidence['findings'][0]['policy_classification'], 'blocking')
+
+    def test_20_local_cli_uses_the_same_policy_without_release_credentials(self):
+        accepted = {'type': 'ERROR', 'code': check_policy.ACCEPTED_ERROR_CODE, 'file': 'x.php', 'message': 'Internal'}
+        for report, code in (([accepted], 0), ([accepted, dict(accepted, code='new_error')], 1)):
+            with self.subTest(report=report), tempfile.TemporaryDirectory() as directory:
+                raw, diagnostic = Path(directory) / 'raw.json', Path(directory) / 'diagnostics.json'
+                raw.write_text(json.dumps(report))
+                result = subprocess.run([sys.executable, str(ROOT / '.github/scripts/local-plugin-check-report.py'),
+                                         str(raw), str(diagnostic)], env={'PATH': os.environ['PATH']}, capture_output=True)
+                self.assertEqual(result.returncode, code, result.stderr)
+                evidence = pkg.read_json(diagnostic)
+                self.assertEqual(evidence['raw_error_count'], len(report))
+                self.assertEqual(evidence['policy_accepted_error_count'], 1)
+                self.assertEqual(evidence['blocking_error_count'], code)
+                self.assertEqual(json.loads(raw.read_text()), report)
+
+    def test_21_downloaded_preparation_uses_the_same_policy_and_rejects_malformed_reports(self):
+        accepted = {'type': 'ERROR', 'code': check_policy.ACCEPTED_ERROR_CODE, 'file': 'x.php', 'message': 'Internal'}
+        cases = ([accepted], [accepted, dict(accepted, code='WordPress.Security.EscapeOutput.OutputNotEscaped')],
+                 [{}], [False], [{'type': 'IGNORED', 'code': 'x', 'file': 'x.php', 'message': 'Invalid'}])
+        for report in cases:
+            with self.subTest(report=report), self.preparation_fixture('[]') as (work, outputs, summary), \
+                    redirect_stdout(io.StringIO()):
+                cli.finish_prepare()
+                pkg.write_json(work / 'rc-a/plugin-check.json', report)
+                api = FakeAPI({'actions/runs/100': {'head_sha': BASE}})
+                with patch.object(gh, 'workflow_run'), patch.object(gh, 'ancestor', return_value=True), \
+                        patch.object(gh, 'protected_main', return_value=BASE), patch.object(gh, 'accepted_source'), \
+                        patch.object(gh, 'artifact', return_value={'verified': True}), patch.object(gh, 'certificate') as cert:
+                    if report == [accepted]:
+                        manifest, provenance = gh.prepared(api, 100, BASE, '1.5.0', work / 'rc-a')
+                        self.assertEqual(manifest, self.manifest)
+                        cert.assert_called_once()
+                    else:
+                        with self.assertRaises(ValueError):
+                            gh.prepared(api, 100, BASE, '1.5.0', work / 'rc-a')
+                        cert.assert_not_called()
+
+    def test_22_terminal_wrappers_cannot_rewrite_a_finding_code(self):
+        accepted = {'type': 'ERROR', 'code': check_policy.ACCEPTED_ERROR_CODE, 'file': 'x.php', 'message': 'Internal'}
+        raw = json.dumps([accepted])
+        self.assertEqual(cli.plugin_check_report('\x1b[32m  ' + raw + '  \x1b[0m'), [accepted])
+        # A literal control character inside JSON is malformed, not a waiver.
+        malformed = raw.replace('ExceptionNotEscaped', 'Exception\x1b[0mNotEscaped')
+        with self.assertRaisesRegex(ValueError, 'report malformed or ambiguous'):
+            cli.plugin_check_report(malformed)
+        # Valid escaped control characters preserve the original nonmatching code.
+        altered = dict(accepted, code='WordPress.Security.EscapeOutput.Exception\x1b[0mNotEscaped')
+        with self.assertRaisesRegex(ValueError, 'blocking Errors'):
+            cli.plugin_check_report(json.dumps([altered]))
             self.assertFalse((work / 'rc-a/preparation-record.json').exists())
 
 

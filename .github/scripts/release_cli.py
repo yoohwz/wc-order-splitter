@@ -10,6 +10,7 @@ import sys
 
 import release_package as pkg
 import release_github as gh
+import release_plugin_check_policy as check_policy
 import wporg_release as wp
 
 
@@ -66,17 +67,16 @@ def parse_plugin_check(raw):
             result[key] = value
         return result
 
-    lines = [line.strip() for line in re.sub(r'\x1b\[[0-9;]*m', '', raw).splitlines()]
+    # Remove terminal wrappers only outside JSON. Stripping inside a JSON string
+    # could turn a malformed/different code into the exact accepted policy code.
+    lines = [re.sub(r'(?:\s*\x1b\[[0-9;]*m)+$', '',
+                    re.sub(r'^(?:\x1b\[[0-9;]*m\s*)+', '', line.strip())).strip()
+             for line in raw.splitlines()]
     matches = [json.loads(line, object_pairs_hook=unique) for line in lines if line.startswith('[')]
     clean = lines.count('Success: Checks complete. No errors found.')
     pkg.require(len(matches) == 1 and clean == 0 or not matches and clean == 1, 'Plugin Check report missing or ambiguous')
     report = matches[0] if matches else []
-    pkg.require(isinstance(report, list) and all(isinstance(item, dict) and
-                all(isinstance(item.get(key), str) for key in ('type', 'code', 'file', 'message')) and
-                all(key not in item or isinstance(item[key], str) or type(item[key]) is int
-                    for key in ('line', 'column')) and
-                ('docs' not in item or isinstance(item['docs'], str)) for item in report), 'invalid Plugin Check report')
-    pkg.require(all(item['type'].upper() in {'WARNING', 'ERROR'} for item in report), 'unexpected Plugin Check result type')
+    check_policy.validate_report(report)
     return report
 
 
@@ -95,18 +95,24 @@ def diagnostic_text(value):
 def plugin_check_diagnostics(path, report):
     fields = ('type', 'code', 'file', 'line', 'column', 'message', 'docs')
     findings = [] if report is None else [
-        {key: diagnostic_text(item[key]) if isinstance(item[key], str) else item[key]
-         for key in fields if key in item} for item in report]
+        {**{key: diagnostic_text(item[key]) if isinstance(item[key], str) else item[key]
+            for key in fields if key in item},
+         'policy_classification': check_policy.classification(item)} for item in report]
     findings.sort(key=pkg.encoded)
     errors = [item for item in findings if item['type'].upper() == 'ERROR']
     warnings = [item for item in findings if item['type'].upper() == 'WARNING']
-    evidence = {'schema_version': 1, 'kind': 'PLUGIN_CHECK_DIAGNOSTICS',
-                'status': 'INVALID_REPORT' if report is None else 'BLOCKED' if errors else 'PASSED',
-                'error_count': None if report is None else len(errors),
-                'warning_count': None if report is None else len(warnings), 'findings': findings}
+    # Classify original codes, never sanitized/normalized report text.
+    counts = dict.fromkeys(('raw_error_count', 'policy_accepted_error_count', 'blocking_error_count', 'warning_count')) \
+        if report is None else check_policy.counts(report)
+    status = 'INVALID_REPORT' if report is None else 'BLOCKED' if counts['blocking_error_count'] else \
+        'PASSED_WITH_POLICY_EXCEPTIONS' if counts['policy_accepted_error_count'] else 'PASSED'
+    evidence = {'schema_version': 2, 'kind': 'PLUGIN_CHECK_DIAGNOSTICS', 'status': status,
+                'policy': {'id': check_policy.POLICY_ID, 'policy_accepted_codes': [check_policy.ACCEPTED_ERROR_CODE]},
+                'error_count': counts['raw_error_count'], **counts, 'findings': findings}
     pkg.write_json(path, evidence)
     summary = ['Plugin Check report malformed or ambiguous; preparation blocked.'] if report is None else [
         f'Plugin Check: {len(errors)} ERROR(s), {len(warnings)} WARNING(s).',
+        f"WOS policy: raw ERROR={counts['raw_error_count']}; policy_accepted ERROR={counts['policy_accepted_error_count']}; blocking ERROR={counts['blocking_error_count']}.",
         *('Plugin Check ERROR: ' + pkg.encoded(item).decode().strip().replace('##[', r'\u0023\u0023[') for item in errors),
         f'All {len(findings)} findings retained in sanitized diagnostic JSON.']
     text = '\n'.join(summary) + '\n'
@@ -126,7 +132,7 @@ def plugin_check_report(raw, diagnostic_path=None):
         raise ValueError('Plugin Check report malformed or ambiguous') from None
     if diagnostic_path is not None:
         plugin_check_diagnostics(diagnostic_path, report)
-    pkg.require(not any(item['type'].upper() == 'ERROR' for item in report), 'Plugin Check Errors block preparation; no ignore baseline')
+    check_policy.require_pass(report)
     return report
 
 

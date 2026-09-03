@@ -1,8 +1,6 @@
 <?php
 
-if (!defined('ABSPATH') && 'cli' !== PHP_SAPI) {
-	exit;
-}
+defined('ABSPATH') || exit;
 
 /**
  * Produces a stable business identity for an order line.

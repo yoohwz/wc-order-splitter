@@ -42,6 +42,25 @@ require_once $root . 'class-wcos-return-recovery-state-graph.php';
 
 $tests = array();
 
+$tests['pure domain files require the explicit minimal bootstrap'] = static function() {
+	foreach (array('amount-allocator', 'decimal', 'line-identity', 'mutation-contract', 'mutation-fingerprint') as $name) {
+		$file = dirname(__DIR__, 2) . '/inc/domain/class-wcos-' . $name . '.php';
+		foreach (array(false, true) as $bootstrapped) {
+			$code = ($bootstrapped ? "define('ABSPATH', '/');" : '')
+				. 'require ' . var_export($file, true) . '; echo "domain-loaded";';
+			$process = proc_open(array(PHP_BINARY, '-n', '-r', $code), array(1 => array('pipe', 'w'), 2 => array('pipe', 'w')), $pipes);
+			assert_true(is_resource($process), 'Could not start isolated direct-access guard check.');
+			$output = stream_get_contents($pipes[1]);
+			$error = stream_get_contents($pipes[2]);
+			fclose($pipes[1]);
+			fclose($pipes[2]);
+			assert_same(0, proc_close($process));
+			assert_same('', $error);
+			assert_same($bootstrapped ? 'domain-loaded' : '', $output);
+		}
+	}
+};
+
 function manual_quantity_authority_fixture($policy_version = WCOS_Manual_Split_Quantity_Authority::POLICY_VERSION) {
 	$legacy = WCOS_Manual_Split_Quantity_Authority::LEGACY_POLICY_VERSION === $policy_version;
 	$authority = array(

@@ -317,7 +317,10 @@ final class WCOS_Merge_Admin_Controller {
 				<div class="wcos-merge-dialog__header">
 					<div>
 						<h2 id="<?php echo esc_attr($title_id); ?>"><?php esc_html_e('Merge into another order', 'wc-order-splitter'); ?></h2>
-						<p id="<?php echo esc_attr($description_id); ?>"><?php echo esc_html(sprintf(__('Current source: order #%1$s (ID %2$d). Select the active target that will receive its supported historical lines.', 'wc-order-splitter'), $source->get_order_number(), $source->get_id())); ?></p>
+						<p id="<?php echo esc_attr($description_id); ?>"><?php
+							/* translators: 1: Displayed source order number, 2: Internal source order ID. */
+							echo esc_html(sprintf(__('Current source: order #%1$s (ID %2$d). Select the active target that will receive its supported historical lines.', 'wc-order-splitter'), $source->get_order_number(), $source->get_id()));
+						?></p>
 					</div>
 					<button type="button" class="button-link wcos-merge-close" aria-label="<?php esc_attr_e('Close Merge dialog', 'wc-order-splitter'); ?>"><span aria-hidden="true">×</span></button>
 				</div>

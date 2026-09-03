@@ -257,7 +257,10 @@ final class WCOS_Return_Admin_Controller {
 				<div class="wcos-return-dialog__header">
 					<div>
 						<h2 id="<?php echo esc_attr($title_id); ?>"><?php esc_html_e('Return to original order', 'wc-order-splitter'); ?></h2>
-						<p id="<?php echo esc_attr($description_id); ?>"><?php echo esc_html(sprintf(__('Current child: order #%1$s (ID %2$d). The original is resolved only by server-held Split lineage during Review.', 'wc-order-splitter'), $child->get_order_number(), $child->get_id())); ?></p>
+						<p id="<?php echo esc_attr($description_id); ?>"><?php
+							/* translators: 1: Displayed child order number, 2: Internal child order ID. */
+							echo esc_html(sprintf(__('Current child: order #%1$s (ID %2$d). The original is resolved only by server-held Split lineage during Review.', 'wc-order-splitter'), $child->get_order_number(), $child->get_id()));
+						?></p>
 					</div>
 					<button type="button" class="button-link wcos-return-close" aria-label="<?php esc_attr_e('Close Return dialog', 'wc-order-splitter'); ?>"><span aria-hidden="true">×</span></button>
 				</div>

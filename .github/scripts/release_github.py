@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.request
 
 import release_package as pkg
+import release_plugin_check_policy as check_policy
 
 PREPARE = '.github/workflows/release-prepare.yml'
 PUBLISH = '.github/workflows/publish-wordpress-org.yml'
@@ -207,8 +208,7 @@ def prepared(api, run_id, candidate, version, destination):
                        'status': 'RC_PREPARED', 'external_mutation': 'NONE', **pkg.manifest_identity(manifest)}
     pkg.require(record == expected_record, 'preparation record mismatch')
     report = pkg.read_json(Path(destination) / 'plugin-check.json')
-    pkg.require(isinstance(report, list) and all(item.get('type', '').upper() != 'ERROR' for item in report),
-                'Plugin Check contains Errors')
+    check_policy.require_pass(report)
     certificate(api, manifest['release_cert_run_id'], manifest['product_tree_sha'])
     pkg.validate_payload((Path(destination) / manifest['package_name']).read_bytes(), manifest, Path(destination) / 'payload')
     return manifest, provenance
