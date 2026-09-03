@@ -321,7 +321,8 @@ class Product(unittest.TestCase):
                             'Bearer fixture-bearer github_pat_fixturepat WPORG_SVN_PASSWORD="fixture-quoted-password" '
                             'metadata {"CUSTOM_SECRET":"fixture-json-secret"} Basic fixture-basic '
                             "'GH_TOKEN' = 'fixture-singlequote-token' Authorization: Basic Zml4dHVyZTpzZWNyZXQ= "
-                            'Authorization: fixture-authorization Bearer\nfixture-newline-token api_key:\tfixture-tab-secret',
+                            'Authorization: fixture-authorization Bearer\nfixture-newline-token api_key:\tfixture-tab-secret '
+                            '##[error]fixture-command-injection ##[add-mask]fixture-mask-injection',
                  'docs': 'https://fixture-user:fixture-url-password@example.test/docs?token=fixture-url-token',
                  'environment': env, 'raw': 'fixture-unknown-field'}
         with self.preparation_fixture(json.dumps([error])) as (work, outputs, summary), patch.dict(os.environ, env), \
@@ -345,6 +346,9 @@ class Product(unittest.TestCase):
             self.assertNotIn('<script>', summary.read_text())
             self.assertIn('&lt;script&gt;', summary.read_text())
             self.assertFalse(any(line.startswith('::') for line in log.getvalue().splitlines()))
+            self.assertNotIn('##[', log.getvalue())
+            line = next(line for line in log.getvalue().splitlines() if line.startswith('Plugin Check ERROR: '))
+            self.assertEqual(json.loads(line.removeprefix('Plugin Check ERROR: ')), finding)
 
     def test_16_evidence_command_exits_nonzero_after_persisting_errors(self):
         error = {'type': 'ERROR', 'code': 'checker_failed', 'file': 'example.php', 'line': 4, 'message': 'Blocked'}

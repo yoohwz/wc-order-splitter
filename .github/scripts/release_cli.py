@@ -107,10 +107,10 @@ def plugin_check_diagnostics(path, report):
     pkg.write_json(path, evidence)
     summary = ['Plugin Check report malformed or ambiguous; preparation blocked.'] if report is None else [
         f'Plugin Check: {len(errors)} ERROR(s), {len(warnings)} WARNING(s).',
-        *('Plugin Check ERROR: ' + pkg.encoded(item).decode().strip() for item in errors),
+        *('Plugin Check ERROR: ' + pkg.encoded(item).decode().strip().replace('##[', r'\u0023\u0023[') for item in errors),
         f'All {len(findings)} findings retained in sanitized diagnostic JSON.']
     text = '\n'.join(summary) + '\n'
-    # JSON escapes finding newlines; a finding cannot introduce an Actions command.
+    # Escape both newlines and legacy Actions markers without losing JSON round-trip.
     print(text, end='')
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as handle:
