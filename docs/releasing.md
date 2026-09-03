@@ -28,6 +28,96 @@ must be byte-identical. ZIP identity is separate from `PRODUCT_TREE_SHA`.
 Manifest entries bind every path, size and SHA-256. Artifact downloads are hashed
 against the actual GitHub API digest before safe extraction, not merely recorded.
 
+## Local-first Plugin Check preflight (mandatory)
+
+The release sequence is: **Codex stages and checks locally -> fixes/classifies
+locally -> exact-head CI and Independent Review -> ChatGPT Acceptance -> fresh
+RELEASE_CERT when product bytes changed -> GitHub Prepare independent check ->
+separately authorized publication**. GitHub Actions is not the primary discovery
+or fix loop, and local evidence never replaces the independent GitHub gate.
+
+Before requesting Prepare:
+
+1. Confirm the exact active WordPress Local worktree, branch/head, clean starting
+   state, WordPress root, Local PHP 8.3 binary and installed checker/dependencies.
+   Use Plugin Check **2.1.0** and WooCommerce **11.0.1**. Align local test tooling
+   if needed; do not alter production or load a legacy handler to pass a check.
+2. Stage that worktree with `stage-distribution.sh` / `.distignore`, validate with
+   `validate-distribution-contract.sh`, and record `PRODUCT_TREE_SHA`. Do not
+   create an installable ZIP for local diagnosis. Do not check the unfiltered
+   repository and mistake test/development-file findings for payload findings.
+3. Use the existing Local core/checker with a scratch content directory containing
+   the staged `plugins/wc-order-splitter` and links to the installed
+   `plugins/plugin-check` and `plugins/woocommerce`. A process-local WP-CLI
+   `--require` bootstrap may define `WP_CONTENT_DIR` and `WP_PLUGIN_DIR` for that
+   scratch directory. Do not edit live wp-config, active plugins, or switch the
+   active worktree to the public baseline. Inspect the checker's temporary `pc_`
+   tables/drop-in before and after; preserve pre-existing data. Concurrent Local
+   activity prevents claims of full database invariance. Use a quiet or separately
+   isolated database before mutation-runtime certification.
+4. Run the same raw check as Prepare, putting `plugin check` immediately after
+   `wp` so Plugin Check's early CLI bootstrap recognizes the command. Substitute
+   the confirmed Local PHP binary/socket and scratch-bootstrap paths:
+
+   ```sh
+   "$WOS_LOCAL_PHP83" -d "mysqli.default_socket=$WOS_LOCAL_MYSQL_SOCKET" /usr/local/bin/wp \
+     plugin check wc-order-splitter --format=strict-json --mode=update \
+     --slug=wc-order-splitter --fields=file,line,column,type,code,message,docs \
+     --path="$WOS_LOCAL_WP_ROOT" --require="$WOS_LOCAL_CHECK_BOOTSTRAP" \
+     --require="$WOS_LOCAL_WP_ROOT/wp-content/plugins/plugin-check/cli.php" \
+     > "$WOS_LOCAL_CHECK_WORK/raw.json" 2> "$WOS_LOCAL_CHECK_WORK/stderr.txt"
+   python3 .github/scripts/local-plugin-check-report.py \
+     "$WOS_LOCAL_CHECK_WORK/raw.json" "$WOS_LOCAL_CHECK_WORK/diagnostics.json"
+   ```
+
+   The local report command uses exactly the shared trusted WOS policy also used
+   by Prepare and downloaded-preparation verification. It needs no GitHub/SVN
+   credential and fails nonzero for any blocking ERROR or invalid/missing report.
+   WP-CLI's own zero exit code does **not** mean the report contains no ERRORs.
+   Keep raw checking unfiltered: no `--exclude-checks`, baseline or severity hack.
+5. Fix genuine defects locally and rerun after each coherent batch. Retain the
+   public-baseline comparison, pre/post reports, exact command/tool versions,
+   source SHA/product digest, warning rationales, and raw/policy/blocking counts
+   in the task/PR handoff. Redact machine paths, credentials and private runtime
+   data before posting evidence externally. Zero **blocking** ERRORs and no
+   unresolved actionable warnings are required before the later Prepare request.
+6. Complete native exact-head CI and fresh Independent Review, then ChatGPT
+   Acceptance. Product edits invalidate the old certificate for the changed tree;
+   obtain explicit candidate/freeze authority and a fresh RELEASE_CERT, then bind
+   the new accepted candidate/digest/certificate to publication Human authority.
+   A policy decision or merge permission alone does not authorize certification,
+   Prepare, packaging or publication.
+
+### Exact WOS Plugin Check policy
+
+[WOS-REL-005 policy decision](https://github.com/yoohwz/wc-order-splitter/issues/147#issuecomment-5525485308)
+authorizes only the full code
+`WordPress.Security.EscapeOutput.ExceptionNotEscaped` as `policy_accepted` for
+the pinned Plugin Check 2.1.0 path. Internal exception parameters include typed
+Throwables, statuses and structured data, not just HTML output. Do not pre-escape
+internal messages or add mass source ignores. This is a semantic class policy,
+not an enumerated location/count baseline. Exact equality is mandatory: every
+other ERROR, including `WordPress.Security.EscapeOutput.OutputNotEscaped`, blocks.
+
+`release_plugin_check_policy.py` owns the classification shared by the local
+reporter, Prepare and publisher artifact revalidation. Diagnostic schema 2 retains
+every raw finding's upstream `type`, adds a separate `policy_classification`, and
+exposes `raw_error_count`, `policy_accepted_error_count`, `blocking_error_count`
+and `warning_count`. The legacy `error_count` remains the raw ERROR total. Status
+`PASSED_WITH_POLICY_EXCEPTIONS` means the **WOS policy gate** passed; it never
+claims upstream Plugin Check returned zero errors. Invalid reports use null
+counts and still fail closed. Accepted findings remain in logs/step summaries and
+in raw `plugin-check.json` inside an independently authenticated RC artifact.
+
+The direct-access guard findings have no gate exception. One exact, documented
+inline PHPCS ignore preserves `suppress_filters=true` in
+`WCOS_Merge_Canonical_Reader::order_ids()`; no file-wide/global waiver applies.
+Current warnings remain visible with the reviewed per-code rationale; any newly
+actionable finding still requires remediation. PHP HTML escaping checks remain
+enabled, and `tests/js/admin-error-output-contract.js` guards the six admin
+JSON-to-text error boundaries (including negative raw-HTML sink fixtures) in FAST
+and product static checks. Changing that safety contract requires review.
+
 ## One-time Human setup
 
 A repository administrator and WordPress.org plugin committer must configure:
@@ -52,11 +142,10 @@ It is supplied on stdin, not a process argument, and is never cached. Dry-run an
 verify-only jobs have no Environment or SVN credential. The separate GitHub
 Release job also requires the production Environment, but receives no SVN secret.
 
-## First 1.5.0 publication after publisher bootstrap is accepted
+## First 1.5.0 publication — rebind authority after remediation
 
-WOS-REL-002 implements and tests these controls only. Do not run the new manual
-workflows, create `1.5.0`, or publish as part of that implementation task.
-After Finalize/merge, use the existing WOS-REL-001 publication authority:
+WOS-REL-005 changes product bytes. The original WOS-REL-001 inputs below are
+**historical only**, not authorization to prepare or publish the modified tree:
 
 - Candidate: `4de67108045714415d5bc4708bd94e7ad871e9a1` (not the later control-plane SHA).
 - Version: `1.5.0`.
@@ -64,11 +153,16 @@ After Finalize/merge, use the existing WOS-REL-001 publication authority:
 - RELEASE_CERT: `33727158970`; public baseline
   `1.4.11/e1d8aeb8eff38f4ce69dad1a08993e17521c6359`.
 
+Only resume this sequence after the local-first requirements, accepted exact head,
+new certificate and explicit rebound WOS-REL-001 Human authority are present:
+
 1. Run **Prepare WordPress.org Release Candidate** on current protected `main`
-   with `candidate_sha`, `version`, `product_tree_sha`, `release_cert_run_id` above.
+   with the newly authorized `candidate_sha`, `version`, `product_tree_sha` and
+   `release_cert_run_id` (not the historical tuple above).
    Review `RC_PREPARED`, package/manifest identities and Plugin Check output.
-   Plugin Check 2.1.0 checks the staged update without an error-ignore list; every
-   Error blocks preparation. Warnings remain in the evidence. Resolve new Errors
+   Plugin Check 2.1.0 checks the staged update without raw-check exclusions. The
+   exact WOS policy above classifies all findings; every blocking ERROR stops
+   preparation. Accepted ERRORs and warnings remain visible. Resolve new defects
    through an appropriately scoped task, never by silently changing certified
    product bytes or adding a broad ignore baseline.
    Failed runs retain sanitized findings in `plugin-check-diagnostics-<run_id>`
@@ -76,7 +170,7 @@ After Finalize/merge, use the existing WOS-REL-001 publication authority:
    diagnostic-only JSON is never an RC artifact and cannot authorize publishing;
    raw checker output, credentials and runner environment are not uploaded.
    After a correction is accepted/merged, dispatch a new Prepare run with the
-   same inputs, not another attempt of the failed run. Classify visible Errors
+   correct newly bound inputs, not another attempt of the failed run. Classify visible Errors
    before resuming: product defects need a separate task/new product certificate;
    suspected false positives need explicit Human/Architecture review; checker
    integration defects need a separate bounded publisher correction.
@@ -141,10 +235,11 @@ cases. It never accesses production SVN, creates a real Git tag/Release or reads
 production secrets. The normal FAST runner includes these checks. Independent
 review is required even though all publisher paths are excluded development paths.
 
-Bootstrap stages both accepted source and current worktree with the canonical
-stager and proves the certified digest is unchanged. No new RELEASE_CERT is
-needed for excluded-only drift. Any included product-byte change requires scope
-review and its own product certification authority.
+The publisher contracts preserve the historical certified fixture and prove its
+manifest rejects changed current product bytes. Current staging must bind its own
+digest, not keep asserting equality with the old bootstrap product. No new
+RELEASE_CERT is needed for excluded-only drift; included product-byte changes
+need their own explicit product certification authority.
 
 Architecture reference: the human-gated publisher in
 [`yoohwz/thumbnail-manager`](https://github.com/yoohwz/thumbnail-manager).

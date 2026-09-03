@@ -106,6 +106,15 @@ do not add normal PR merge requirements or replace RELEASE_CERT. Publisher
 bootstrap changes excluded control-plane files only; publication still requires
 its own owner authority and the production Environment gate.
 
+Before any release Prepare dispatch, Codex must stage/validate the candidate and
+run pinned-equivalent Plugin Check locally, then fix/classify findings and hand
+off exact source/product identities plus raw, policy-accepted and blocking ERROR
+counts. Normal CI, Independent Review and ChatGPT Acceptance follow; changed
+product bytes need a fresh explicitly authorized RELEASE_CERT before publication
+authority is rebound. GitHub Prepare remains the independent fail-closed check,
+not the primary edit/test loop. See the exact WOS policy and local recipe in
+[releasing.md](releasing.md); no Issue parsing or extra normal-PR merge gate is added.
+
 End meaningful task-state responses with one navigation footer. It grants no
 authority. Use `Human / ChatGPT / Finalize <TASK_ID>` only after evidence and
 required review are ready; otherwise identify the actual next action or blocker.

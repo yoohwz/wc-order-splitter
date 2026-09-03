@@ -1,8 +1,6 @@
 <?php
 
-if (!defined('ABSPATH') && 'cli' !== PHP_SAPI) {
-	exit;
-}
+defined('ABSPATH') || exit;
 
 /**
  * Creates a stable fingerprint for the immutable semantics of a mutation

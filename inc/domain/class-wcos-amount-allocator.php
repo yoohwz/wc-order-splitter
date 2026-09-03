@@ -1,8 +1,6 @@
 <?php
 
-if (!defined('ABSPATH') && 'cli' !== PHP_SAPI) {
-	exit;
-}
+defined('ABSPATH') || exit;
 
 /**
  * Deterministically allocates an amount while preserving the exact minor-unit

@@ -1,8 +1,6 @@
 <?php
 
-if (!defined('ABSPATH') && 'cli' !== PHP_SAPI) {
-	exit;
-}
+defined('ABSPATH') || exit;
 
 /**
  * Converts decimal values to and from integer minor units without binary-float

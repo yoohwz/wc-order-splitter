@@ -376,7 +376,10 @@ final class WCOS_Split_Strategy_Admin_Controller {
 					<div class="wcos-strategy-policy">
 						<h3><?php esc_html_e('How this Split works', 'wc-order-splitter'); ?></h3>
 							<p><?php esc_html_e('Review the current buckets, then choose exactly one bucket to remain on the source order. Every other reviewed bucket becomes a separate child order and its eligible product lines move in full.', 'wc-order-splitter'); ?></p>
-							<p class="wcos-strategy-commercial-summary"><?php echo esc_html(sprintf(__('Frozen source and child status: %1$s. %2$s Fees, coupons, refunds, and payment context remain source-owned; %3$d refund-affected line(s) are pinned to the source. Nested Split records the actual source as immediate parent.', 'wc-order-splitter'), wc_get_order_status_name($commercial_policy['source_status']), $shipping_label, count($commercial_policy['refund_affected_item_ids']))); ?></p>
+							<p class="wcos-strategy-commercial-summary"><?php
+								/* translators: 1: Frozen order status label, 2: Shipping ownership policy description, 3: Number of refund-affected product lines retained by the source order. */
+								echo esc_html(sprintf(__('Frozen source and child status: %1$s. %2$s Fees, coupons, refunds, and payment context remain source-owned; %3$d refund-affected line(s) are pinned to the source. Nested Split records the actual source as immediate parent.', 'wc-order-splitter'), wc_get_order_status_name($commercial_policy['source_status']), $shipping_label, count($commercial_policy['refund_affected_item_ids'])));
+							?></p>
 					</div>
 
 					<div class="wcos-strategy-review-controls">

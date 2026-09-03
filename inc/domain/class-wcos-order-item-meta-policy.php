@@ -199,6 +199,7 @@ final class WCOS_Order_Item_Meta_Policy {
 		if (is_object($value) || is_resource($value)) {
 			throw new RuntimeException(
 				sprintf(
+					/* translators: %s: Order-item business metadata key. */
 					__('Business metadata "%s" contains a non-canonical object or resource value. Classify it as operational or normalize it before order mutation.', 'wc-order-splitter'),
 					(string) $meta_key
 				)
@@ -208,6 +209,7 @@ final class WCOS_Order_Item_Meta_Policy {
 		if (is_float($value) && !is_finite($value)) {
 			throw new RuntimeException(
 				sprintf(
+					/* translators: %s: Order-item business metadata key. */
 					__('Business metadata "%s" contains a non-finite numeric value and cannot form a stable line identity.', 'wc-order-splitter'),
 					(string) $meta_key
 				)

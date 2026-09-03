@@ -328,7 +328,10 @@ final class WCOS_Split_Admin_Controller {
                                     <th scope="col"><?php esc_html_e('Product', 'wc-order-splitter'); ?></th>
                                     <th scope="col"><?php esc_html_e('Current quantity', 'wc-order-splitter'); ?></th>
                                     <?php for ($child_index = 1; $child_index <= 10; $child_index++) : ?>
-                                        <th scope="col"><?php echo esc_html(sprintf(__('Child %d', 'wc-order-splitter'), $child_index)); ?></th>
+                                        <th scope="col"><?php
+                                            /* translators: %d: Child order number within this Split plan. */
+                                            echo esc_html(sprintf(__('Child %d', 'wc-order-splitter'), $child_index));
+                                        ?></th>
                                     <?php endfor; ?>
                                 </tr>
                             </thead>
@@ -346,14 +349,20 @@ final class WCOS_Split_Admin_Controller {
                                         <th scope="row"><?php echo esc_html($item->get_name()); ?></th>
 										<td>
 											<?php echo esc_html($display_quantity); ?>
-											<small class="wcos-split-step-hint"><?php echo esc_html(sprintf(__('Step: %s', 'wc-order-splitter'), $step)); ?></small>
+											<small class="wcos-split-step-hint"><?php
+												/* translators: %s: Permitted quantity increment for this order line. */
+												echo esc_html(sprintf(__('Step: %s', 'wc-order-splitter'), $step));
+											?></small>
 										</td>
                                         <?php for ($child_index = 1; $child_index <= 10; $child_index++) :
                                             $child_key = 'child-' . $child_index;
                                             $quantity_id = 'wcos-split-quantity-' . $order->get_id() . '-' . $item_id . '-' . $child_index;
                                             ?>
                                             <td>
-                                                <label class="screen-reader-text" for="<?php echo esc_attr($quantity_id); ?>"><?php echo esc_html(sprintf(__('Quantity of %1$s to move to Child %2$d', 'wc-order-splitter'), $item->get_name(), $child_index)); ?></label>
+                                                <label class="screen-reader-text" for="<?php echo esc_attr($quantity_id); ?>"><?php
+                                                    /* translators: 1: Product line name, 2: Child order number within this Split plan. */
+                                                    echo esc_html(sprintf(__('Quantity of %1$s to move to Child %2$d', 'wc-order-splitter'), $item->get_name(), $child_index));
+                                                ?></label>
 												<input id="<?php echo esc_attr($quantity_id); ?>" class="wcos-split-quantity" data-child-key="<?php echo esc_attr($child_key); ?>" type="number" min="0" max="<?php echo esc_attr($maximum); ?>" step="<?php echo esc_attr($step); ?>" inputmode="<?php echo esc_attr($inputmode); ?>" value="0"<?php echo disabled(!$can_partially_split, true, false); ?> />
                                             </td>
                                         <?php endfor; ?>
@@ -366,13 +375,22 @@ final class WCOS_Split_Admin_Controller {
                     <div class="wcos-split-policy" aria-labelledby="<?php echo esc_attr($dialog_id . '-policy-title'); ?>">
                         <h3 id="<?php echo esc_attr($dialog_id . '-policy-title'); ?>"><?php esc_html_e('Current safety policy', 'wc-order-splitter'); ?></h3>
                         <ul>
-							<li class="wcos-split-commercial-summary"><?php echo esc_html(sprintf(__('Frozen source and child status: %1$s. %2$s', 'wc-order-splitter'), wc_get_order_status_name($commercial_policy['source_status']), $shipping_label)); ?></li>
+							<li class="wcos-split-commercial-summary"><?php
+								/* translators: 1: Frozen order status label, 2: Shipping ownership policy description. */
+								echo esc_html(sprintf(__('Frozen source and child status: %1$s. %2$s', 'wc-order-splitter'), wc_get_order_status_name($commercial_policy['source_status']), $shipping_label));
+							?></li>
 							<li><?php esc_html_e('Positive and negative fees, coupon rows, refund records, and payment transactions remain only on the source order.', 'wc-order-splitter'); ?></li>
                             <li><?php esc_html_e('Historical line taxes are preserved; current catalog prices and tax rates are not recalculated.', 'wc-order-splitter'); ?></li>
                             <li><?php esc_html_e('The Split request must not write physical product stock.', 'wc-order-splitter'); ?></li>
-							<li><?php echo esc_html(sprintf(__('Refund-affected product lines pinned to the source: %d. Nested Split preserves the actual source as the immediate parent.', 'wc-order-splitter'), count($commercial_policy['refund_affected_item_ids']))); ?></li>
+							<li><?php
+								/* translators: %d: Number of refund-affected product lines retained by the source order. */
+								echo esc_html(sprintf(__('Refund-affected product lines pinned to the source: %d. Nested Split preserves the actual source as the immediate parent.', 'wc-order-splitter'), count($commercial_policy['refund_affected_item_ids'])));
+							?></li>
                             <li><?php esc_html_e('Extensions that change stock directly in the database instead of WooCommerce stock APIs are unsupported unless they provide an explicit compatibility adapter.', 'wc-order-splitter'); ?></li>
-							<li><?php echo esc_html(sprintf(__('Manual allocation steps are enforced per line: %s.', 'wc-order-splitter'), implode(', ', $step_labels))); ?></li>
+							<li><?php
+								/* translators: %s: Comma-separated list of order-line quantity increments. */
+								echo esc_html(sprintf(__('Manual allocation steps are enforced per line: %s.', 'wc-order-splitter'), implode(', ', $step_labels)));
+							?></li>
 							<li><?php esc_html_e('A complete source line may move, but the source order must retain positive product quantity.', 'wc-order-splitter'); ?></li>
                         </ul>
                     </div>
