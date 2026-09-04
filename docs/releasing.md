@@ -142,6 +142,43 @@ It is supplied on stdin, not a process argument, and is never cached. Dry-run an
 verify-only jobs have no Environment or SVN credential. The separate GitHub
 Release job also requires the production Environment, but receives no SVN secret.
 
+## One-time legacy EOL property reconciliation
+
+WOS-REL-006 keeps content-transforming SVN properties outside normal publication.
+The dedicated `Reconcile WordPress.org Trunk EOL Properties` workflow is a
+one-shot control path for the exact repository-owned 29-row inventory in
+`.github/release/wporg-eol-cleanup-policy.json`. It does not add an allowlist or
+bypass to the publisher. Unknown, missing, extra, moved or changed properties
+fail closed.
+
+The first job checks out public SVN without credentials, binds the complete
+`trunk`, `assets` and historical `tags/1.4.11` surfaces, requires `tags/1.5.0` to
+remain absent, locally removes only the approved `svn:eol-style=native`
+properties and proves that the resulting delta is property-only on exactly the
+approved files. Its immutable preflight record is the Human approval target.
+
+Only the second job uses the `wordpress-org-production` Environment. After
+approval it downloads that same-run preflight, performs a fresh credential-free
+remote comparison and restages the exact property-only delta. The SVN username
+and password are scoped only to the single commit step; the password is supplied
+on stdin and removed from the subprocess environment. No Git contents write,
+Git tag, GitHub Release, product publication or tag/asset mutation is reachable.
+
+Fresh credential-free verification requires empty `trunk` properties, the
+original exact properties and content on `tags/1.4.11`, absent `tags/1.5.0`,
+unchanged assets and trunk bytes, one atomic SVN revision authored by `yoohw`,
+and exactly 29 `prop-mods=true` / `text-mods=false` paths. The compact
+`SVN_EOL_CLEANUP_VERIFIED` artifact is metadata-cleanup evidence only and cannot
+authenticate as a release candidate or publication artifact. Once cleanup has
+succeeded, a second dispatch fails at preflight because the one-shot 29-row
+precondition no longer exists.
+
+Do not dispatch this workflow merely because its implementation is merged.
+WOS-REL-006 requires separate explicit owner authority for the production cleanup
+run and review of its exact preflight before Environment approval. Leave
+`tags/1.4.11` untouched. Only after `SVN_EOL_CLEANUP_VERIFIED` is accepted may the
+existing 1.5.0 preparation return to a new attempt-1 publisher dry-run.
+
 ## First 1.5.0 publication — rebind authority after remediation
 
 WOS-REL-005 changes product bytes. The original WOS-REL-001 inputs below are

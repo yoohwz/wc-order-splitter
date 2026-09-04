@@ -1,0 +1,96 @@
+name: Reconcile WordPress.org Trunk EOL Properties
+
+'on':
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wordpress-org-wc-order-splitter
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  preflight:
+    name: Read-only exact property preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted cleanup control plane
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - name: Install canonical SVN client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes subversion
+      - name: Snapshot and locally prove exact property-only cleanup
+        run: python3 control/.github/scripts/wporg_eol_cleanup.py preflight
+      - name: Persist exact Human approval target
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wporg-eol-cleanup-preflight-${{ github.run_id }}
+          path: ${{ runner.temp }}/wcos-eol-cleanup/preflight-record.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false
+
+  cleanup:
+    name: Human-gated exact trunk property cleanup
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: wordpress-org-production
+    env:
+      CLEANUP_ENVIRONMENT: wordpress-org-production
+    steps:
+      - name: Checkout trusted cleanup control plane
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - name: Install canonical SVN client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes subversion
+      - name: Restore exact preflight approval target
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: wporg-eol-cleanup-preflight-${{ github.run_id }}
+          path: ${{ runner.temp }}/wcos-eol-cleanup/approved
+      - name: Final credential-free remote recheck and local staging
+        run: python3 control/.github/scripts/wporg_eol_cleanup.py stage
+      - name: Single exact SVN property-only commit attempt
+        id: commit
+        env:
+          WPORG_SVN_USERNAME: ${{ vars.WPORG_SVN_USERNAME }}
+          WPORG_SVN_PASSWORD: ${{ secrets.WPORG_SVN_PASSWORD }}
+        run: python3 control/.github/scripts/wporg_eol_cleanup.py commit
+      - name: Fresh credential-free verification
+        id: verify
+        if: ${{ !cancelled() && steps.commit.outcome == 'success' }}
+        run: python3 control/.github/scripts/wporg_eol_cleanup.py verify
+      - name: Persist ambiguous commit evidence
+        if: ${{ always() && steps.commit.outcome != 'skipped' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wporg-eol-cleanup-attempt-${{ github.run_id }}
+          path: ${{ runner.temp }}/wcos-eol-cleanup/commit-attempt.json
+          if-no-files-found: warn
+          retention-days: 90
+          overwrite: false
+      - name: Persist cleanup verification record
+        if: ${{ steps.verify.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wporg-eol-cleanup-verified-${{ github.run_id }}
+          path: ${{ runner.temp }}/wcos-eol-cleanup/verification-record.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false
