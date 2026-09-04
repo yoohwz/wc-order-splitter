@@ -173,6 +173,14 @@ authenticate as a release candidate or publication artifact. Once cleanup has
 succeeded, a second dispatch fails at preflight because the one-shot 29-row
 precondition no longer exists.
 
+If the SVN commit succeeds but same-run verification or artifact persistence is
+lost, dispatch this workflow with `operation=verify-only` and the original
+cleanup run ID. Recovery has no Environment and no SVN credential. It
+authenticates the original protected-main workflow, successful exact preflight
+and reached Environment-gated commit step, restores that run's immutable
+preflight artifact, then recreates only the read-only verification record from
+the exact remote log/content/property state. It never restages or recommits SVN.
+
 Do not dispatch this workflow merely because its implementation is merged.
 WOS-REL-006 requires separate explicit owner authority for the production cleanup
 run and review of its exact preflight before Environment approval. Leave

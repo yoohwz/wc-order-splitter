@@ -12,6 +12,7 @@ import sys
 import xml.etree.ElementTree as ET
 
 import release_package as pkg
+import release_github as gh
 import wporg_release as wp
 
 
@@ -150,7 +151,9 @@ class CleanupSVN(wp.SVN):
             before_files = approved['trunk']['files']
         pkg.require(trunk_files == before_files == approved['trunk']['files'],
                     'trunk file bytes changed during property cleanup')
-        pkg.require(not self.surface('trunk')['properties'], 'staged trunk properties are not empty')
+        staged_trunk = self.surface('trunk')
+        pkg.require(staged_trunk == {**approved['trunk'], 'properties': []},
+                    'staged trunk snapshot is not the exact property-only transition')
         pkg.require(self.surface('assets') == approved['assets'], 'assets changed during property cleanup')
         pkg.require(self.surface('tags') == approved['tags'], 'tags changed during property cleanup')
         pkg.require(self.surface('tags/' + value['historical_tag']) == approved['historical_tag'],
@@ -377,33 +380,33 @@ def commit():
     expected_final = final_record(approved_path, approved, sha, run_id, value)
     pkg.require(pkg.read_json(work / 'final-record.json') == expected_final,
                 'final cleanup recheck record mismatch')
-    attempt = CleanupSVN(work / 'svn-final').atomic_cleanup(
+    # Recheck once more inside the credential-scoped step. Every read/local SVN
+    # child still receives the credential-stripped environment. Updating the
+    # staged WC then binds its base revisions immediately before the only write.
+    CleanupSVN(work / 'svn-before-commit').checkout().compare(approved['snapshot'], value)
+    staged = CleanupSVN(work / 'svn-final')
+    staged.run('update', staged.working)
+    staged.validate_staged(approved['snapshot'], value)
+    attempt = staged.atomic_cleanup(
         approved['snapshot'], value, sha, run_id, work / 'commit-attempt.json')
     say(attempt['state'], policy_sha256=attempt['policy_sha256'],
         inventory_sha256=attempt['inventory_sha256'], properties=len(value['trunk_paths']))
 
 
-def verify():
-    sha, run_id = control_context()
-    value, work = cleanup_policy(), work_root()
-    approved_path = work / 'approved/preflight-record.json'
-    approved = read_approved(approved_path, sha, run_id, value)
-    attempt = pkg.read_json(work / 'commit-attempt.json')
-    pkg.require(attempt['kind'] == 'SVN_EOL_CLEANUP_COMMIT_ATTEMPT' and
-                attempt['control_sha'] == sha and attempt['run_id'] == run_id and
-                attempt['policy_sha256'] == policy_sha256(value) and
-                attempt['inventory_sha256'] == property_inventory_sha256(value),
-                'cleanup commit attempt provenance mismatch')
+def verify_record(approved_path, approved, cleanup_sha, cleanup_run_id,
+                  verification_sha, verification_run_id, value, work):
     result = CleanupSVN(work / 'svn-verification').checkout().verify_cleanup(
-        approved['snapshot'], value, sha, run_id)
+        approved['snapshot'], value, cleanup_sha, cleanup_run_id)
     record = {
         'schema_version': 1,
         'kind': 'SVN_EOL_CLEANUP_VERIFICATION',
         'state': 'SVN_EOL_CLEANUP_VERIFIED',
         'repository': pkg.REPOSITORY,
         'workflow_path': WORKFLOW,
-        'control_sha': sha,
-        'run_id': run_id,
+        'cleanup_control_sha': cleanup_sha,
+        'cleanup_run_id': cleanup_run_id,
+        'verification_control_sha': verification_sha,
+        'verification_run_id': verification_run_id,
         'policy_sha256': policy_sha256(value),
         'inventory_sha256': property_inventory_sha256(value),
         'preflight_sha256': pkg.sha(approved_path.read_bytes()),
@@ -432,7 +435,61 @@ def verify():
         out_of_scope_changes=0)
 
 
-COMMANDS = {'preflight': preflight, 'stage': stage, 'commit': commit, 'verify': verify}
+def verify():
+    sha, run_id = control_context()
+    value, work = cleanup_policy(), work_root()
+    approved_path = work / 'approved/preflight-record.json'
+    approved = read_approved(approved_path, sha, run_id, value)
+    attempt = pkg.read_json(work / 'commit-attempt.json')
+    pkg.require(attempt['kind'] == 'SVN_EOL_CLEANUP_COMMIT_ATTEMPT' and
+                attempt['control_sha'] == sha and attempt['run_id'] == run_id and
+                attempt['policy_sha256'] == policy_sha256(value) and
+                attempt['inventory_sha256'] == property_inventory_sha256(value),
+                'cleanup commit attempt provenance mismatch')
+    verify_record(approved_path, approved, sha, run_id, sha, run_id, value, work)
+
+
+def original_cleanup_run(api, run_id):
+    pkg.inputs('0' * 40, '1.5.0', run_id=run_id)
+    run = api.get(f'actions/runs/{run_id}')
+    gh.workflow_run(run, WORKFLOW, success=False)
+    pkg.require(run['status'] == 'completed' and run['conclusion'] in {
+        'success', 'failure', 'cancelled', 'timed_out',
+    }, 'original cleanup run is not terminal')
+    pkg.require(gh.ancestor(api, run['head_sha'], gh.protected_main(api)),
+                'original cleanup control is not on protected main')
+    jobs = api.pages(f'actions/runs/{run_id}/attempts/1/jobs', 'jobs')
+    preflight_jobs = [job for job in jobs if job['name'] == 'Read-only exact property preflight']
+    cleanup_jobs = [job for job in jobs if job['name'] == 'Human-gated exact trunk property cleanup']
+    pkg.require(len(preflight_jobs) == 1 and preflight_jobs[0]['status'] == 'completed' and
+                preflight_jobs[0]['conclusion'] == 'success', 'original cleanup preflight did not pass')
+    pkg.require(len(cleanup_jobs) == 1 and cleanup_jobs[0]['status'] == 'completed',
+                'original Environment-gated cleanup job did not complete')
+    commit_steps = [step for step in cleanup_jobs[0].get('steps', [])
+                    if step['name'] == 'Single exact SVN property-only commit attempt']
+    pkg.require(len(commit_steps) == 1 and commit_steps[0]['status'] == 'completed' and
+                commit_steps[0]['conclusion'] in {'success', 'failure', 'cancelled'},
+                'original cleanup commit step was not reached')
+    return run
+
+
+def recover():
+    verification_sha, verification_run_id = control_context()
+    original_run_id = int(os.environ.get('ORIGINAL_CLEANUP_RUN_ID', '0'))
+    pkg.require(original_run_id != verification_run_id, 'recovery requires a prior cleanup run')
+    value, work = cleanup_policy(), work_root()
+    api = gh.API()
+    pkg.require(gh.control_context(api, WORKFLOW) == verification_sha,
+                'recovery control authentication mismatch')
+    original = original_cleanup_run(api, original_run_id)
+    approved_path = work / 'approved/preflight-record.json'
+    approved = read_approved(approved_path, original['head_sha'], original_run_id, value)
+    verify_record(approved_path, approved, original['head_sha'], original_run_id,
+                  verification_sha, verification_run_id, value, work)
+
+
+COMMANDS = {'preflight': preflight, 'stage': stage, 'commit': commit,
+            'verify': verify, 'recover': recover}
 
 
 if __name__ == '__main__':

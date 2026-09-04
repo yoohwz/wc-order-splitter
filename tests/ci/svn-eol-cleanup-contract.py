@@ -31,6 +31,18 @@ def yaml(path):
                           'puts JSON.generate(YAML.load_file(ARGV[0]))', path))
 
 
+class FakeAPI:
+    def __init__(self, values):
+        self.values = values
+
+    def get(self, endpoint):
+        return copy.deepcopy(self.values[endpoint])
+
+    def pages(self, endpoint, key=None):
+        value = self.get(endpoint)
+        return value[key] if key and isinstance(value, dict) else value
+
+
 class PolicyContracts(unittest.TestCase):
     def test_exact_repository_owned_policy(self):
         value = cleanup.cleanup_policy()
@@ -81,6 +93,31 @@ class PolicyContracts(unittest.TestCase):
         fixture = cleanup.CleanupSVN(Path('/fixture'), 'file:///fixture', fixture=True)
         with self.assertRaisesRegex(ValueError, 'fixture URL'):
             fixture.atomic_cleanup(approved, value, CONTROL, RUN_ID, Path(directory) / 'unused.json')
+
+    def test_recovery_authenticates_original_preflight_and_commit_reachability(self):
+        repository = {'full_name': pkg.REPOSITORY}
+        run_value = {
+            'repository': repository, 'head_repository': repository,
+            'path': cleanup.WORKFLOW, 'event': 'workflow_dispatch',
+            'head_branch': 'main', 'run_attempt': 1, 'head_sha': CONTROL,
+            'status': 'completed', 'conclusion': 'failure',
+        }
+        jobs = [
+            {'name': 'Read-only exact property preflight', 'status': 'completed', 'conclusion': 'success'},
+            {'name': 'Human-gated exact trunk property cleanup', 'status': 'completed', 'conclusion': 'failure',
+             'steps': [{'name': 'Single exact SVN property-only commit attempt',
+                        'status': 'completed', 'conclusion': 'success'}]},
+        ]
+        api = FakeAPI({f'actions/runs/{RUN_ID}': run_value,
+                       f'actions/runs/{RUN_ID}/attempts/1/jobs': jobs})
+        with patch.object(cleanup.gh, 'ancestor', return_value=True), \
+                patch.object(cleanup.gh, 'protected_main', return_value=CONTROL):
+            self.assertEqual(cleanup.original_cleanup_run(api, RUN_ID), run_value)
+            bad = copy.deepcopy(jobs)
+            bad[1]['steps'] = []
+            api.values[f'actions/runs/{RUN_ID}/attempts/1/jobs'] = bad
+            with self.assertRaisesRegex(ValueError, 'commit step was not reached'):
+                cleanup.original_cleanup_run(api, RUN_ID)
 
 
 class LocalSVNContracts(unittest.TestCase):
@@ -215,13 +252,18 @@ class WorkflowContracts(unittest.TestCase):
     def test_secret_and_mutation_boundaries(self):
         flow = yaml(ROOT / '.github/workflows/cleanup-wordpress-org-eol.yml')
         self.assertEqual(set(flow['on']), {'workflow_dispatch'})
-        self.assertEqual(flow['permissions'], {'contents': 'read'})
+        inputs = flow['on']['workflow_dispatch']['inputs']
+        self.assertEqual(inputs['operation']['options'], ['cleanup', 'verify-only'])
+        self.assertEqual(inputs['operation']['default'], 'cleanup')
+        self.assertEqual(flow['permissions'], {'actions': 'read', 'contents': 'read'})
         self.assertIs(flow['concurrency']['cancel-in-progress'], False)
-        self.assertEqual(set(flow['jobs']), {'preflight', 'cleanup'})
+        self.assertEqual(set(flow['jobs']), {'preflight', 'cleanup', 'verify-only'})
         self.assertNotIn('environment', flow['jobs']['preflight'])
+        self.assertNotIn('environment', flow['jobs']['verify-only'])
         production = flow['jobs']['cleanup']
         self.assertEqual(production['environment'], 'wordpress-org-production')
         self.assertEqual(production['needs'], 'preflight')
+        self.assertEqual(production['if'], "inputs.operation == 'cleanup' && needs.preflight.result == 'success'")
         self.assertNotIn('permissions', production)
         secrets = []
         commands = {}
@@ -235,13 +277,14 @@ class WorkflowContracts(unittest.TestCase):
                 if 'actions/checkout@' in step.get('uses', ''):
                     self.assertEqual(step['with']['ref'], '${{ github.sha }}')
                     self.assertIs(step['with']['persist-credentials'], False)
-        self.assertEqual(set(commands), {'preflight', 'stage', 'commit', 'verify'})
+        self.assertEqual(set(commands), {'preflight', 'stage', 'commit', 'verify', 'recover'})
         self.assertEqual(len(secrets), 1)
         self.assertEqual(secrets[0][0], 'cleanup')
         self.assertEqual(secrets[0][1]['run'],
                          'python3 control/.github/scripts/wporg_eol_cleanup.py commit')
         for command in ('preflight', 'stage', 'verify'):
             self.assertNotIn('env', commands[command][1])
+        self.assertEqual(commands['recover'][1]['env'], {'GH_TOKEN': '${{ github.token }}'})
         self.assertNotIn('contents: write',
                          (ROOT / '.github/workflows/cleanup-wordpress-org-eol.yml').read_text())
         helper = (ROOT / '.github/scripts/wporg_eol_cleanup.py').read_text()

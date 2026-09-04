@@ -2,8 +2,21 @@ name: Reconcile WordPress.org Trunk EOL Properties
 
 'on':
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Run the one-shot cleanup or recover verification read-only
+        required: true
+        default: cleanup
+        type: choice
+        options: [cleanup, verify-only]
+      original_cleanup_run_id:
+        description: Prior cleanup run; required only for verify-only recovery
+        required: false
+        default: ''
+        type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -16,6 +29,7 @@ env:
 jobs:
   preflight:
     name: Read-only exact property preflight
+    if: inputs.operation == 'cleanup'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -43,6 +57,7 @@ jobs:
   cleanup:
     name: Human-gated exact trunk property cleanup
     needs: preflight
+    if: inputs.operation == 'cleanup' && needs.preflight.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: wordpress-org-production
@@ -87,6 +102,47 @@ jobs:
           overwrite: false
       - name: Persist cleanup verification record
         if: ${{ steps.verify.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wporg-eol-cleanup-verified-${{ github.run_id }}
+          path: ${{ runner.temp }}/wcos-eol-cleanup/verification-record.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false
+
+  verify-only:
+    name: Read-only cleanup verification recovery
+    if: inputs.operation == 'verify-only'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ORIGINAL_CLEANUP_RUN_ID: ${{ inputs.original_cleanup_run_id }}
+    steps:
+      - name: Checkout trusted cleanup control plane
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - name: Validate recovery input
+        run: '[[ "$ORIGINAL_CLEANUP_RUN_ID" =~ ^[1-9][0-9]*$ ]]'
+      - name: Install canonical SVN client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes subversion
+      - name: Restore original exact preflight approval target
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: wporg-eol-cleanup-preflight-${{ inputs.original_cleanup_run_id }}
+          path: ${{ runner.temp }}/wcos-eol-cleanup/approved
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.original_cleanup_run_id }}
+      - name: Authenticate original run and verify cleanup read-only
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 control/.github/scripts/wporg_eol_cleanup.py recover
+      - name: Persist recovered cleanup verification record
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: wporg-eol-cleanup-verified-${{ github.run_id }}
